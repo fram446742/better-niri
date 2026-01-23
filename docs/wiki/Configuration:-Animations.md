@@ -77,6 +77,10 @@ animations {
         curve "ease-out-cubic"
     }
 
+    overview-zoom {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
     recent-windows-close {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.001
     }
@@ -484,6 +488,18 @@ The toggle zoom animation of the [screen magnifier](./Configuration:-Miscellaneo
 ```kdl
 animations {
     magnifier {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+}
+```
+
+#### `overview-zoom`
+
+The zoom level change animation when using `overview-zoom-cycle` in the [Overview](./Overview.md).
+
+```kdl
+animations {
+    overview-zoom {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
 }

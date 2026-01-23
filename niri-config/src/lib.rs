@@ -2642,6 +2642,18 @@ mod tests {
                         ),
                     },
                 ),
+                overview_zoom: OverviewZoomAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
                 recent_windows_close: RecentWindowsCloseAnim(
                     Animation {
                         off: true,
@@ -2731,9 +2743,6 @@ mod tests {
                     },
                 },
                 zoom_presets: None,
-                min_zoom: 0.05,
-                max_zoom: 0.75,
-                zoom_step: 0.1,
             },
             grid_overview: GridOverview {
                 gap: 16.0,

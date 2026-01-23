@@ -27,6 +27,7 @@ pub struct Animations {
     pub grid_overview_open_close: GridOverviewOpenCloseAnim,
     pub focus_ring: FocusRingAnim,
     pub magnifier: MagnifierAnim,
+    pub overview_zoom: OverviewZoomAnim,
     pub recent_windows_close: RecentWindowsCloseAnim,
     pub cursor_enlarge: CursorEnlargeAnim,
 }
@@ -50,6 +51,7 @@ impl Default for Animations {
             grid_overview_open_close: Default::default(),
             focus_ring: Default::default(),
             magnifier: Default::default(),
+            overview_zoom: Default::default(),
             recent_windows_close: Default::default(),
             cursor_enlarge: Default::default(),
         }
@@ -93,6 +95,8 @@ pub struct AnimationsPart {
     #[knuffel(child)]
     pub magnifier: Option<MagnifierAnim>,
     #[knuffel(child)]
+    pub overview_zoom: Option<OverviewZoomAnim>,
+    #[knuffel(child)]
     pub recent_windows_close: Option<RecentWindowsCloseAnim>,
     #[knuffel(child)]
     pub cursor_enlarge: Option<CursorEnlargeAnim>,
@@ -125,6 +129,7 @@ impl MergeWith<AnimationsPart> for Animations {
             grid_overview_open_close,
             focus_ring,
             magnifier,
+            overview_zoom,
             recent_windows_close,
             cursor_enlarge,
         );
@@ -426,6 +431,22 @@ impl Default for GridOverviewOpenCloseAnim {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverviewZoomAnim(pub Animation);
+
+impl Default for OverviewZoomAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 1.,
+                stiffness: 800,
+                epsilon: 0.0001,
+            }),
+        })
+    }
+}
+
 /// The focus ring moving to another window: growing in and shrinking back, or sliding to another
 /// cell in the grid overview.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -702,6 +723,21 @@ where
 }
 
 impl<S> knuffel::Decode<S> for GridOverviewOpenCloseAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for OverviewZoomAnim
 where
     S: knuffel::traits::ErrorSpan,
 {
