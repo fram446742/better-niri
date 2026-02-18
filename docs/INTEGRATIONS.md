@@ -208,6 +208,10 @@ Design documents worth carrying over (adapt names/paths):
 
 ### KDE — kde-niri (Naxdy)
 
+Imported so far: `org_kde_kwin_blur` (via niri-elite) and
+`kde_output_order_v1` (Naxdy `fffe1e88`, wired to `sorted_outputs`; adapted to
+the elite base's existing blur/background-effect state).
+
 Much of Naxdy's blur lineage is already upstream. Port only what is still
 missing and current-API compatible.
 
