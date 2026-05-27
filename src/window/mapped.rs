@@ -851,7 +851,7 @@ impl LayoutElement for Mapped {
             clip: Some((geometry, radius)),
             scale,
         };
-        effect.render(ctx, None, params, xray_pos, 0., push);
+        effect.render(ctx, None, params, xray_pos, 0., None, push);
     }
 
     fn render_background_effect(
