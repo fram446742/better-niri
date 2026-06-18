@@ -80,8 +80,8 @@ use super::{
     virtual_output, IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker,
 };
 use crate::frame_clock::FrameClock;
-use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::blend::{self, set_frame_blend, DEFAULT_REFERENCE_LUMINANCE};
+use crate::niri::{global_shader_source, Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
@@ -966,6 +966,11 @@ impl Tty {
             }
             if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
                 shaders::set_custom_open_program(gles_renderer, Some(src));
+            }
+            {
+                let src = global_shader_source(&config.global_shader);
+                let hyprland = config.global_shader.mode == "hyprland";
+                shaders::set_custom_global_program(gles_renderer, src.as_deref(), hyprland);
             }
             drop(config);
 
@@ -2498,6 +2503,15 @@ impl Tty {
         set_frame_blend(renderer.as_gles_renderer(), None);
         match render_frame_result {
             Ok(res) => {
+                // Global post-process shader ping-pong: the element wrote its captured result into
+                // the shared handle during render_frame; move it into prev for the next frame.
+                if let Some(output_state) = niri.output_state.get_mut(output) {
+                    let result = output_state.global_shader_result.borrow_mut().take();
+                    if result.is_some() {
+                        output_state.global_shader_prev = result;
+                    }
+                }
+
                 let needs_sync = res.needs_sync()
                     || self
                         .config
