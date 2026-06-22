@@ -653,6 +653,12 @@ pub struct OutputState {
     /// Sink written by `GlobalShaderElement::draw` with this frame's screen capture; moved into
     /// `global_shader_screen_prev` after submit.
     pub global_shader_screen_result: Rc<RefCell<Option<GlesTexture>>>,
+    /// Offscreen target for the global shader's dedicated feedback buffer pass.
+    pub global_shader_buffer: Rc<crate::render_helpers::offscreen::OffscreenBuffer>,
+    /// Last frame's feedback buffer, bound as `niri_buffer`.
+    pub global_shader_buffer_prev: Option<GlesTexture>,
+    /// Sink for this frame's buffer texture; moved into `global_shader_buffer_prev` after submit.
+    pub global_shader_buffer_result: Rc<RefCell<Option<GlesTexture>>>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
     /// The blend-space image description last notified to color-management clients for this
@@ -2194,6 +2200,9 @@ impl State {
                 *state.global_shader_result.borrow_mut() = None;
                 state.global_shader_screen_prev = None;
                 *state.global_shader_screen_result.borrow_mut() = None;
+                state.global_shader_buffer_prev = None;
+                *state.global_shader_buffer_result.borrow_mut() = None;
+                // OffscreenBuffer recreates its texture on demand; leave it.
             }
             shaders_changed = true;
         }
@@ -4562,6 +4571,11 @@ impl Niri {
             global_shader_result: Rc::new(RefCell::new(None)),
             global_shader_screen_prev: None,
             global_shader_screen_result: Rc::new(RefCell::new(None)),
+            global_shader_buffer: Rc::new(
+                crate::render_helpers::offscreen::OffscreenBuffer::default(),
+            ),
+            global_shader_buffer_prev: None,
+            global_shader_buffer_result: Rc::new(RefCell::new(None)),
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
             blend_description: None,
         };
@@ -6971,6 +6985,9 @@ impl Niri {
                 state.global_shader_prev.clone(),
                 state.global_shader_screen_prev.clone(),
                 state.global_shader_screen_result.clone(),
+                state.global_shader_buffer.clone(),
+                state.global_shader_buffer_prev.clone(),
+                state.global_shader_buffer_result.clone(),
                 state.global_shader_result.clone(),
             );
             push(elem.into());
