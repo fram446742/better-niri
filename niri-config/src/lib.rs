@@ -2645,6 +2645,7 @@ mod tests {
                 reads_cursor: false,
                 cursor_radius: None,
                 redraw: "auto",
+                passes: [],
             },
             overview: Overview {
                 zoom: 0.5,
