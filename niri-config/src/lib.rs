@@ -52,7 +52,7 @@ pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
-pub use crate::global_shader::{GlobalShader, GlobalShaderPart};
+pub use crate::global_shader::{GlobalShader, GlobalShaderCaps, GlobalShaderPart};
 pub use crate::input::{
     Input, Keyboard, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb,
 };

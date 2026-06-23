@@ -188,7 +188,7 @@ use crate::render_helpers::blend::{
 };
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
-use crate::render_helpers::global_shader_element::GlobalShaderElement;
+use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shaders::{ProgramType, Shaders};
@@ -429,6 +429,8 @@ pub struct Niri {
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
     pub fifo_manager_state: FifoManagerState,
     pub kde_output_order_v1_state: KdeOutputOrderV1State,
+    /// Capability flags for the active global shader, cached per config load.
+    pub global_shader_caps: Cell<Option<niri_config::GlobalShaderCaps>>,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
     // particular, shaders will need to learn about the single pixel buffer. Also, it must be
@@ -602,6 +604,46 @@ pub struct DndIcon {
     pub offset: Point<i32, Logical>,
 }
 
+/// Per-output, per-pass feedback + offscreen state for the multi-pass global shader. Each `Vec`
+/// has one entry per pass in the active chain; they are ping-ponged across frames. Sized lazily by
+/// [`GlobalShaderChain::resize`] from the (`&self`) render path via the enclosing `RefCell`.
+#[derive(Default)]
+pub struct GlobalShaderChain {
+    /// Each pass's output last frame (its `niri_prev`).
+    pub prev: Vec<Option<GlesTexture>>,
+    /// Sink for each pass's output this frame; moved into `prev` after submit.
+    pub result: Vec<Rc<RefCell<Option<GlesTexture>>>>,
+    /// Each intermediate pass's display offscreen (the last pass renders to `dst`).
+    pub pass_offscreen: Vec<Rc<crate::render_helpers::offscreen::OffscreenBuffer>>,
+    /// Each pass's dedicated `global_buffer` offscreen.
+    pub buffer: Vec<Rc<crate::render_helpers::offscreen::OffscreenBuffer>>,
+    /// Each pass's dedicated buffer last frame (its `niri_buffer`).
+    pub buffer_prev: Vec<Option<GlesTexture>>,
+    /// Sink for each pass's dedicated buffer this frame; moved into `buffer_prev` after submit.
+    pub buffer_result: Vec<Rc<RefCell<Option<GlesTexture>>>>,
+}
+
+impl GlobalShaderChain {
+    /// Ensure all per-pass vecs are sized to `n`, preserving existing textures when the length is
+    /// unchanged. A length change resets all per-pass feedback (the chain itself changed).
+    pub fn resize(&mut self, n: usize) {
+        use crate::render_helpers::offscreen::OffscreenBuffer;
+        if self.prev.len() == n {
+            return;
+        }
+        self.prev = (0..n).map(|_| None).collect();
+        self.result = (0..n).map(|_| Rc::new(RefCell::new(None))).collect();
+        self.pass_offscreen = (0..n)
+            .map(|_| Rc::new(OffscreenBuffer::default()))
+            .collect();
+        self.buffer = (0..n)
+            .map(|_| Rc::new(OffscreenBuffer::default()))
+            .collect();
+        self.buffer_prev = (0..n).map(|_| None).collect();
+        self.buffer_result = (0..n).map(|_| Rc::new(RefCell::new(None))).collect();
+    }
+}
+
 pub struct OutputState {
     pub global: GlobalId,
     pub frame_clock: FrameClock,
@@ -640,25 +682,19 @@ pub struct OutputState {
     pub lock_surface: Option<LockSurface>,
     pub lock_color_buffer: SolidColorBuffer,
     screen_transition: Option<ScreenTransition>,
-    /// Previous frame's output, fed to the global shader as `niri_prev`.
-    pub global_shader_prev: Option<GlesTexture>,
     /// When the global shader became active; origin for `niri_time`. Interior-mutable because the
     /// time origin is lazily initialized from the (`&self`) `render_inner` path.
     pub global_shader_start: Cell<Option<std::time::Instant>>,
-    /// Shared sink written by `GlobalShaderElement::draw`; after the frame is submitted, its
-    /// texture is moved into `global_shader_prev` for the next frame's `niri_prev`.
-    pub global_shader_result: Rc<RefCell<Option<GlesTexture>>>,
-    /// Previous frame's `niri_screen` capture (screen only), exposed as `niri_screen_prev`.
+    /// Previous frame's `niri_screen` capture (screen only), exposed as `niri_screen_prev`. This
+    /// is frame-level (the real screen), shared by all passes.
     pub global_shader_screen_prev: Option<GlesTexture>,
     /// Sink written by `GlobalShaderElement::draw` with this frame's screen capture; moved into
     /// `global_shader_screen_prev` after submit.
     pub global_shader_screen_result: Rc<RefCell<Option<GlesTexture>>>,
-    /// Offscreen target for the global shader's dedicated feedback buffer pass.
-    pub global_shader_buffer: Rc<crate::render_helpers::offscreen::OffscreenBuffer>,
-    /// Last frame's feedback buffer, bound as `niri_buffer`.
-    pub global_shader_buffer_prev: Option<GlesTexture>,
-    /// Sink for this frame's buffer texture; moved into `global_shader_buffer_prev` after submit.
-    pub global_shader_buffer_result: Rc<RefCell<Option<GlesTexture>>>,
+    /// Per-pass feedback + offscreen state for the multi-pass chain, sized to the active chain
+    /// length and ping-ponged across frames. Wrapped in a `RefCell` so it can be (re)sized lazily
+    /// from the `&self` render path (like the other interior-mutable shader sinks).
+    pub global_shader_chain: RefCell<GlobalShaderChain>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
     /// The blend-space image description last notified to color-management clients for this
@@ -2187,22 +2223,21 @@ impl State {
             || config.global_shader.source != old_config.global_shader.source
             || config.global_shader.path != old_config.global_shader.path
             || config.global_shader.mode != old_config.global_shader.mode
+            || config.global_shader.redraw != old_config.global_shader.redraw
+            || config.global_shader.cursor_radius != old_config.global_shader.cursor_radius
+            || config.global_shader.passes != old_config.global_shader.passes
         {
-            let src = global_shader_source(&config.global_shader);
-            let hyprland = config.global_shader.mode == "hyprland";
+            let passes = global_shader_pass_sources(&config.global_shader);
             self.backend.with_primary_renderer(|renderer| {
-                shaders::set_custom_global_program(renderer, src.as_deref(), hyprland);
+                shaders::set_custom_global_passes(renderer, &passes);
             });
-            // Reset per-output time origin / prev texture on (re)load.
+            // Reset per-output time origin and ALL per-pass feedback state on (re)load. The chain
+            // is re-sized next frame from the new chain length (GlobalShaderChain::resize).
             for state in self.niri.output_state.values_mut() {
                 state.global_shader_start.set(None);
-                state.global_shader_prev = None;
-                *state.global_shader_result.borrow_mut() = None;
+                *state.global_shader_chain.borrow_mut() = GlobalShaderChain::default();
                 state.global_shader_screen_prev = None;
                 *state.global_shader_screen_result.borrow_mut() = None;
-                state.global_shader_buffer_prev = None;
-                *state.global_shader_buffer_result.borrow_mut() = None;
-                // OffscreenBuffer recreates its texture on demand; leave it.
             }
             shaders_changed = true;
         }
@@ -3537,6 +3572,19 @@ fn reset_damage_tracker_if_changed(
 }
 
 impl Niri {
+    pub fn global_shader_caps(&self) -> niri_config::GlobalShaderCaps {
+        if let Some(caps) = self.global_shader_caps.get() {
+            return caps;
+        }
+        let caps = {
+            let cfg = self.config.borrow();
+            let passes = global_shader_pass_sources(&cfg.global_shader);
+            niri_config::GlobalShaderCaps::scan_chain(&passes)
+        };
+        self.global_shader_caps.set(Some(caps));
+        caps
+    }
+
     fn screen_cast_picker_is_open(&self) -> bool {
         #[cfg(feature = "xdp-gnome-screencast")]
         {
@@ -4210,6 +4258,7 @@ impl Niri {
             mutter_x11_interop_state,
             fifo_manager_state,
             kde_output_order_v1_state,
+            global_shader_caps: Cell::new(None),
             #[cfg(test)]
             single_pixel_buffer_state,
 
@@ -4566,16 +4615,10 @@ impl Niri {
             lock_surface: None,
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
-            global_shader_prev: None,
             global_shader_start: Cell::new(None),
-            global_shader_result: Rc::new(RefCell::new(None)),
             global_shader_screen_prev: None,
             global_shader_screen_result: Rc::new(RefCell::new(None)),
-            global_shader_buffer: Rc::new(
-                crate::render_helpers::offscreen::OffscreenBuffer::default(),
-            ),
-            global_shader_buffer_prev: None,
-            global_shader_buffer_result: Rc::new(RefCell::new(None)),
+            global_shader_chain: RefCell::new(GlobalShaderChain::default()),
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
             blend_description: None,
         };
@@ -6903,7 +6946,7 @@ impl Niri {
         // gate has zero overhead when no program is loaded.
         if ctx.target == RenderTarget::Output
             && Shaders::get(ctx.renderer)
-                .program(ProgramType::Global)
+                .program(ProgramType::GlobalPass(0))
                 .is_some()
         {
             let start = state.global_shader_start.get().unwrap_or_else(|| {
@@ -6936,8 +6979,14 @@ impl Niri {
             // limited to that box. Otherwise cover the whole output.
             let caps = self.global_shader_caps();
             let cursor_radius = self.config.borrow().global_shader.cursor_radius;
+            // Number of passes in the active chain (registry length). Region mode is whole-output
+            // only; multi-pass chains (N >= 2) always reshade the full output.
+            let n_passes = Shaders::get(ctx.renderer)
+                .custom_global_passes
+                .borrow()
+                .len();
             let (area, region_norm) = match cursor_radius {
-                Some(r) if caps.uses_cursor && !caps.is_animating() && r > 0 => {
+                Some(r) if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 => {
                     let r = r as f64; // logical px
                     let full = area;
                     let box_loc = (
@@ -6974,6 +7023,29 @@ impl Niri {
                 _ => (area, [0.0, 0.0, 1.0, 1.0]),
             };
 
+            // A fresh Id every frame makes smithay damage both the new box and the vacated old
+            // box (the removed element's last geometry), which is what gives region mode its
+            // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a stable
+            // per-output Id for a damage optimization, region mode must damage the vacated box
+            // explicitly or moving-cursor effects will leave trails.
+            // Size the per-output chain state to the active chain length and snapshot each pass's
+            // feedback handles for this frame. The borrow is dropped before constructing the
+            // element (it only needs the cloned handles, not the chain itself).
+            let passes = {
+                let mut chain = state.global_shader_chain.borrow_mut();
+                chain.resize(n_passes);
+                (0..n_passes)
+                    .map(|i| GlobalPassState {
+                        prev: chain.prev[i].clone(),
+                        result: chain.result[i].clone(),
+                        pass_offscreen: chain.pass_offscreen[i].clone(),
+                        buffer: chain.buffer[i].clone(),
+                        buffer_prev: chain.buffer_prev[i].clone(),
+                        buffer_result: chain.buffer_result[i].clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+
             let elem = GlobalShaderElement::new(
                 Id::new(),
                 area,
@@ -6982,13 +7054,9 @@ impl Niri {
                 cursor,
                 region_norm,
                 output_size_phys,
-                state.global_shader_prev.clone(),
                 state.global_shader_screen_prev.clone(),
                 state.global_shader_screen_result.clone(),
-                state.global_shader_buffer.clone(),
-                state.global_shader_buffer_prev.clone(),
-                state.global_shader_buffer_result.clone(),
-                state.global_shader_result.clone(),
+                passes,
             );
             push(elem.into());
         }
@@ -10643,6 +10711,63 @@ fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription>
 ///
 /// Returns `None` (and warns) when disabled, when neither/both of `source`/`path` are set, when an
 /// inline source is empty, or when a path can't be read.
+pub(crate) fn global_shader_pass_sources(cfg: &niri_config::GlobalShader) -> Vec<(String, bool)> {
+    if !cfg.enable {
+        return Vec::new();
+    }
+    if cfg.passes.is_empty() {
+        return match global_shader_source(cfg) {
+            Some(src) => vec![(src, cfg.mode == "hyprland")],
+            None => Vec::new(),
+        };
+    }
+    if cfg.source.is_some() || cfg.path.is_some() {
+        warn!("global-shader: both top-level source/path and pass{{}} blocks set; using passes");
+    }
+    let mut out = Vec::with_capacity(cfg.passes.len());
+    for pass in &cfg.passes {
+        let resolved = match (&pass.source, &pass.path) {
+            (Some(s), None) if !s.trim().is_empty() => Some(s.clone()),
+            (Some(_), None) => {
+                warn!("global-shader: empty pass source, disabling chain");
+                None
+            }
+            (None, Some(p)) => {
+                let path = match expand_home(std::path::Path::new(p)) {
+                    Ok(Some(e)) => e,
+                    Ok(None) => std::path::PathBuf::from(p),
+                    Err(err) => {
+                        warn!(
+                            "global-shader: cannot expand pass path {p:?}: {err}; disabling chain"
+                        );
+                        return Vec::new();
+                    }
+                };
+                match std::fs::read_to_string(&path) {
+                    Ok(s) => Some(s),
+                    Err(err) => {
+                        warn!("global-shader: cannot read pass path {p:?}: {err}; disabling chain");
+                        None
+                    }
+                }
+            }
+            (Some(_), Some(_)) => {
+                warn!("global-shader: pass has both source and path; disabling chain");
+                None
+            }
+            (None, None) => {
+                warn!("global-shader: pass has neither source nor path; disabling chain");
+                None
+            }
+        };
+        match resolved {
+            Some(src) => out.push((src, pass.mode == "hyprland")),
+            None => return Vec::new(),
+        }
+    }
+    out
+}
+
 pub(crate) fn global_shader_source(cfg: &niri_config::GlobalShader) -> Option<String> {
     if !cfg.enable {
         return None;
