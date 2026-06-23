@@ -191,6 +191,7 @@ use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::scoped_shader_element::{ScopedShaderElement, ScopedSource};
 use crate::render_helpers::shaders::{ProgramType, Shaders};
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
@@ -7073,6 +7074,100 @@ impl Niri {
             push(elem.into());
         }
 
+        // Push region shader elements for regions matching this output.
+        if ctx.target == RenderTarget::Output {
+            let scale = output.current_scale().fractional_scale() as f32;
+            let out_name = output.name();
+            let full = Rectangle::from_size(output_size(output));
+            let out_phys = (
+                (full.size.w * scale as f64) as f32,
+                (full.size.h * scale as f64) as f32,
+            );
+            let output_pos = self.global_space.output_geometry(output).unwrap().loc;
+            let pointer_pos = self
+                .tablet_cursor_location
+                .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+            let pointer_local = pointer_pos - output_pos.to_f64();
+            let cursor = (
+                (pointer_local.x * scale as f64) as f32,
+                (pointer_local.y * scale as f64) as f32,
+            );
+            let time = state
+                .global_shader_start
+                .get()
+                .map_or(0.0, |s| s.elapsed().as_secs_f32());
+
+            // Clone region data out before any mutable borrows.
+            let regions: Vec<_> = {
+                let config = self.config.borrow();
+                config
+                    .region_shaders
+                    .iter()
+                    .filter(|r| r.output.as_deref().map_or(true, |want| out_name == want))
+                    .map(|r| {
+                        let chain = r.pass_sources(|p| {
+                            let path = match expand_home(std::path::Path::new(p)) {
+                                Ok(Some(e)) => e,
+                                Ok(None) => std::path::PathBuf::from(p),
+                                Err(_) => return None,
+                            };
+                            std::fs::read_to_string(&path).ok()
+                        });
+                        (r.geometry.clone(), chain)
+                    })
+                    .collect()
+            };
+
+            for (geom, chain) in regions {
+                if chain.is_empty() {
+                    continue;
+                }
+                let key = shaders::scoped_key(&chain);
+                if Shaders::get(ctx.renderer)
+                    .program(ProgramType::Scoped(key, 0))
+                    .is_none()
+                {
+                    continue;
+                }
+                let area =
+                    Rectangle::new((geom.x, geom.y).into(), (geom.width, geom.height).into());
+                let region_norm = [
+                    ((area.loc.x - full.loc.x as f64) / full.size.w) as f32,
+                    ((area.loc.y - full.loc.y as f64) / full.size.h) as f32,
+                    (area.size.w / full.size.w) as f32,
+                    (area.size.h / full.size.h) as f32,
+                ];
+                let size_phys = (
+                    (geom.width * scale as f64) as f32,
+                    (geom.height * scale as f64) as f32,
+                );
+                let n_passes = chain.len();
+                let offscreens = (0..n_passes.saturating_sub(1))
+                    .map(|_| {
+                        std::rc::Rc::new(
+                            crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                debug_assert_eq!(offscreens.len(), n_passes.saturating_sub(1));
+                let elem = ScopedShaderElement::new(
+                    Id::new(),
+                    area,
+                    scale,
+                    time,
+                    cursor,
+                    region_norm,
+                    out_phys,
+                    size_phys,
+                    key,
+                    n_passes,
+                    ScopedSource::Capture,
+                    offscreens,
+                );
+                push(elem.into());
+            }
+        }
+
         // Next, the screen transition texture.
         {
             if let Some(transition) = &state.screen_transition {
@@ -7556,6 +7651,35 @@ impl Niri {
                 .as_ref()
                 .is_some_and(|a| a.output.upgrade().as_ref() == Some(output) && !a.is_done());
 
+            // Decide whether a time/feedback-driven global shader needs continuous redraws.
+            let global_shader_animate = {
+                let cfg = self.config.borrow();
+                let enabled = cfg.global_shader.enable;
+                let mode = niri_config::RedrawMode::parse(&cfg.global_shader.redraw);
+                drop(cfg);
+                enabled && mode.wants_continuous_redraw(self.global_shader_caps())
+            };
+
+            // Decide whether any region shader on this output needs continuous redraws.
+            let out_name = output.name();
+            let region_shader_animate = {
+                let cfg = self.config.borrow();
+                cfg.region_shaders.iter().any(|r| {
+                    if r.output.as_deref().map_or(false, |want| out_name != want) {
+                        return false;
+                    }
+                    let chain = r.pass_sources(|p| {
+                        let path = match expand_home(std::path::Path::new(p)) {
+                            Ok(Some(e)) => e,
+                            Ok(None) => std::path::PathBuf::from(p),
+                            Err(_) => return None,
+                        };
+                        std::fs::read_to_string(&path).ok()
+                    });
+                    niri_config::GlobalShaderCaps::scan_chain(&chain).is_animating()
+                })
+            };
+
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
@@ -7586,6 +7710,11 @@ impl Niri {
                     .filter_map(|surface| self.mapped_layer_surfaces.get(surface))
                     .any(|mapped| mapped.are_animations_ongoing());
             }
+
+            // Time/feedback-driven global shaders must keep redrawing to animate when idle.
+            state.unfinished_animations_remain |= global_shader_animate;
+            // Animated region shaders on this output also need continuous redraws.
+            state.unfinished_animations_remain |= region_shader_animate;
 
             // Render.
             res = backend.render(self, output, target_presentation_time);
@@ -10912,6 +11041,7 @@ niri_render_elements! {
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
         Magnified = RescaleRenderElement<Box<OutputRenderElements<R>>>,
         GlobalShader = GlobalShaderElement,
+        ScopedShader = ScopedShaderElement,
     }
 }
 
