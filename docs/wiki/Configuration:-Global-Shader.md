@@ -375,8 +375,175 @@ Region mode applies only when the shader uses `niri_cursor` and is **not** anima
 
 ---
 
+### Region shaders
+
+A `region-shader {}` block runs a post-process shader scoped to a fixed screen rectangle instead of the whole output. It is independent of `global-shader` — you can have both active simultaneously, and you can repeat `region-shader {}` as many times as you need (they draw in config order).
+
+```kdl
+region-shader {
+    geometry x=100 y=100 width=800 height=600
+    source "vec4 global_color(vec3 c){ vec3 s=tex2D_screen(c.xy).rgb; return vec4(s.bgr,1.0); }"
+}
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `geometry` | node | — | Defines the rectangle. All four properties `x`, `y`, `width`, `height` are logical pixels (pre-scale). |
+| `output` | string | — | Optional output name (e.g. `"DP-1"`). When set, the region is only applied on that output. When absent, the same rectangle is applied on every output. |
+| `source` | string | — | Inline GLSL source. Same `global_color` contract as `global-shader`. Mutually exclusive with `path`. |
+| `path` | string | — | Path to a `.frag` file. Mutually exclusive with `source`. |
+| `mode` | string | `"niri"` | API flavour: `"niri"` or `"hyprland"`. |
+| `pass` | block (repeatable) | — | Multi-pass chain — same syntax as `global-shader`. When any `pass` blocks are present, the top-level `source`/`path` are ignored. See [Multi-pass chains](#multi-pass-chains-pass). |
+
+#### Shader contract
+
+A region shader uses the same `global_color` function and uniforms as `global-shader` — see [niri Mode](#niri-mode-default) for the full uniform table. The key difference is scope:
+
+- `niri_screen` (and `tex2D_screen`) samples the composited pixels **inside the region rectangle** only. Samples outside the rectangle clamp to a transparent border.
+- `niri_size` is the region rectangle's dimensions in physical pixels (not the full output). Use `niri_output_size` for absolute-pixel math when needed.
+- `niri_region` is `(origin.xy, size.xy)` in output-normalised coords for this region box.
+- `coord.xy` passed to `global_color` and the `uv` arguments to `tex2D_screen` are **output-normalised** (0..1 across the whole output), as with `global-shader`.
+
+Multi-pass chains work the same way as for `global-shader` — each pass reads the previous pass's output as `niri_screen`, and `niri_source` always holds the original composited pixels for the region.
+
+#### v1 limits
+
+- **No per-scope feedback.** `niri_prev`, `niri_screen_prev`, and `niri_buffer` all alias `niri_screen` (the current composited pixels in the rect), and `global_buffer` is ignored. There is no previous-frame feedback within a region shader in this release.
+- **No `reads-cursor` or `redraw` controls.** Redraw is automatic: a region shader redraws when the composited content under its rectangle changes, and — if it uses `niri_time` — every frame (the same `auto` behaviour as `global-shader`, with the same continuous-GPU-load cost).
+- **No overlap compositing.** Overlapping regions draw independently in config order; no blending between them is performed.
+
+#### Example: channel-swap over a rectangle
+
+```kdl
+region-shader {
+    geometry x=0 y=0 width=960 height=540
+    output "HDMI-A-1"
+    source "vec4 global_color(vec3 c){ vec3 s=tex2D_screen(c.xy).rgb; return vec4(s.bgr,1.0); }"
+}
+```
+
+#### Example: two independent regions
+
+Multiple `region-shader` blocks are independent. They compile separately if their sources differ (only one compiled shader is kept per unique source).
+
+```kdl
+region-shader {
+    geometry x=0 y=0 width=1920 height=40
+    source "vec4 global_color(vec3 c){ vec4 s=tex2D_screen(c.xy); return vec4(s.r*1.0,s.g*0.5,s.b*0.5,s.a); }"
+}
+region-shader {
+    geometry x=0 y=1040 width=1920 height=40
+    source "vec4 global_color(vec3 c){ vec4 s=tex2D_screen(c.xy); return vec4(s.r*0.5,s.g*1.0,s.b*0.5,s.a); }"
+}
+```
+
+#### Example: region multi-pass chain
+
+```kdl
+region-shader {
+    geometry x=200 y=200 width=400 height=300
+    pass {
+        source "vec4 global_color(vec3 c){ return tex2D_screen(c.xy); }"
+    }
+    pass {
+        source "vec4 global_color(vec3 c){ vec4 s=tex2D_screen(c.xy); return vec4(1.0-s.r,1.0-s.g,1.0-s.b,s.a); }"
+    }
+}
+```
+
+---
+
+### Per-window shaders
+
+A `shader {}` block inside a `window-rule {}` applies a post-process shader to a single window's content.
+The effect is independent of `global-shader` and `region-shader` — all three can be active at the same time.
+
+```kdl
+window-rule {
+    match app-id="Alacritty"
+    shader {
+        source "vec4 global_color(vec3 c){ vec3 s=tex2D_screen(c.xy).rgb; float g=dot(s,vec3(0.299,0.587,0.114)); return vec4(vec3(g),1.0); }"
+    }
+}
+```
+
+#### Fields
+
+The `shader {}` child accepts the same source fields as `region-shader`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `source` | string | — | Inline GLSL source. Same `global_color` contract as `global-shader`. Mutually exclusive with `path`. |
+| `path` | string | — | Path to a `.frag` file. Mutually exclusive with `source`. |
+| `mode` | string | `"niri"` | API flavour: `"niri"` or `"hyprland"`. |
+| `pass` | block (repeatable) | — | Multi-pass chain — same syntax as `global-shader`. When any `pass` blocks are present, the top-level `source`/`path` are ignored. See [Multi-pass chains](#multi-pass-chains-pass). |
+
+#### Shader contract
+
+A window shader uses the same `global_color` function and uniforms as `global-shader` and `region-shader` — see [niri Mode](#niri-mode-default) for the full uniform table. The key scoping differences:
+
+- `niri_screen` (and `tex2D_screen`) samples the **window's own content** only.
+- `niri_size` is the window's physical size in pixels.
+- `coord.xy` passed to `global_color` is 0..1 across the window.
+- `niri_region` is always `(0,0,1,1)` for a window shader (the shader covers the whole window).
+- Border, shadow, and focus-ring decorations are rendered **outside** the shader, unaffected.
+
+Multiple windows with a `shader {}` rule are independent: each is shaded separately, and windows that share an identical shader source share a compiled program (deduplication is automatic).
+
+Multi-pass chains work the same way as for `global-shader` — each pass reads the previous pass's output as `niri_screen`, and `niri_source` holds the original window content.
+
+#### v1 limits
+
+- **Static only — no animation and no cursor reactivity.** `niri_time` is always `0.0` and `niri_cursor` is always `(0.0, 0.0)` for window shaders in this release. Do not write window shaders that depend on `niri_time` or `niri_cursor`; use `global-shader` for animated effects.
+- **No per-scope feedback.** `niri_prev`, `niri_screen_prev`, and `niri_buffer` all alias `niri_screen` (the current window content), and `global_buffer` is ignored. There is no previous-frame feedback within a window shader in this release.
+- **Corner-rounding is not applied inside the shader.** The shader runs on the window's full rectangular offscreen buffer before corner clipping. A window that has `corner-radius` configured will appear with **square corners** while a window shader is active — the rounded clipping that normally happens at composite time does not apply to the shaded result. This is a known v1 limitation.
+- **Content only.** The shader cannot see or affect border, shadow, focus-ring, or any other decoration — those are composited around the result after the shader runs.
+- **No `reads-cursor` or `redraw` controls.** Window shaders redraw when the window's own content is damaged. Because `niri_time` is always 0, they never force continuous redraws on their own.
+
+#### Example: grayscale on one app
+
+```kdl
+window-rule {
+    match app-id="Alacritty"
+    shader {
+        source "vec4 global_color(vec3 c){ vec3 s=tex2D_screen(c.xy).rgb; float g=dot(s,vec3(0.299,0.587,0.114)); return vec4(vec3(g),1.0); }"
+    }
+}
+```
+
+#### Example: invert one window
+
+```kdl
+window-rule {
+    match app-id="firefox"
+    shader {
+        source "vec4 global_color(vec3 c){ vec4 s=tex2D_screen(c.xy); return vec4(1.0-s.r,1.0-s.g,1.0-s.b,s.a); }"
+    }
+}
+```
+
+#### Example: window multi-pass chain
+
+```kdl
+window-rule {
+    match app-id="code"
+    shader {
+        pass {
+            source "vec4 global_color(vec3 c){ return tex2D_screen(c.xy); }"
+        }
+        pass {
+            source "vec4 global_color(vec3 c){ vec4 s=tex2D_screen(c.xy); float g=dot(s.rgb,vec3(0.299,0.587,0.114)); return vec4(vec3(g)*1.2,s.a); }"
+        }
+    }
+}
+```
+
+---
+
 ### Scope and Limitations
 
 - **TTY/DRM only.** The effect applies on the real (DRM/KMS) output. It is intentionally **not** applied on the nested winit backend (running niri in a window), nor to screenshots or screen recordings (screencast/screencopy) — those render without the effect.
 - **Output transform.** The effect is verified on outputs with the default (`normal`) transform. On outputs configured with a non-default `transform` (e.g. `90`, `270`, `flipped`), the shader's view of `niri_screen`/`niri_prev` may be mis-oriented. If you use a rotated or flipped output, verify your shader there before relying on it.
-- **Whole-output only.** One global shader (or one multi-pass chain) applies to all outputs; per-output, per-window, or per-layer shaders are not supported. Multi-pass chains are supported (see [Multi-pass chains](#multi-pass-chains-pass)) but a chain of two or more passes is always whole-output (no `cursor-radius` region mode).
+- **Whole-output `global-shader`.** The `global-shader` block applies to all outputs; per-output and per-layer global shaders are not supported. For sub-output scoping, use a [region shader](#region-shaders) (a screen rectangle) or a [per-window shader](#per-window-shaders) (`window-rule { shader {} }`). Multi-pass chains are supported (see [Multi-pass chains](#multi-pass-chains-pass)) but a chain of two or more passes is always whole-output (no `cursor-radius` region mode).
