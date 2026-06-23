@@ -2239,6 +2239,18 @@ impl State {
                 state.global_shader_screen_prev = None;
                 *state.global_shader_screen_result.borrow_mut() = None;
             }
+            // Recompute capability flags on next use.
+            self.niri.global_shader_caps.set(None);
+            shaders_changed = true;
+        }
+
+        if config.region_shaders != old_config.region_shaders
+            || config.window_rules != old_config.window_rules
+        {
+            let chains = scoped_shader_chains(&config);
+            self.backend.with_primary_renderer(|renderer| {
+                shaders::set_scoped_programs(renderer, &chains);
+            });
             shaders_changed = true;
         }
 
@@ -10711,6 +10723,39 @@ fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription>
 ///
 /// Returns `None` (and warns) when disabled, when neither/both of `source`/`path` are set, when an
 /// inline source is empty, or when a path can't be read.
+/// Read a scoped/region shader `path` to its file contents (expanding `~`). Returns `None` if the
+/// path cannot be expanded or read. This is the single source of truth for resolving a scoped
+/// shader path: the `scoped_key` computed at compile time (`scoped_shader_chains`) must match the
+/// one looked up at render time, so all `pass_sources` call sites resolve paths through this fn.
+pub(crate) fn read_scoped_shader_path(p: &str) -> Option<String> {
+    let path = match expand_home(std::path::Path::new(p)) {
+        Ok(Some(e)) => e,
+        Ok(None) => std::path::PathBuf::from(p),
+        Err(_) => return None,
+    };
+    std::fs::read_to_string(&path).ok()
+}
+
+/// Resolve every configured scoped shader (region shaders + window-rule shaders) into its
+/// `(source, hyprland)` pass list, reading any `path` files. The list is the full set compiled
+/// into `Shaders.scoped` (dedupe is by key inside `set_scoped_programs`).
+pub(crate) fn scoped_shader_chains(config: &niri_config::Config) -> Vec<Vec<(String, bool)>> {
+    let mut chains: Vec<Vec<(String, bool)>> = config
+        .region_shaders
+        .iter()
+        .map(|r| r.pass_sources(read_scoped_shader_path))
+        .collect();
+    for rule in &config.window_rules {
+        if let Some(shader) = &rule.shader {
+            let chain = shader.pass_sources(read_scoped_shader_path);
+            if !chain.is_empty() {
+                chains.push(chain);
+            }
+        }
+    }
+    chains
+}
+
 pub(crate) fn global_shader_pass_sources(cfg: &niri_config::GlobalShader) -> Vec<(String, bool)> {
     if !cfg.enable {
         return Vec::new();
