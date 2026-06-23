@@ -68,7 +68,7 @@ pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::utils::FloatOrInt;
 use crate::utils::{expand_home_path, Flag, MergeWith as _};
 pub use crate::window_rule::{
-    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules,
+    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, ShaderRule,
     TearingContentType, WindowRule,
 };
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
@@ -2955,6 +2955,7 @@ mod tests {
                         saturation: None,
                         liquid_glass: None,
                     },
+                    shader: None,
                     popups: PopupsRule {
                         opacity: None,
                         geometry_corner_radius: None,
