@@ -47,6 +47,7 @@ pub enum ProgramType {
     GlobalBuffer,
     GlobalPass(usize),
     GlobalPassBuffer(usize),
+    Scoped(u64, usize),
 }
 
 impl Shaders {
@@ -350,6 +351,12 @@ impl Shaders {
                 .get(i)
                 .cloned()
                 .flatten(),
+            ProgramType::Scoped(key, i) => self
+                .scoped
+                .borrow()
+                .get(&key)
+                .and_then(|chain| chain.get(i))
+                .cloned(),
         }
     }
 }
