@@ -6957,125 +6957,195 @@ impl Niri {
         // screencopy), so the effect does not leak into recordings and the per-output ping-pong
         // state is not corrupted by capture renders. A compiled program is also required; this
         // gate has zero overhead when no program is loaded.
-        if ctx.target == RenderTarget::Output
-            && Shaders::get(ctx.renderer)
-                .program(ProgramType::GlobalPass(0))
-                .is_some()
-        {
-            let start = state.global_shader_start.get().unwrap_or_else(|| {
-                let now = std::time::Instant::now();
-                state.global_shader_start.set(Some(now));
-                now
-            });
-            let time = start.elapsed().as_secs_f32();
-            let scale = output.current_scale().fractional_scale() as f32;
-            let area = Rectangle::from_size(output_size(output));
+        //
+        // When reads_cursor is active, the element must render ABOVE the cursor (pushed before
+        // render_pointer) so the cursor is captured into the screen texture. Otherwise it renders
+        // BELOW the cursor (pushed after render_pointer) so the hardware cursor is unaffected.
+        let reads_cursor = {
+            let cfg = self.config.borrow();
+            cfg.global_shader.enable && cfg.global_shader.reads_cursor
+        };
+        let capture_enabled = self.config.borrow().shaders_in_capture;
+        let capture_render = ctx.target != RenderTarget::Output;
+        let mut global_shader_elem: Option<GlobalShaderElement> =
+            if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled)
+                && Shaders::get(ctx.renderer)
+                    .program(ProgramType::GlobalPass(0))
+                    .is_some()
+            {
+                let start = state.global_shader_start.get().unwrap_or_else(|| {
+                    let now = std::time::Instant::now();
+                    state.global_shader_start.set(Some(now));
+                    now
+                });
+                let time = start.elapsed().as_secs_f32();
+                let scale = output.current_scale().fractional_scale() as f32;
+                let area = Rectangle::from_size(output_size(output));
 
-            // Cursor in output-local physical pixels (same source as render_pointer).
-            let output_pos = self.global_space.output_geometry(output).unwrap().loc;
-            let pointer_pos = self
-                .tablet_cursor_location
-                .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-            let pointer_local = pointer_pos - output_pos.to_f64();
-            let cursor = (
-                (pointer_local.x * scale as f64) as f32,
-                (pointer_local.y * scale as f64) as f32,
-            );
+                // Cursor in output-local physical pixels (same source as render_pointer).
+                let output_pos = self.global_space.output_geometry(output).unwrap().loc;
+                let pointer_pos = self
+                    .tablet_cursor_location
+                    .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                let pointer_local = pointer_pos - output_pos.to_f64();
+                let cursor = (
+                    (pointer_local.x * scale as f64) as f32,
+                    (pointer_local.y * scale as f64) as f32,
+                );
 
-            let output_size_phys = (
-                (area.size.w * scale as f64) as f32,
-                (area.size.h * scale as f64) as f32,
-            );
+                let output_size_phys = (
+                    (area.size.w * scale as f64) as f32,
+                    (area.size.h * scale as f64) as f32,
+                );
 
-            // Region-local rendering: when cursor-radius is set on a cursor-only (non-animating)
-            // shader, shrink the element to a box around the cursor so damage + scanout are
-            // limited to that box. Otherwise cover the whole output.
-            let caps = self.global_shader_caps();
-            let cursor_radius = self.config.borrow().global_shader.cursor_radius;
-            // Number of passes in the active chain (registry length). Region mode is whole-output
-            // only; multi-pass chains (N >= 2) always reshade the full output.
-            let n_passes = Shaders::get(ctx.renderer)
-                .custom_global_passes
-                .borrow()
-                .len();
-            let (area, region_norm) = match cursor_radius {
-                Some(r) if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 => {
-                    let r = r as f64; // logical px
-                    let full = area;
-                    let box_loc = (
-                        (pointer_local.x - r).max(full.loc.x),
-                        (pointer_local.y - r).max(full.loc.y),
-                    );
-                    let box_end = (
-                        (pointer_local.x + r).min(full.loc.x + full.size.w),
-                        (pointer_local.y + r).min(full.loc.y + full.size.h),
-                    );
-                    let box_rect = Rectangle::new(
-                        (box_loc.0, box_loc.1).into(),
-                        (
-                            (box_end.0 - box_loc.0).max(0.0),
-                            (box_end.1 - box_loc.1).max(0.0),
-                        )
-                            .into(),
-                    );
-                    if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
-                        // Cursor is off this output (e.g. on another monitor) so the clamped box
-                        // is empty: render whole-output here. A zero-size region would otherwise
-                        // divide by zero in the shader's tex2D_* remap.
-                        (full, [0.0, 0.0, 1.0, 1.0])
-                    } else {
-                        let region_norm = [
-                            ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
-                            ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
-                            (box_rect.size.w / full.size.w) as f32,
-                            (box_rect.size.h / full.size.h) as f32,
-                        ];
-                        (box_rect, region_norm)
+                // Region-local rendering: when cursor-radius is set on a cursor-only
+                // (non-animating) shader, shrink the element to a box around the
+                // cursor so damage + scanout are limited to that box. Otherwise
+                // cover the whole output.
+                let caps = self.global_shader_caps();
+                let cursor_radius = self.config.borrow().global_shader.cursor_radius;
+                // Number of passes in the active chain (registry length). Region mode is
+                // whole-output only; multi-pass chains (N >= 2) always reshade the
+                // full output.
+                let n_passes = Shaders::get(ctx.renderer)
+                    .custom_global_passes
+                    .borrow()
+                    .len();
+                let (area, region_norm) = match cursor_radius {
+                    Some(r)
+                        if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 =>
+                    {
+                        let r = r as f64; // logical px
+                        let full = area;
+                        let box_loc = (
+                            (pointer_local.x - r).max(full.loc.x),
+                            (pointer_local.y - r).max(full.loc.y),
+                        );
+                        let box_end = (
+                            (pointer_local.x + r).min(full.loc.x + full.size.w),
+                            (pointer_local.y + r).min(full.loc.y + full.size.h),
+                        );
+                        let box_rect = Rectangle::new(
+                            (box_loc.0, box_loc.1).into(),
+                            (
+                                (box_end.0 - box_loc.0).max(0.0),
+                                (box_end.1 - box_loc.1).max(0.0),
+                            )
+                                .into(),
+                        );
+                        if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
+                            // Cursor is off this output (e.g. on another monitor) so the clamped
+                            // box is empty: render whole-output here. A
+                            // zero-size region would otherwise
+                            // divide by zero in the shader's tex2D_* remap.
+                            (full, [0.0, 0.0, 1.0, 1.0])
+                        } else {
+                            let region_norm = [
+                                ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
+                                ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
+                                (box_rect.size.w / full.size.w) as f32,
+                                (box_rect.size.h / full.size.h) as f32,
+                            ];
+                            (box_rect, region_norm)
+                        }
                     }
-                }
-                _ => (area, [0.0, 0.0, 1.0, 1.0]),
+                    _ => (area, [0.0, 0.0, 1.0, 1.0]),
+                };
+
+                // A fresh Id every frame makes smithay damage both the new box and the vacated old
+                // box (the removed element's last geometry), which is what gives region mode its
+                // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a
+                // stable per-output Id for a damage optimization, region mode must
+                // damage the vacated box explicitly or moving-cursor effects will
+                // leave trails. Size the per-output chain state to the active chain
+                // length and snapshot each pass's feedback handles for this frame.
+                // The borrow is dropped before constructing the element (it only
+                // needs the cloned handles, not the chain itself).
+                let passes = {
+                    let mut chain = state.global_shader_chain.borrow_mut();
+                    chain.resize(n_passes);
+                    (0..n_passes)
+                        .map(|i| GlobalPassState {
+                            // Read the live trail either way.
+                            prev: chain.prev[i].clone(),
+                            buffer_prev: chain.buffer_prev[i].clone(),
+                            // Capture renders write to throwaway sinks/offscreens so the live
+                            // output's ping-pong is never corrupted;
+                            // the Output render uses the real shared ones.
+                            result: if capture_render {
+                                std::rc::Rc::new(std::cell::RefCell::new(None))
+                            } else {
+                                chain.result[i].clone()
+                            },
+                            buffer_result: if capture_render {
+                                std::rc::Rc::new(std::cell::RefCell::new(None))
+                            } else {
+                                chain.buffer_result[i].clone()
+                            },
+                            pass_offscreen: if capture_render {
+                                std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                            } else {
+                                chain.pass_offscreen[i].clone()
+                            },
+                            buffer: if capture_render {
+                                std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                            } else {
+                                chain.buffer[i].clone()
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                };
+                // screen_result is the niri_screen_prev ping-pong sink; throwaway for capture
+                // renders.
+                let screen_result = if capture_render {
+                    std::rc::Rc::new(std::cell::RefCell::new(None))
+                } else {
+                    state.global_shader_screen_result.clone()
+                };
+
+                Some(GlobalShaderElement::new(
+                    Id::new(),
+                    area,
+                    scale,
+                    time,
+                    cursor,
+                    region_norm,
+                    output_size_phys,
+                    state.global_shader_screen_prev.clone(),
+                    screen_result,
+                    passes,
+                ))
+            } else {
+                None
             };
 
-            // A fresh Id every frame makes smithay damage both the new box and the vacated old
-            // box (the removed element's last geometry), which is what gives region mode its
-            // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a stable
-            // per-output Id for a damage optimization, region mode must damage the vacated box
-            // explicitly or moving-cursor effects will leave trails.
-            // Size the per-output chain state to the active chain length and snapshot each pass's
-            // feedback handles for this frame. The borrow is dropped before constructing the
-            // element (it only needs the cloned handles, not the chain itself).
-            let passes = {
-                let mut chain = state.global_shader_chain.borrow_mut();
-                chain.resize(n_passes);
-                (0..n_passes)
-                    .map(|i| GlobalPassState {
-                        prev: chain.prev[i].clone(),
-                        result: chain.result[i].clone(),
-                        pass_offscreen: chain.pass_offscreen[i].clone(),
-                        buffer: chain.buffer[i].clone(),
-                        buffer_prev: chain.buffer_prev[i].clone(),
-                        buffer_result: chain.buffer_result[i].clone(),
-                    })
-                    .collect::<Vec<_>>()
-            };
+        // When reads_cursor is on, push the global shader element first so the cursor is
+        // composited into niri_screen (the cursor becomes part of the captured screen texture).
+        if reads_cursor {
+            if let Some(elem) = global_shader_elem.take() {
+                push(elem.into());
+            }
+        }
 
-            let elem = GlobalShaderElement::new(
-                Id::new(),
-                area,
-                scale,
-                time,
-                cursor,
-                region_norm,
-                output_size_phys,
-                state.global_shader_screen_prev.clone(),
-                state.global_shader_screen_result.clone(),
-                passes,
-            );
-            push(elem.into());
+        // The pointer goes on the top (or below the global shader when reads_cursor is on).
+        if include_pointer && self.pointer_visibility.is_visible() {
+            self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
+        }
+
+        // When reads_cursor is off (default), push the global shader element after the pointer
+        // so the hardware cursor remains above the effect.
+        if !reads_cursor {
+            if let Some(elem) = global_shader_elem {
+                push(elem.into());
+            }
         }
 
         // Push region shader elements for regions matching this output.
-        if ctx.target == RenderTarget::Output {
+        if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled) {
             let scale = output.current_scale().fractional_scale() as f32;
             let out_name = output.name();
             let full = Rectangle::from_size(output_size(output));
