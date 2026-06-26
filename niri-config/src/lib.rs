@@ -83,6 +83,7 @@ pub struct Config {
     pub spawn_sh_at_startup: Vec<SpawnShAtStartup>,
     pub layout: Layout,
     pub prefer_no_csd: bool,
+    pub shaders_in_capture: bool,
     pub cursor: Cursor,
     pub screenshot_path: ScreenshotPath,
     pub clipboard: Clipboard,
@@ -266,6 +267,10 @@ where
 
                 "prefer-no-csd" => {
                     config.borrow_mut().prefer_no_csd = Flag::decode_node(node, ctx)?.0
+                }
+
+                "shaders-in-capture" => {
+                    config.borrow_mut().shaders_in_capture = Flag::decode_node(node, ctx)?.0
                 }
 
                 "screenshot-path" => {
@@ -2388,6 +2393,7 @@ mod tests {
                 },
             },
             prefer_no_csd: true,
+            shaders_in_capture: false,
             cursor: Cursor {
                 xcursor_theme: "breeze_cursors",
                 xcursor_size: 16,
@@ -3871,5 +3877,13 @@ mod tests {
         assert_eq!(config.input.keyboard_named("Other").xkb.layout, "de");
         assert_eq!(config.input.keyboard_named("Ext").xkb.layout, "");
         assert_eq!(config.input.fallback_keyboard().xkb.layout, "");
+    }
+
+    #[test]
+    fn shaders_in_capture_parses() {
+        let on = Config::parse_mem("shaders-in-capture\n").unwrap();
+        assert!(on.shaders_in_capture);
+        let off = Config::parse_mem("").unwrap();
+        assert!(!off.shaders_in_capture);
     }
 }
