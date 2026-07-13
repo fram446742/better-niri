@@ -1032,6 +1032,7 @@ mod enabled {
                         target: RenderTarget::Screencast,
                         intent: RenderIntent::PickerPreview,
                         xray: ctx.xray,
+                        shader_time: ctx.shader_time,
                     };
                     let mut elements = Vec::new();
                     for (mapped, factor, location) in snapshots {

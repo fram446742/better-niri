@@ -233,6 +233,7 @@ impl State {
                     target: RenderTarget::Screencast,
                     intent: RenderIntent::Normal,
                     xray: None,
+                    shader_time: self.niri.window_shader_start.elapsed().as_secs_f32(),
                 };
                 let main_start = elements.len();
                 mapped.render_for_screen_cast(ctx, scale, &mut |elem| {
@@ -625,6 +626,7 @@ impl Niri {
                     target: RenderTarget::Screencast,
                     intent: RenderIntent::Normal,
                     xray: None,
+                    shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                 };
                 self.render(ctx, output, false, &mut |elem| elements.push(elem.into()));
 
@@ -727,6 +729,7 @@ impl Niri {
                 target: RenderTarget::Screencast,
                 intent: RenderIntent::Normal,
                 xray: None,
+    shader_time: self.window_shader_start.elapsed().as_secs_f32(),
             };
             let main_start = elements.len();
             mapped.render_for_screen_cast(ctx, scale, &mut |elem| {

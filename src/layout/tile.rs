@@ -1378,7 +1378,7 @@ impl<W: LayoutElement> Tile<W> {
                         Id::new(),
                         area,
                         self.scale as f32,
-                        0.0,                  // niri_time = 0 (static v1)
+                        ctx.shader_time,      // niri_time: shared compositor origin
                         (0.0, 0.0),           // niri_cursor = (0, 0) (v1)
                         [0.0, 0.0, 1.0, 1.0], // region_norm: whole window
                         size_phys,            // niri_output_size = window physical size
@@ -1692,6 +1692,8 @@ impl<W: LayoutElement> Tile<W> {
                 renderer,
                 intent: RenderIntent::Normal,
                 xray: xray.as_deref(),
+                // Snapshots are static captures for open/close animations; no live shader time.
+                shader_time: 0.0,
             },
             Point::from((0., 0.)),
             xray_pos,
@@ -1744,6 +1746,7 @@ impl<W: LayoutElement> Tile<W> {
                         renderer,
                         intent: RenderIntent::Normal,
                         xray: Some(xray),
+                        shader_time: 0.0,
                     },
                     Point::from((0., 0.)),
                     xray_pos,
@@ -1765,6 +1768,7 @@ impl<W: LayoutElement> Tile<W> {
                 renderer,
                 intent: RenderIntent::Normal,
                 xray: xray.as_deref(),
+                shader_time: 0.0,
             },
             Point::from((0., 0.)),
             xray_pos,
