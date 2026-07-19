@@ -39,7 +39,8 @@ use std::time::Duration;
 use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use niri_config::utils::MergeWith as _;
 use niri_config::{
-    Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
+    Config, CornerRadius, LayoutPart, OutputName, PresetSize, Workspace as WorkspaceConfig,
+    WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use scrolling::{Column, ColumnWidth};
@@ -807,7 +808,7 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>) {
+    pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>, isolated: bool) {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
@@ -891,8 +892,10 @@ impl<W: LayoutElement> Layout<W> {
                     self.clock.clone(),
                     self.options.clone(),
                     layout_config,
+                    isolated,
                 );
-                monitor.overview_open = self.overview_open;
+                // Isolated outputs never enter the overview.
+                monitor.overview_open = self.overview_open && !isolated;
                 monitor.set_overview_progress(self.overview_progress.as_ref());
                 // With grid-all-monitors, a monitor connected while the grid is open joins it.
                 if self.options.grid_overview.grid_all_monitors
@@ -918,8 +921,10 @@ impl<W: LayoutElement> Layout<W> {
                     self.clock.clone(),
                     self.options.clone(),
                     layout_config,
+                    isolated,
                 );
-                monitor.overview_open = self.overview_open;
+                // Isolated outputs never enter the overview.
+                monitor.overview_open = self.overview_open && !isolated;
                 monitor.set_overview_progress(self.overview_progress.as_ref());
 
                 MonitorSet::Normal {
@@ -3791,6 +3796,20 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        // Refresh the per-monitor `isolated` flag from config (it may have been toggled on reload),
+        // and immediately drop isolated outputs out of the overview.
+        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            for mon in monitors {
+                mon.isolated = mon
+                    .output
+                    .user_data()
+                    .get::<OutputName>()
+                    .and_then(|name| config.outputs.find(name))
+                    .is_some_and(|c| c.isolated);
+                mon.overview_open &= !mon.isolated;
+            }
+        }
+
         self.update_options(Options::from_config(config));
     }
 
@@ -5925,7 +5944,8 @@ impl<W: LayoutElement> Layout<W> {
         };
 
         for mon in monitors {
-            mon.overview_open = self.overview_open;
+            // Isolated outputs never enter the overview.
+            mon.overview_open = self.overview_open && !mon.isolated;
             mon.set_overview_progress(self.overview_progress.as_ref());
         }
     }
