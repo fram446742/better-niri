@@ -414,6 +414,9 @@ pub struct Layout<W: LayoutElement> {
     overview_progress: Option<OverviewProgress>,
     /// Ongoing touchpad gesture opening or closing the grid overview.
     grid_gesture: Option<OverviewGesture>,
+    /// Which output the consolidated carousel is centered on. Meaningful only
+    /// while in the carousel regime; defaults to the active monitor.
+    carousel_centered_output_idx: usize,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
@@ -816,6 +819,7 @@ impl<W: LayoutElement> Layout<W> {
             grid_overview_open_count: 0,
             overview_progress: None,
             grid_gesture: None,
+            carousel_centered_output_idx: 0,
             options: Rc::new(options),
         }
     }
@@ -843,6 +847,7 @@ impl<W: LayoutElement> Layout<W> {
             grid_overview_open_count: 0,
             overview_progress: None,
             grid_gesture: None,
+            carousel_centered_output_idx: 0,
             options: opts,
         }
     }
@@ -3540,6 +3545,20 @@ impl<W: LayoutElement> Layout<W> {
     pub fn overview_zoom(&self) -> f64 {
         let progress = self.overview_progress.as_ref().map(|p| p.value());
         compute_overview_zoom(self.options.overview.zoom, progress)
+    }
+
+    pub fn in_carousel_regime(&self) -> bool {
+        let Some(cc) = self.options.overview.consolidated_carousel else {
+            return false;
+        };
+        self.overview_open && self.overview_zoom() <= cc.activation_zoom
+    }
+
+    #[cfg(test)]
+    fn set_overview_zoom_for_test(&mut self, target: f64) {
+        if let Some(monitor) = self.active_monitor() {
+            monitor.set_zoom_target_no_anim(target);
+        }
     }
 
     #[cfg(test)]
