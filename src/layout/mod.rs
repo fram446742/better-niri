@@ -416,6 +416,12 @@ pub struct Layout<W: LayoutElement> {
     grid_gesture: Option<OverviewGesture>,
     /// Which output the consolidated carousel is centered on. Meaningful only
     /// while in the carousel regime; defaults to the active monitor.
+    /// Which output the consolidated carousel is centered on. Initialized to 0;
+    /// Phase 2 sets it to the centered output when entering the carousel regime.
+    /// Meaningful only while in the carousel regime.
+    ///
+    /// Not yet read anywhere; consumed by carousel rendering in a follow-up task.
+    #[allow(dead_code)]
     carousel_centered_output_idx: usize,
     /// Configurable properties of the layout.
     options: Rc<Options>,
