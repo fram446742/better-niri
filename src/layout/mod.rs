@@ -7393,9 +7393,8 @@ impl<W: LayoutElement> Layout<W> {
         // only meaningful while the carousel is open; leaving it rotated would keep painting a
         // remote output's lens over the host.
         if !self.overview_open {
-            let default_zoom = self.options.overview.zoom;
             for monitor in self.monitors_mut() {
-                monitor.reset_overview_zoom(default_zoom);
+                monitor.reset_overview_zoom();
             }
             self.reset_carousel_center();
 
