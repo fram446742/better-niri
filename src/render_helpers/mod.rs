@@ -44,6 +44,7 @@ pub mod liquid_glass;
 pub mod memory;
 pub mod offscreen;
 pub mod overview_rescale;
+pub mod panel;
 pub mod primary_gpu_texture;
 pub mod render_elements;
 pub mod renderer;
