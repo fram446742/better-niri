@@ -3054,6 +3054,9 @@ impl State {
                 }
             }
             Action::OverviewZoomCycle(reverse) => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
                 let config = self.niri.config.borrow();
                 let presets = match &config.overview.zoom_presets {
                     Some(p) if !p.is_empty() => p.clone(),
@@ -3078,6 +3081,10 @@ impl State {
                 self.niri.queue_redraw_all();
             }
             Action::OverviewZoomIn => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
+
                 if !self.niri.layout.is_overview_open() {
                     return;
                 }
@@ -3117,6 +3124,10 @@ impl State {
                 self.niri.queue_redraw_all();
             }
             Action::OverviewZoomOut => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
+
                 let config = self.niri.config.borrow();
                 let presets = match &config.overview.zoom_presets {
                     Some(p) if !p.is_empty() => p.clone(),
