@@ -439,7 +439,8 @@ impl CompositorHandler for State {
                         self.niri.queue_redraw(&output);
                         self.niri.queue_redraw_mru_output();
                         self.niri.queue_carousel_host_redraw_for_sibling(&output);
-                    }                }
+                    }
+                }
                 return;
             }
 
@@ -466,8 +467,9 @@ impl CompositorHandler for State {
                 if !skip_redraw {
                     self.niri.queue_redraw(&output);
                     self.niri.queue_redraw_mru_output();
-                        self.niri.queue_carousel_host_redraw_for_sibling(&output);
-                    }            }
+                    self.niri.queue_carousel_host_redraw_for_sibling(&output);
+                }
+            }
             return;
         }
 

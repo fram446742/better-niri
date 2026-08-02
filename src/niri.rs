@@ -8684,7 +8684,12 @@ impl Niri {
         // deferred redraw. Leaving the flag SET on `Skipped` means it's picked up by this same
         // check the next time this output actually renders.
         if res != RenderResult::Skipped
-            && self.output_state.get(output).unwrap().panel_redraw_pending.take()
+            && self
+                .output_state
+                .get(output)
+                .unwrap()
+                .panel_redraw_pending
+                .take()
         {
             self.queue_redraw(output);
         }
