@@ -189,7 +189,6 @@ use crate::render_helpers::blend::{
     set_sdr_capture_blend, BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE,
 };
 use crate::render_helpers::blur::BlurOptions;
-use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
@@ -700,13 +699,6 @@ enum ThrottleAction {
     Arm(Duration),
 }
 
-/// Spike (NIRI_PANEL_SPIKE=1): gates the perspective panel experiment. Removed in the carousel
-/// redesign Gate B.
-fn panel_spike_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("NIRI_PANEL_SPIKE").is_some_and(|v| v == "1"))
-}
-
 thread_local! {
     /// Set for the duration of `Niri::render_inner`'s body. `update_panel_sources` asserts this
     /// is *not* set at entry: it takes `layer_map_for_output()` locks for panel content outputs,
@@ -761,19 +753,19 @@ impl Drop for InRenderInnerGuard {
 /// Two-frame trace (buffers A/B, `flip` = scratch):
 ///
 /// * **Static frame** (`flip` = A, `elem` = Some(B-texture)): render into A diffs element states
-///   against A's tracker → no damage → the fresh `OffscreenRenderElement` (holding a clone of
-///   A's texture) is dropped immediately; `elem`, `generation` and `flip` are untouched. The
-///   published texture identity is therefore stable across static frames, so a host-side
-///   [`PanelRenderElement::update`] compare on `(source id, generation)` early-returns keeping
-///   its old clone — which is exactly the still-published B texture, not a stale one. A remains
-///   unique for the next render. Repeat indefinitely: zero publishes, zero host damage.
+///   against A's tracker → no damage → the fresh `OffscreenRenderElement` (holding a clone of A's
+///   texture) is dropped immediately; `elem`, `generation` and `flip` are untouched. The published
+///   texture identity is therefore stable across static frames, so a host-side
+///   [`PanelRenderElement::update`] compare on `(source id, generation)` early-returns keeping its
+///   old clone — which is exactly the still-published B texture, not a stale one. A remains unique
+///   for the next render. Repeat indefinitely: zero publishes, zero host damage.
 /// * **Damaged frame** (`flip` = A, `elem` = Some(B-texture)): render into A produces damage
 ///   (incremental, since A stayed unique) → publish `elem` = Some(A-texture), `generation` += 1,
-///   `flip` → B; the old B clone held here drops. The next render targets B, whose tracker last
-///   saw states from one publish earlier, so it produces catch-up damage and publishes again
-///   (one redundant publish per content change; the render after that targets the now up-to-date
-///   buffer and settles into the static case). During continuous animation this degenerates to
-///   the plain alternate-every-frame ping-pong, which is optimal anyway.
+///   `flip` → B; the old B clone held here drops. The next render targets B, whose tracker last saw
+///   states from one publish earlier, so it produces catch-up damage and publishes again (one
+///   redundant publish per content change; the render after that targets the now up-to-date buffer
+///   and settles into the static case). During continuous animation this degenerates to the plain
+///   alternate-every-frame ping-pong, which is optimal anyway.
 ///
 /// A host's retained [`PanelRenderElement`] may still hold a clone of the previously published
 /// texture until the host next redraws and `update()` swaps it (params differ via `generation`).
@@ -814,6 +806,17 @@ impl Default for PanelSource {
             // bumped to 1 before the first `redraw_queued_outputs` cycle even begins iterating.
             frame: 0,
         }
+    }
+}
+
+impl PanelSource {
+    /// Resets to the fresh (never-rendered) state, dropping the retained published element (and
+    /// thus releasing its texture clone) so an output that stopped participating in the carousel
+    /// ring does not keep GPU memory pinned. Callers must also clear the backing
+    /// `OutputState::panel_offscreen` buffers (see `OffscreenBuffer::clear`) — this only resets
+    /// the published-element side of the pair.
+    pub fn clear(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -893,6 +896,15 @@ pub struct OutputState {
     /// keyed by ring index. Entries are dropped when the ring shrinks. Built from `panel_source`
     /// content (this output's own, or a sibling's) each frame; wired up in Gate B Task 6.
     pub panel_elems: RefCell<HashMap<usize, PanelRenderElement>>,
+    /// Set (only ever from `update_panel_sources`, while this output is the active carousel HOST)
+    /// when a panel content source published fresh pixels this render. Consumed in `redraw()`,
+    /// right after `backend.render` returns and `&mut self` is available again, to queue another
+    /// redraw so `panel_elems` picks up the new generation at content cadence rather than waiting
+    /// for this host's next unrelated redraw. `update_panel_sources` runs under `&self` mid-render
+    /// (see `IN_RENDER_INNER`), so it cannot call `Niri::queue_redraw` (`&mut self`) directly —
+    /// this flag plus deferred consumption is the mirror of the `shader_throttle_timer` deferred
+    /// re-borrow pattern used just below in `redraw()`.
+    pub panel_redraw_pending: Cell<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -4888,6 +4900,7 @@ impl Niri {
             panel_source: RefCell::new(PanelSource::default()),
             panel_offscreen: [OffscreenBuffer::default(), OffscreenBuffer::default()],
             panel_elems: RefCell::new(HashMap::new()),
+            panel_redraw_pending: Cell::new(false),
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -7084,6 +7097,32 @@ impl Niri {
         elements
     }
 
+    /// Whether Task 6's cover-flow panel stack needs to draw anything this frame: the carousel is
+    /// configured and open with reveal > 0, or the rotation hasn't settled back on the host. When
+    /// false, the pre-carousel overview path draws with no prepass and no panel elements. See the
+    /// drawing rule in the Gate B Task 6 brief.
+    fn carousel_panels_needed(&self) -> bool {
+        let reveal = self.layout.carousel_reveal();
+        let rotation = self.layout.carousel_rotation();
+        let settled_on_host = rotation == rotation.round() && rotation.round() == 0.;
+        !(reveal == 0. && settled_on_host)
+    }
+
+    /// Whether `output`'s own live workspace strip must stay suppressed because it is drawn (or
+    /// will be, once settled) as a panel in the cover-flow stack instead: true while rotating, or
+    /// once settled on some OTHER (non-host) ring position. False when panels aren't needed at
+    /// all, or once settled back on the host itself (reveal > 0 but rotation == 0 and not
+    /// animating) — in that case the host strip draws live, matching the drawing rule's "skip
+    /// d == 0 when settled_on_host" panel-skip.
+    fn carousel_host_strip_suppressed(&self, output: &Output) -> bool {
+        if self.layout.active_output() != Some(output) || !self.carousel_panels_needed() {
+            return false;
+        }
+        let rotation = self.layout.carousel_rotation();
+        let settled_on_host = rotation == rotation.round() && rotation.round() == 0.;
+        !settled_on_host || self.layout.carousel_rotating()
+    }
+
     #[cfg(feature = "xdp-gnome-screencast")]
     fn refresh_screen_cast_picker_display_previews(
         &self,
@@ -7240,11 +7279,38 @@ impl Niri {
                 ctx.renderer.as_gles_renderer(),
                 output,
             );
-        if panel_spike_enabled() {
-            self.update_panel_sources(&mut ctx.as_gles(), output, self.panel_frame.get());
         }
 
-        self.fill_xray_elements(ctx.as_gles(), output);
+        // Single-host gating: only the active output's own render ever refreshes panel sources
+        // or reconciles ring membership. `update_panel_sources` bakes every source at THIS host's
+        // `fill_zoom`, so calling it from a non-active output's render would fight over the same
+        // sources' baked zoom with the real active host (the multi-host zoom-contamination
+        // finding from the Task 5 review). Non-active-output renders (e.g. an isolated output, or
+        // a screencopy of a non-focused monitor) touch no panel state at all; a stale ring member
+        // is reconciled the next time the active host itself redraws.
+        if self.layout.active_output() == Some(output) {
+            if self.carousel_panels_needed() {
+                self.update_panel_sources(&mut ctx.as_gles(), output, self.panel_frame.get());
+                let ring: Vec<Output> = self
+                    .layout
+                    .carousel_outputs()
+                    .into_iter()
+                    .map(|m| m.output().clone())
+                    .collect();
+                self.clear_stale_panel_sources(&ring);
+            } else {
+                // The carousel isn't active on this host at all: nothing should still be
+                // publishing panel content.
+                self.clear_stale_panel_sources(&[]);
+            }
+        }
+
+        // Skip the xray background re-render while the host's live workspace strip is
+        // suppressed: xray elements are only consumed by that strip's per-workspace layer-shell
+        // rendering in `render_inner`, which doesn't run in that case either.
+        if !self.carousel_host_strip_suppressed(output) {
+            self.fill_xray_elements(ctx.as_gles(), output);
+        }
 
         // Reborrow to shorten lifetime to be able to put in xray.
         let mut ctx = ctx.r();
@@ -7763,51 +7829,6 @@ impl Niri {
                 .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
         }
 
-        // Spike (NIRI_PANEL_SPIKE=1): draw the animated tilted panel showing this output's own
-        // overview, sourced from the damage-gated `PanelSource` populated in `Niri::render`
-        // (before `render_inner` was entered — see `update_panel_sources`). Task 6 replaces this
-        // whole block with the real carousel wiring through `panel_elems`. This borrow is scoped
-        // to just the texture/commit read below; it is not held across the `push()` call.
-        if panel_spike_enabled() {
-            let demo = {
-                let source = state.panel_source.borrow();
-                let generation = source.generation;
-                source.elem.as_ref().map(|elem| {
-                    (
-                        elem.texture().clone(),
-                        elem.id().clone(),
-                        generation,
-                        elem.context_id(),
-                    )
-                })
-            };
-            if let Some((texture, source_id, generation, context_id)) = demo {
-                let view = output_size(output);
-                // Oscillating yaw so panel motion is transform-only: content
-                // unchanged => offscreen must NOT re-render while it sweeps.
-                let yaw = (ctx.shader_time * 0.5).sin() as f64 * 0.9;
-                let corners = crate::render_helpers::panel_quad::tilted_panel_corners(
-                    (view.w / 2., view.h / 2.),
-                    (view.w * 0.6, view.h * 0.6),
-                    yaw,
-                    view.w * 1.5,
-                );
-                let scale = output.current_scale().fractional_scale();
-                if let Some(elem) = PanelRenderElement::new(
-                    corners,
-                    texture,
-                    source_id,
-                    generation,
-                    context_id,
-                    0.85,
-                    scale,
-                    1.,
-                ) {
-                    push(elem.into());
-                }
-            }
-        }
-
         // Don't draw the focus ring on the workspaces while interactively moving above those
         // workspaces, since the interactively-moved window already has a focus ring.
         let focus_ring = !self.layout.interactive_move_is_moving_above_output(output);
@@ -7874,15 +7895,10 @@ impl Niri {
             }};
         }
 
-        // Whether this output is currently rendering the consolidated carousel: while
-        // active, the host's own full overview is suppressed here and instead drawn as
-        // the centered card in the carousel block below.
-        let carousel_active =
-            self.layout.in_carousel_regime() && self.layout.active_output() == Some(output);
-        // Lens: the centered output's full overview fills the host; the host's own overview and
-        // the carousel cards are suppressed here.
-        let in_carousel_lens =
-            self.layout.in_carousel_lens() && self.layout.active_output() == Some(output);
+        // Whether this output's own live workspace strip must stay off because it is drawn (or
+        // will be, once settled) as a panel in the cover-flow stack below instead. See
+        // `carousel_host_strip_suppressed`'s doc for the exact rule.
+        let host_strip_suppressed = self.carousel_host_strip_suppressed(output);
 
         // The overlay layer elements go next.
         push_popups_from_layer!(Layer::Overlay);
@@ -7928,12 +7944,11 @@ impl Niri {
                 }};
             }
 
-            // Suppressed while the carousel is active on this output: the host's own
-            // workspace strip (and its per-workspace background/bottom layer-shell
-            // elements) is instead drawn as the centered card in the carousel block
-            // below. Overlay/top popups above and the backdrop/cursor elsewhere are
-            // unaffected.
-            if !carousel_active && !in_carousel_lens {
+            // Suppressed while `host_strip_suppressed`: this output's own workspace strip
+            // (and its per-workspace background/bottom layer-shell elements) is instead
+            // drawn as a panel in the cover-flow stack below. Overlay/top popups above and
+            // the backdrop/cursor elsewhere are unaffected.
+            if !host_strip_suppressed {
                 for (ws, geo) in mon.workspaces_with_render_geo() {
                     let ns = Some(ws.id().get() as usize);
                     let xray_pos = XrayPos::new(geo.loc, zoom);
@@ -7962,106 +7977,114 @@ impl Niri {
             }
         }
 
-        // ===== Consolidated carousel: rotating carousel (centered + tucks) =====
-        if carousel_active {
-            let host_scale = output.current_scale().fractional_scale();
+        // ===== Consolidated carousel: cover-flow panel stack =====
+        //
+        // The drawing rule (Gate B Task 6 brief): for every ring entry (idx, ring_pos), let
+        // d = ring_pos - rotation. d == 0 while settled_on_host is the live center, already
+        // drawn above by the (unsuppressed) host workspace strip, so it's skipped here. Every
+        // other visible d gets a panel: geometry from `carousel::panel_placement`, content from
+        // that ring member's own `PanelSource` (baked by `update_panel_sources`, single-host
+        // gated in `Niri::render`). This one rule also produces the settled-remote "lens" case
+        // for free: rotation snaps to the target's ring position, so d == 0 there instead, and
+        // it fills the center slot at CENTER_FRACTION while every other ring member (including
+        // the host itself) recedes to the side as an ordinary panel.
+        if self.carousel_panels_needed() {
+            let view = mon.view_size();
+            let scale = output.current_scale().fractional_scale();
+            let rotation = self.layout.carousel_rotation();
+            let reveal = self.layout.carousel_reveal();
+            let settled_on_host = rotation == rotation.round() && rotation.round() == 0.;
             let outputs = self.layout.carousel_outputs();
-            let centered = self
+
+            let mut visible: Vec<(usize, crate::layout::carousel::PanelPlacement)> = self
                 .layout
-                .carousel_centered_output_idx()
-                .min(outputs.len().saturating_sub(1));
-            let placements = crate::layout::carousel::carousel_centered_layout(
-                mon.view_size(),
-                outputs.len(),
-                centered,
-            );
-            // niri renders EARLIER-pushed elements IN FRONT, so push the centered card's
-            // group FIRST (front), then the tucks in index order.
-            let mut order = vec![centered];
-            order.extend((0..outputs.len()).filter(|&j| j != centered));
-            for &i in &order {
-                let m = outputs[i];
-                let place = placements[i];
-                // fade strips FIRST (in front of this card), then the card -- per 2a fade fix.
-                let backdrop = self.config.borrow().overview.backdrop_color;
-                let opaque = {
-                    let mut c = backdrop;
-                    c.a = 1.;
-                    c
+                .carousel_ring()
+                .into_iter()
+                .filter_map(|(idx, ring_pos)| {
+                    let d = ring_pos - rotation;
+                    if d == 0. && settled_on_host {
+                        return None;
+                    }
+                    let placement =
+                        crate::layout::carousel::panel_placement((view.w, view.h), d, reveal)?;
+                    Some((idx, placement))
+                })
+                .collect();
+
+            // Nearer panels first: z is highest (100.0) at the center and decreases with depth,
+            // so sorting descending by z and pushing in that order puts nearer panels on top
+            // (niri renders earlier-pushed elements in front).
+            visible.sort_by(|a, b| b.1.z.partial_cmp(&a.1.z).unwrap());
+
+            let mut panel_elems = state.panel_elems.borrow_mut();
+            for (idx, placement) in &visible {
+                let Some(m) = outputs.get(*idx) else {
+                    continue;
                 };
-                let transparent = {
-                    let mut c = backdrop;
-                    c.a = 0.;
-                    c
+                let Some(source_state) = self.output_state.get(m.output()) else {
+                    continue;
                 };
-                let fade_w = place.card_rect.size.w * 0.10;
-                let left = Rectangle::new(
-                    place.card_rect.loc,
-                    Size::from((fade_w, place.card_rect.size.h)),
+                let source = source_state.panel_source.borrow();
+                let Some(source_elem) = source.elem.as_ref() else {
+                    continue;
+                };
+                let texture = source_elem.texture().clone();
+                let source_id = source_elem.id().clone();
+                let context_id = source_elem.context_id();
+                let generation = source.generation;
+                drop(source);
+
+                let corners = crate::render_helpers::panel_quad::tilted_panel_corners(
+                    placement.center,
+                    placement.size,
+                    placement.yaw,
+                    view.w * crate::layout::carousel::FOCAL_FACTOR,
                 );
-                let right = Rectangle::new(
-                    Point::from((
-                        place.card_rect.loc.x + place.card_rect.size.w - fade_w,
-                        place.card_rect.loc.y,
-                    )),
-                    Size::from((fade_w, place.card_rect.size.h)),
-                );
-                for (rect, from, to) in [(left, opaque, transparent), (right, transparent, opaque)]
-                {
-                    let strip = BorderRenderElement::new(
-                        rect.size,
-                        Rectangle::from_size(rect.size),
-                        GradientInterpolation::default(),
-                        from,
-                        to,
-                        0.,
-                        Rectangle::from_size(rect.size),
-                        f32::MAX,
-                        CornerRadius::default(),
-                        host_scale as f32,
-                        1.0,
-                    )
-                    .with_location(rect.loc);
-                    push(OutputRenderElements::CarouselFade(strip));
+
+                match panel_elems.entry(*idx) {
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        o.get_mut().update(
+                            corners,
+                            texture,
+                            source_id,
+                            generation,
+                            context_id,
+                            placement.dim,
+                            scale,
+                            1.0,
+                        );
+                    }
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        if let Some(elem) = PanelRenderElement::new(
+                            corners,
+                            texture,
+                            source_id,
+                            generation,
+                            context_id,
+                            placement.dim,
+                            scale,
+                            1.0,
+                        ) {
+                            v.insert(elem);
+                        }
+                    }
                 }
-                let sibling_scale = m.scale().fractional_scale();
-                let effective_zoom = place.card_scale * (host_scale / sibling_scale);
-                m.render_active_workspace_at_zoom(ctx.r(), 1.0, focus_ring, &mut |elem| {
-                    if let Some(wrapped) =
-                        scale_relocate_crop(elem, output_scale, effective_zoom, place.card_rect)
-                    {
-                        push(OutputRenderElements::CarouselCard(wrapped));
-                    }
-                });
+            }
+
+            // Ring-shrink drop: entries whose ring index no longer has a placement this frame
+            // (the ring got smaller, or that member scrolled beyond MAX_VISIBLE_DEPTH) don't
+            // belong in the retained map anymore.
+            let visible_idx: std::collections::HashSet<usize> =
+                visible.iter().map(|(idx, _)| *idx).collect();
+            panel_elems.retain(|idx, _| visible_idx.contains(idx));
+
+            for (idx, _) in &visible {
+                if let Some(elem) = panel_elems.get(idx) {
+                    push(OutputRenderElements::Panel(elem.clone()));
+                }
             }
         }
-        // ===== Consolidated carousel: LENS — centered output's full overview fills the host =====
-        if in_carousel_lens {
-            let outputs = self.layout.carousel_outputs();
-            if !outputs.is_empty() {
-                let centered = self
-                    .layout
-                    .carousel_centered_output_idx()
-                    .min(outputs.len() - 1);
-                let target = outputs[centered];
-                let host_view = mon.view_size();
-                let target_view = target.view_size();
-                let host_scale = output.current_scale().fractional_scale();
-                let target_scale = target.scale().fractional_scale();
-                // Fit the target's overview into the host view (letterbox: min of the axis
-                // ratios), corrected for the host/target output-scale difference.
-                let fit = (host_view.w / target_view.w).min(host_view.h / target_view.h);
-                let fill_zoom = fit * (host_scale / target_scale);
-                let host_rect = Rectangle::new(Point::from((0., 0.)), host_view);
-                target.render_overview_at_zoom(ctx.r(), fill_zoom, focus_ring, &mut |elem| {
-                    // The overview bake already applied fill_zoom, so wrap with zoom=1.0.
-                    if let Some(wrapped) = scale_relocate_crop(elem, output_scale, 1.0, host_rect) {
-                        push(OutputRenderElements::CarouselCard(wrapped));
-                    }
-                });
-            }
-        }
-        // ===== END lens =====
+        // ===== END panel stack =====
 
         // ===== END carousel =====
 
@@ -8141,11 +8164,18 @@ impl Niri {
     /// single monitor was both host and (self-)target (see project memory
     /// `carousel-lens-layer-map-deadlock`).
     ///
-    /// Content recipe (windows + Background/Bottom layer-shell + workspace backgrounds, at
-    /// `fill_zoom`) is the same one the LENS render block in `render_inner` uses, minus the
-    /// host-centering relocate: elements are rendered at the content output's own origin, not
-    /// shifted onto the host's view. `render_inner`'s lens/card blocks are untouched by this
-    /// change (Gate B Task 6 deletes them once `panel_elems` is wired into the real draw path).
+    /// Content recipe (windows + Background/Bottom layer-shell + workspace backgrounds) is
+    /// rendered at `fill_zoom`, computed against `host`'s own view — the panel stack's geometry
+    /// in `render_inner` bakes every ring member's content at ITS host's `fill_zoom`. Elements are
+    /// rendered at the content output's own origin, not shifted onto the host's view.
+    ///
+    /// Single-host gating: callers must only invoke this for the CURRENT active output (see
+    /// `Niri::render`'s call site). Every source's pixels are baked against `host`'s `fill_zoom`;
+    /// calling this for more than one host in the same cycle would have two hosts race to publish
+    /// the same sibling sources at two different zooms, and whichever host rendered last would
+    /// silently win for every host's panel stack (the multi-host zoom-contamination finding from
+    /// the Task 5 review). There is deliberately no re-entrancy guard for this beyond the
+    /// call-site gate: the fix belongs at the one call site, not scattered defensive checks here.
     fn update_panel_sources(&self, ctx: &mut RenderCtx<GlesRenderer>, host: &Output, frame: u64) {
         let _span = tracy_client::span!("Niri::update_panel_sources");
         debug_assert!(
@@ -8159,6 +8189,7 @@ impl Niri {
         let host_view = host_mon.view_size();
         let host_scale = host.current_scale().fractional_scale();
         let output_scale = Scale::from(host_scale);
+        let host_state = self.output_state.get(host).unwrap();
 
         for m in self.layout.carousel_outputs() {
             let target = m.output().clone();
@@ -8251,6 +8282,13 @@ impl Niri {
                         source.elem = Some(elem);
                         source.flip = !source.flip;
                         source.generation = source.generation.wrapping_add(1);
+                        // Propagate at content cadence: some source (possibly a sibling's, not
+                        // `host`'s own) just published fresh pixels, so queue another redraw of
+                        // `host` to pick up the new generation promptly instead of waiting for
+                        // `host`'s next unrelated redraw. Deferred via a flag — see the doc on
+                        // `OutputState::panel_redraw_pending` for why this can't call
+                        // `queue_redraw` directly from here.
+                        host_state.panel_redraw_pending.set(true);
                     }
                 }
                 Err(err) => {
@@ -8259,6 +8297,28 @@ impl Niri {
                     source.elem = None;
                     warn!("error rendering panel source for output: {err:?}");
                 }
+            }
+        }
+    }
+
+    /// Clears `PanelSource` and drops the offscreen buffers for every output NOT in `keep` — the
+    /// current carousel ring (or, when the carousel isn't active at all, an empty slice). Only
+    /// the active host's own `Niri::render` call runs this (see the single-host gating on
+    /// `update_panel_sources`), so this is the single authoritative place ring membership is
+    /// reconciled; an output that stops participating gets its content dropped the next time the
+    /// active host redraws.
+    fn clear_stale_panel_sources(&self, keep: &[Output]) {
+        for (output, state) in &self.output_state {
+            if keep.contains(output) {
+                continue;
+            }
+            let mut source = state.panel_source.borrow_mut();
+            if source.elem.is_some() {
+                source.clear();
+            }
+            drop(source);
+            for buf in &state.panel_offscreen {
+                buf.clear();
             }
         }
     }
@@ -8552,6 +8612,20 @@ impl Niri {
 
             // Render.
             res = backend.render(self, output, target_presentation_time);
+        }
+
+        // Consume `panel_redraw_pending` here, now that `&mut self` is available again: it was
+        // set (if at all) via interior mutability from inside the just-finished render, by
+        // `update_panel_sources` mid-`Niri::render`, which cannot call `queue_redraw` itself. See
+        // `OutputState::panel_redraw_pending`'s doc.
+        if self
+            .output_state
+            .get(output)
+            .unwrap()
+            .panel_redraw_pending
+            .take()
+        {
+            self.queue_redraw(output);
         }
 
         let is_locked = self.is_locked();
@@ -11908,12 +11982,7 @@ niri_render_elements! {
         Magnified = RescaleRenderElement<Box<OutputRenderElements<R>>>,
         GlobalShader = GlobalShaderElement,
         ScopedShader = ScopedShaderElement,
-        // Consolidated carousel: a sibling monitor composited as a tucked card.
-        CarouselCard = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
-            MonitorRenderElement<R>
-        >>>,
-        // Consolidated carousel: gradient strip fading a card's horizontal edge.
-        CarouselFade = BorderRenderElement,
+        // Consolidated carousel: perspective-tilted cover-flow panel.
         Panel = PanelRenderElement,
     }
 }
