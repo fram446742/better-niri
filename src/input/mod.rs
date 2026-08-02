@@ -1701,8 +1701,11 @@ impl State {
                 }
             }
             Action::FocusColumnLeft => {
-                if self.niri.layout.in_carousel_regime() {
-                    self.niri.layout.slide_carousel(-1);
+                if self.niri.layout.is_overview_open()
+                    && self.niri.layout.carousel_configured()
+                    && self.niri.layout.carousel_ring().len() > 1
+                {
+                    self.niri.layout.carousel_request_rotate(-1);
                     self.niri.queue_redraw_all();
                     return;
                 }
@@ -1726,8 +1729,11 @@ impl State {
                 }
             }
             Action::FocusColumnRight => {
-                if self.niri.layout.in_carousel_regime() {
-                    self.niri.layout.slide_carousel(1);
+                if self.niri.layout.is_overview_open()
+                    && self.niri.layout.carousel_configured()
+                    && self.niri.layout.carousel_ring().len() > 1
+                {
+                    self.niri.layout.carousel_request_rotate(1);
                     self.niri.queue_redraw_all();
                     return;
                 }
@@ -4565,14 +4571,17 @@ impl State {
                         });
                         (bind_up, bind_down)
                     } else if should_handle_in_overview && modifiers == Modifiers::SHIFT {
-                        if self.niri.layout.in_carousel_regime() {
+                        if self.niri.layout.is_overview_open()
+                            && self.niri.layout.carousel_configured()
+                            && self.niri.layout.carousel_ring().len() > 1
+                        {
                             if ticks > 0 {
                                 for _ in 0..ticks {
-                                    self.niri.layout.slide_carousel(1);
+                                    self.niri.layout.carousel_request_rotate(1);
                                 }
                             } else {
                                 for _ in ticks..0 {
-                                    self.niri.layout.slide_carousel(-1);
+                                    self.niri.layout.carousel_request_rotate(-1);
                                 }
                             }
                             self.niri.queue_redraw_all();
