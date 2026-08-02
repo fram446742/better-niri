@@ -3616,7 +3616,7 @@ impl<W: LayoutElement> Layout<W> {
             return false;
         };
         let zoom = mon.overview_zoom();
-        self.overview_open && zoom <= cc.activation_zoom && zoom > cc.expand_zoom
+        self.overview_open && zoom <= cc.reveal_zoom && zoom > cc.assembled_zoom
     }
 
     /// Whether the carousel has zoomed past the carousel band into the lens: the centered
@@ -3628,7 +3628,7 @@ impl<W: LayoutElement> Layout<W> {
         let Some(mon) = self.active_monitor_ref() else {
             return false;
         };
-        self.overview_open && mon.overview_zoom() <= cc.expand_zoom
+        self.overview_open && mon.overview_zoom() <= cc.assembled_zoom
     }
 
     #[cfg(test)]
