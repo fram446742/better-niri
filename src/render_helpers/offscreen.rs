@@ -238,6 +238,12 @@ impl OffscreenBuffer {
 
         Ok((elem, res.sync, data))
     }
+
+    /// Whether this buffer currently holds no cached texture, i.e. either never rendered or
+    /// already [`Self::clear`]-ed.
+    pub fn is_empty(&self) -> bool {
+        self.inner.borrow().is_none()
+    }
 }
 
 impl Default for OffscreenBuffer {
