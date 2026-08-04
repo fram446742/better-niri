@@ -2965,15 +2965,31 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     /// Render this monitor's full overview (all workspaces stacked) at a fixed `zoom`,
-    /// ignoring its inherited overview zoom. Elements are positioned in this monitor's own view
-    /// space; the caller relocates/crops them onto the host output. Used by the consolidated
-    /// carousel lens.
+    /// ignoring its inherited overview zoom. Elements are positioned in this monitor's
+    /// own view space; the caller relocates/crops them onto the host output.
+    ///
+    /// Every pushed element is additionally cropped to its workspace's STRIP: the workspace
+    /// render-geo box vertically, widened to the full view box horizontally (side-scrolled
+    /// columns are visible in the live overview, so they must be in the bake too). This is the
+    /// sole caller-visible difference from `render_workspaces`, and is safe only because this
+    /// method has exactly one caller (`Niri::update_panel_sources`, the carousel panel prepass):
+    /// the prepass pins the baked texture's extent to this monitor's view box via a backdrop
+    /// element (that box is what `carousel_focus_jump`'s uv mapping and the panel shader's
+    /// sampling both assume), and the strip crop keeps any remaining overflow from inflating
+    /// the `OffscreenBuffer`'s encompassing-extent sizing beyond it.
+    ///
+    /// This crop uses `self.scale` (the TARGET monitor's own scale, this method's `self`) to bake
+    /// `geo_phys`'s physical crop bounds below. The prepass's background/layer-shell elements
+    /// (baked separately, in `Niri::update_panel_sources` via `scale_relocate_crop`) must bake
+    /// their crop bounds with that SAME target scale, not the host's — otherwise, on mixed-DPI
+    /// host/target pairs, the two content types' physical crop rects disagree and the extent
+    /// equality claim above breaks for the background/layer contribution.
     pub fn render_overview_at_zoom<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         zoom: f64,
         focus_ring: bool,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
+        push: &mut dyn FnMut(CropRenderElement<MonitorRenderElement<R>>),
     ) {
         let _span = tracy_client::span!("Monitor::render_overview_at_zoom");
 
@@ -2984,10 +3000,11 @@ impl<W: LayoutElement> Monitor<W> {
         // Crop the elements to prevent them overflowing, currently visible during a workspace
         // switch.
         //
-        // HACK: crop to infinite bounds at least horizontally where we know there's no workspace
-        // joining or monitor bounds, otherwise it will cut pixel shaders and mess up the
-        // coordinate space. There's also a damage tracking bug which causes glitched rendering
-        // for maximized GTK windows.
+        // HACK: crop to infinite bounds at least horizontally where we
+        // know there's no workspace joining or monitor bounds, otherwise
+        // it will cut pixel shaders and mess up the coordinate space.
+        // There's also a damage tracking bug which causes glitched
+        // rendering for maximized GTK windows.
         //
         // FIXME: use proper bounds after fixing the Crop element.
         let crop_bounds = if self.workspace_switch.is_some() || self.overview_progress.is_some() {
@@ -3010,14 +3027,34 @@ impl<W: LayoutElement> Monitor<W> {
             let elem = OverviewRescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
             RelocateRenderElement::from_element(
                 elem,
-                // The offset from workspaces_with_render_geo() is in logical space; convert it
-                // to physical so it lines up with the rest of the render path.
+                // The offset we get from workspaces_with_render_geo() is already
+                // rounded to physical pixels, but it's in the logical coordinate
+                // space, so we need to convert it to physical.
                 geo.loc.to_physical_precise_round(scale),
                 Relocate::Relative,
             )
         };
 
+        let view_phys = Rectangle::from_size(self.view_size).to_physical_precise_round(scale);
+
         for (ws, geo) in self.workspaces_with_render_geo_at_zoom(zoom) {
+            // This workspace's own render-geo box, in the same physical coordinate space the
+            // element lands in after `scale_relocate` below (mirrors `scale_relocate_crop` in
+            // niri.rs, which crops layer-shell/background elements the same way).
+            let geo_phys = geo.to_physical_precise_round(scale);
+
+            // Horizontally the crop widens to the full view box: the live overview shows
+            // columns scrolled beyond the workspace box (`crop_bounds` above is horizontally
+            // infinite), so the panel bake must too, or side-scrolled columns vanish from the
+            // panels (2026-08-04 hardware finding, round 2). The offscreen extent stays pinned
+            // to the view box by the prepass's backdrop element, so this can't inflate it.
+            // Vertically the crop stays the workspace strip so stacked workspaces can't bleed
+            // into each other.
+            let strip_phys = Rectangle::new(
+                Point::from((view_phys.loc.x, geo_phys.loc.y)),
+                Size::from((view_phys.size.w, geo_phys.size.h)),
+            );
+
             // Macro instead of closure because ws and insert hint have different elem types.
             macro_rules! push {
                 () => {{
@@ -3025,7 +3062,12 @@ impl<W: LayoutElement> Monitor<W> {
                         let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
                         if let Some(elem) = elem {
                             let elem = MonitorInnerRenderElement::from(elem);
-                            push(scale_relocate(geo, elem));
+                            let elem = scale_relocate(geo, elem);
+                            if let Some(elem) =
+                                CropRenderElement::from_element(elem, scale, strip_phys)
+                            {
+                                push(elem);
+                            }
                         }
                     }
                 }};

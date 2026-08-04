@@ -8266,7 +8266,7 @@ impl Niri {
 
             let mut elements: Vec<OutputRenderElements<GlesRenderer>> = Vec::new();
             m.render_overview_at_zoom(ctx.r(), fill_zoom, false, &mut |elem| {
-                elements.push(OutputRenderElements::Monitor(elem));
+                elements.push(OutputRenderElements::PanelMonitor(elem));
             });
 
             // Background layer-shell surfaces + per-workspace solid background, drawn AFTER the
@@ -12045,6 +12045,8 @@ niri_render_elements! {
 niri_render_elements! {
     OutputRenderElements<R> => {
         Monitor = MonitorRenderElement<R>,
+        // Carousel panel prepass content: the monitor's overview cropped to its workspace strip.
+        PanelMonitor = CropRenderElement<MonitorRenderElement<R>>,
         RescaledTile = RescaleRenderElement<TileRenderElement<R>>,
         LayerSurface = LayerSurfaceRenderElement<R>,
         RelocatedLayerSurface = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
