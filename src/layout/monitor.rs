@@ -2498,8 +2498,8 @@ impl<W: LayoutElement> Monitor<W> {
     /// Like [`Self::window_under`], but resolves the workspace/window hit at a caller-supplied
     /// `zoom` (via [`Self::workspaces_with_render_geo_at_zoom`]) instead of this monitor's own
     /// live `overview_zoom()`. Used for the carousel lens focus-jump, which hit-tests a *remote*
-    /// monitor's content baked at the panel prepass's `fill_zoom`, not this monitor's local
-    /// overview state.
+    /// monitor's content baked at the HOST's live overview zoom (the panel prepass's bake zoom),
+    /// not this monitor's local overview state.
     pub fn window_under_at_zoom(
         &self,
         zoom: f64,
