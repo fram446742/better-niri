@@ -2004,10 +2004,20 @@ impl<W: LayoutElement> Monitor<W> {
         self.overview_zoom_target
     }
 
+    /// Clamp a zoom target at the consolidated carousel's `assembled_zoom`. Past that the recap
+    /// is fully assembled; zooming further would only shrink the live center strip under the
+    /// frozen gallery.
+    fn clamp_zoom_target(&self, target: f64) -> f64 {
+        match self.options.overview.consolidated_carousel {
+            Some(cc) => target.max(cc.assembled_zoom),
+            None => target,
+        }
+    }
+
     /// Set zoom target without animation (for use before opening overview,
     /// where the open animation handles the visual transition).
     pub fn set_zoom_target_no_anim(&mut self, target: f64) {
-        self.overview_zoom_target = target;
+        self.overview_zoom_target = self.clamp_zoom_target(target);
         self.overview_zoom_anim = None;
     }
 
@@ -2016,8 +2026,11 @@ impl<W: LayoutElement> Monitor<W> {
         self.overview_zoom_preset_idx = idx;
     }
 
-    /// Reset zoom to config default - call when overview closes.
-    /// This is instant (no animation) since the overview is closing.
+    /// Reset overview zoom state on close: preset cycling starts fresh next
+    /// open, but the zoom TARGET is deliberately kept — the close animation
+    /// scales from it, so snapping it to the config default here made the
+    /// overview visibly jump at close start, and keeping it means the next
+    /// open resumes at the parked zoom (PR #2 / upstream niri#3194).
     pub fn reset_overview_zoom(&mut self) {
         self.overview_zoom_anim = None;
         self.overview_zoom_preset_idx = 0;
@@ -2108,6 +2121,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     /// Start or retarget a zoom animation.
     pub(super) fn animate_zoom_to(&mut self, new_target: f64, config: niri_config::Animation) {
+        let new_target = self.clamp_zoom_target(new_target);
         let current = self.overview_zoom_value();
         self.overview_zoom_target = new_target;
 

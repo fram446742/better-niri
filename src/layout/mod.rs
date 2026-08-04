@@ -7389,9 +7389,10 @@ impl<W: LayoutElement> Layout<W> {
             self.carousel_pullback = None;
         }
 
-        // Reset zoom and carousel centering when closing the overview. The centered output is
-        // only meaningful while the carousel is open; leaving it rotated would keep painting a
-        // remote output's lens over the host.
+        // Reset preset cycling when closing the overview; the zoom target is kept so the close
+        // animates from the parked zoom and the next open resumes there (see
+        // `Monitor::reset_overview_zoom`). Carousel centering resets because it is only
+        // meaningful while the carousel is open.
         if !self.overview_open {
             for monitor in self.monitors_mut() {
                 monitor.reset_overview_zoom();
