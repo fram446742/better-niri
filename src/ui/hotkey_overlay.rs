@@ -289,6 +289,7 @@ fn collect_actions(config: &Config) -> Vec<&Action> {
         &Action::ConsumeOrExpelWindowLeft,
         &Action::ConsumeOrExpelWindowRight,
         &Action::ToggleWindowFloating,
+        &Action::ToggleWindowSticky,
         &Action::SwitchFocusBetweenFloatingAndTiling,
         &Action::ToggleOverview,
         &Action::ToggleGridOverview,
@@ -524,6 +525,7 @@ fn action_name(action: &Action) -> String {
         Action::CycleWindowShader => String::from("Cycle Window Shader Preset"),
         Action::ToggleOutputShader(_) => String::from("Toggle Output Shader"),
         Action::CycleOutputShader(_) => String::from("Cycle Output Shader Preset"),
+        Action::ToggleWindowSticky => String::from("Toggle Window Sticky Across Workspaces"),
         Action::SwitchFocusBetweenFloatingAndTiling => {
             String::from("Switch Focus Between Floating and Tiling")
         }

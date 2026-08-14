@@ -2117,22 +2117,30 @@ impl State {
                 }
             }
             Action::FocusWorkspace(reference) => {
-                let Some((output, index)) = self.niri.resolve_workspace_reference(reference) else {
-                    return;
-                };
-
-                if let Some(output) = output {
-                    self.niri.layout.focus_output(&output);
-                    self.niri.layout.switch_workspace(index);
-                    if !self.maybe_warp_cursor_to_focus_centered() {
-                        self.move_cursor_to_output(&output);
+                let is_name = matches!(reference, WorkspaceReference::Name(_));
+                if let Some((mut output, index)) =
+                    self.niri.find_output_and_workspace_index(reference)
+                {
+                    if let Some(active) = self.niri.layout.active_output() {
+                        if output.as_ref() == Some(active) {
+                            output = None;
+                        }
                     }
-                } else {
-                    let config = &self.niri.config;
-                    if config.borrow().input.workspace_auto_back_and_forth {
-                        self.niri.layout.switch_workspace_auto_back_and_forth(index);
+
+                    if let Some(output) = output {
+                        self.niri.layout.focus_output(&output);
+                        self.niri.layout.switch_workspace(index, is_name);
+                        if !self.maybe_warp_cursor_to_focus_centered() {
+                            self.move_cursor_to_output(&output);
+                        }
                     } else {
-                        self.niri.layout.switch_workspace(index);
+                        let config = &self.niri.config;
+                        if config.borrow().input.workspace_auto_back_and_forth {
+                            self.niri.layout.switch_workspace_auto_back_and_forth(index);
+                        } else {
+                            self.niri.layout.switch_workspace(index, is_name);
+                        }
+                        self.maybe_warp_cursor_to_focus();
                     }
                     self.maybe_warp_cursor_to_focus();
                 }
@@ -2794,6 +2802,20 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
+            Action::ToggleWindowSticky => {
+                self.niri.layout.toggle_window_sticky(None);
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::ToggleWindowStickyById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.niri.layout.toggle_window_sticky(Some(&window));
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
             Action::MoveWindowToFloating => {
                 self.niri.layout.set_window_floating(None, true);
                 // FIXME: granular
@@ -3272,6 +3294,9 @@ impl State {
                 {
                     self.niri.test_action_count += 1;
                 }
+            }
+            Action::ToggleWorkspaceVisibility(workspace_name) => {
+                self.niri.layout.toggle_workspace_visibility(workspace_name);
             }
         }
     }

@@ -151,7 +151,8 @@ impl CompositorHandler for State {
                     // The GTK about dialog sets min/max size after the initial configure but
                     // before mapping, so we need to compute open_floating at the last possible
                     // moment, that is here.
-                    let is_floating = rules.compute_open_floating(toplevel);
+                    let is_sticky = rules.open_sticky.unwrap_or(false);
+                    let is_floating = rules.compute_open_floating(toplevel) || is_sticky;
 
                     let open_minimized = rules.open_minimized == Some(true);
 
@@ -229,14 +230,31 @@ impl CompositorHandler for State {
                     } else {
                         AddWindowTarget::Auto
                     };
-                    let output = self.niri.layout.add_window(
+
+                    // Check if the window rule has a hidden workspace it's being mapped to
+                    // If it does, we should not activate it.
+                    let target_workspace_name = mapped.rules().open_on_workspace.clone();
+                    let target_is_hidden = target_workspace_name.is_some_and(|name| {
+                        self.niri
+                            .layout
+                            .find_workspace_by_name(&name)
+                            .is_some_and(|(_, workspace)| workspace.hidden)
+                    });
+
+                    let output = self.niri.layout.add_window_with_flags(
                         mapped,
                         target,
                         width,
                         height,
                         is_full_width,
                         is_floating,
-                        activate,
+                        is_sticky,
+                        if target_is_hidden {
+                            ActivateWindow::No
+                        } else {
+                            activate
+                        },
+                        false,
                     );
                     let output = output.cloned();
 

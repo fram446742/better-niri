@@ -513,6 +513,7 @@ pub enum Action {
     ExpandColumnToAvailableWidth,
     SwitchLayout(#[knuffel(argument, str)] LayoutSwitchTarget),
     ShowHotkeyOverlay,
+    ToggleWorkspaceVisibility(#[knuffel(argument, str)] String),
     MoveWorkspaceToMonitorLeft,
     MoveWorkspaceToMonitorRight,
     MoveWorkspaceToMonitorDown,
@@ -530,6 +531,9 @@ pub enum Action {
     CycleWindowShaderById(u64),
     ToggleOutputShader(#[knuffel(argument)] Option<String>),
     CycleOutputShader(#[knuffel(argument)] Option<String>),
+    ToggleWindowSticky,
+    #[knuffel(skip)]
+    ToggleWindowStickyById(u64),
     MoveWindowToFloating,
     #[knuffel(skip)]
     MoveWindowToFloatingById(u64),
@@ -958,6 +962,10 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::CycleWindowShader { id: Some(id) } => Self::CycleWindowShaderById(id),
             niri_ipc::Action::ToggleOutputShader { output } => Self::ToggleOutputShader(output),
             niri_ipc::Action::CycleOutputShader { output } => Self::CycleOutputShader(output),
+            niri_ipc::Action::ToggleWindowSticky { id: None } => Self::ToggleWindowSticky,
+            niri_ipc::Action::ToggleWindowSticky { id: Some(id) } => {
+                Self::ToggleWindowStickyById(id)
+            }
             niri_ipc::Action::MoveWindowToFloating { id: None } => Self::MoveWindowToFloating,
             niri_ipc::Action::MoveWindowToFloating { id: Some(id) } => {
                 Self::MoveWindowToFloatingById(id)
