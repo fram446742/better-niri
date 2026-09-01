@@ -58,6 +58,7 @@ impl TestCase for Window {
             target: RenderTarget::Output,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: 0.0,
         };
         self.window
             .render_normal(ctx, location, Scale::from(1.), 1., &mut |elem| {

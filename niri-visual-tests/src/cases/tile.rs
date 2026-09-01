@@ -127,6 +127,7 @@ impl TestCase for Tile {
             target: RenderTarget::Output,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: 0.0,
         };
         let xray_pos = XrayPos::new(location, 1.);
         self.tile

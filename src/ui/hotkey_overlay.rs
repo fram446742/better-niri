@@ -520,6 +520,8 @@ fn action_name(action: &Action) -> String {
         Action::UnminimizeWindow => String::from("Unminimize Window"),
         Action::ToggleWindowMinimized => String::from("Minimize or Restore Window"),
         Action::ToggleWindowFloating => String::from("Move Window Between Floating and Tiling"),
+        Action::ToggleWindowShader => String::from("Toggle Window Shader"),
+        Action::CycleWindowShader => String::from("Cycle Window Shader Preset"),
         Action::SwitchFocusBetweenFloatingAndTiling => {
             String::from("Switch Focus Between Floating and Tiling")
         }

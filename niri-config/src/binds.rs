@@ -522,6 +522,12 @@ pub enum Action {
     ToggleWindowFloating,
     #[knuffel(skip)]
     ToggleWindowFloatingById(u64),
+    ToggleWindowShader,
+    #[knuffel(skip)]
+    ToggleWindowShaderById(u64),
+    CycleWindowShader,
+    #[knuffel(skip)]
+    CycleWindowShaderById(u64),
     MoveWindowToFloating,
     #[knuffel(skip)]
     MoveWindowToFloatingById(u64),
@@ -938,6 +944,12 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ToggleWindowFloating { id: Some(id) } => {
                 Self::ToggleWindowFloatingById(id)
             }
+            niri_ipc::Action::ToggleWindowShader { id: None } => Self::ToggleWindowShader,
+            niri_ipc::Action::ToggleWindowShader { id: Some(id) } => {
+                Self::ToggleWindowShaderById(id)
+            }
+            niri_ipc::Action::CycleWindowShader { id: None } => Self::CycleWindowShader,
+            niri_ipc::Action::CycleWindowShader { id: Some(id) } => Self::CycleWindowShaderById(id),
             niri_ipc::Action::MoveWindowToFloating { id: None } => Self::MoveWindowToFloating,
             niri_ipc::Action::MoveWindowToFloating { id: Some(id) } => {
                 Self::MoveWindowToFloatingById(id)
@@ -1519,6 +1531,33 @@ impl FromStr for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_window_shader_actions() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+S { toggle-window-shader; }
+                Mod+Shift+S { cycle-window-shader; }
+            }
+            "#,
+        )
+        .unwrap();
+        let actions: Vec<_> = config.binds.0.iter().map(|b| b.action.clone()).collect();
+        assert_eq!(
+            actions,
+            [Action::ToggleWindowShader, Action::CycleWindowShader]
+        );
+
+        assert_eq!(
+            Action::from(niri_ipc::Action::ToggleWindowShader { id: Some(5) }),
+            Action::ToggleWindowShaderById(5),
+        );
+        assert_eq!(
+            Action::from(niri_ipc::Action::CycleWindowShader { id: None }),
+            Action::CycleWindowShader,
+        );
+    }
 
     #[test]
     fn parse_xf86_screensaver() {

@@ -515,6 +515,46 @@ binds {
 }
 ```
 
+<<<<<<< HEAD
+=======
+#### `toggle-window-shader`
+
+Toggle the focused window's shader on or off.
+This affects the shader applied through a `window-rule { shader {} }` block, or a `window-shaders` preset selected with `cycle-window-shader`.
+See [Per-window shaders](./Configuration:-Global-Shader.md#per-window-shaders).
+
+```kdl
+binds {
+    Mod+S { toggle-window-shader; }
+}
+```
+
+#### `cycle-window-shader`
+
+Cycle the focused window's shader through the presets defined in the top-level `window-shaders {}` block: default (the window-rule shader, or none) → first preset → … → last preset → back to default.
+Cycling re-enables a shader turned off with `toggle-window-shader`.
+See [Window shader presets](./Configuration:-Global-Shader.md#window-shader-presets-window-shaders).
+
+```kdl
+binds {
+    Mod+Shift+S { cycle-window-shader; }
+}
+```
+
+#### `toggle-window-sticky`
+
+<sup>Since: 25.11</sup>
+
+Toggle whether a window is sticky across all workspaces on the current output.
+Sticky windows are floating windows.
+
+```kdl
+binds {
+    Mod+S { toggle-window-sticky; }
+}
+```
+
+>>>>>>> 29cc754c (feat: add toggle-window-shader and cycle-window-shader actions)
 #### `screenshot`, `screenshot-screen`, `screenshot-window`
 
 Actions for taking screenshots.
