@@ -2133,6 +2133,7 @@ mod tests {
                             },
                         ),
                         layout: None,
+                        shader: None,
                     },
                     Output {
                         off: false,
@@ -2164,6 +2165,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        shader: None,
                     },
                     Output {
                         off: false,
@@ -2198,6 +2200,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        shader: None,
                     },
                 ],
             ),
