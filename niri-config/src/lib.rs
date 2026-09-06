@@ -41,6 +41,7 @@ pub mod layout;
 pub mod misc;
 pub mod output;
 pub mod recent_windows;
+pub mod shader_presets;
 pub mod region_shader;
 pub mod screen_cast_picker;
 pub mod utils;
@@ -64,6 +65,9 @@ pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
+pub use crate::shader_presets::{
+    builtin_preset_source, ShaderPresetRefPart, BUILTIN_PRESET_NAMES,
+};
 pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::screen_cast_picker::ScreenCastPicker;
 pub use crate::utils::FloatOrInt;
