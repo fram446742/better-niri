@@ -488,6 +488,26 @@ animations {
 //     }
 // }
 
+// Per-output colour filters. Built-ins: grayscale, invert, saturation (amount=),
+// temperature (kelvin=, 6500 is neutral). No GLSL required.
+//
+// output "eDP-1" {
+//     shader {
+//         preset "saturation" amount=1.4
+//     }
+// }
+//
+// Named presets for the toggle-output-shader and cycle-output-shader binds:
+//
+// output-shaders {
+//     preset "night" {
+//         preset "temperature" kelvin=3200
+//     }
+//     preset "mono" {
+//         preset "grayscale"
+//     }
+// }
+
 // Window rules let you adjust behavior for individual windows.
 // Find more information on the wiki:
 // https://niri-wm.github.io/niri/Configuration:-Window-Rules
