@@ -40,6 +40,7 @@ pub mod layer_rule;
 pub mod layout;
 pub mod misc;
 pub mod output;
+pub mod output_shader;
 pub mod recent_windows;
 pub mod shader_presets;
 pub mod region_shader;
@@ -63,6 +64,9 @@ pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
 pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
+pub use crate::output_shader::{
+    OutputShaderPart, OutputShaderPassPart, OutputShaderPreset, OutputShadersPart,
+};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
 pub use crate::shader_presets::{
@@ -118,6 +122,7 @@ pub struct Config {
     pub screen_cast_picker: ScreenCastPicker,
     pub region_shaders: Vec<RegionShader>,
     pub window_shaders: Vec<WindowShaderPreset>,
+    pub output_shaders: Vec<OutputShaderPreset>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +206,7 @@ where
                     | "workspace"
                     | "region-shader"
                     | "window-shaders"
+                    | "output-shaders"
                     | "include"
             ) && !seen.insert(name)
             {
@@ -262,6 +268,10 @@ where
                 "window-shaders" => {
                     let part = WindowShadersPart::decode_node(node, ctx)?;
                     config.borrow_mut().window_shaders.extend(part.presets);
+                }
+                "output-shaders" => {
+                    let part = OutputShadersPart::decode_node(node, ctx)?;
+                    config.borrow_mut().output_shaders.extend(part.presets);
                 }
 
                 // Single-part sections.
@@ -3620,6 +3630,7 @@ mod tests {
             },
             region_shaders: [],
             window_shaders: [],
+            output_shaders: [],
         }
         "#);
     }
