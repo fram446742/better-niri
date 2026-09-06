@@ -3265,6 +3265,38 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    fn toggle_output_shader(&mut self, output: &Output) {
+        // Every live output has an entry in output_state (populated in add_output), the same
+        // invariant queue_redraw() below relies on with its own unwrap.
+        self.niri
+            .output_state
+            .get_mut(output)
+            .unwrap()
+            .shader_state
+            .toggle();
+        self.niri.queue_redraw(output);
+    }
+
+    fn cycle_output_shader(&mut self, output: &Output) {
+        let names: Vec<String> = self
+            .niri
+            .config
+            .borrow()
+            .output_shaders
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        // Every live output has an entry in output_state (populated in add_output), the same
+        // invariant queue_redraw() below relies on with its own unwrap.
+        self.niri
+            .output_state
+            .get_mut(output)
+            .unwrap()
+            .shader_state
+            .cycle(&names);
+        self.niri.queue_redraw(output);
+    }
+
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
         let was_inside_hot_corner = self.niri.pointer_inside_hot_corner;
         // Any of the early returns here mean that the pointer is not inside the hot corner.
