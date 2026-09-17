@@ -17,6 +17,8 @@ mod grid_flow;
 mod grid_focus_follows_mouse;
 mod grid_input;
 mod grid_scroll;
+
+mod keyboard_config;
 mod layer_shell;
 mod remove_output;
 mod transactions;
