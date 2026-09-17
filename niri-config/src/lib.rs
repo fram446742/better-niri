@@ -3623,4 +3623,259 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn shaders_in_capture_parses() {
+        let on = Config::parse_mem("shaders-in-capture\n").unwrap();
+        assert!(on.shaders_in_capture);
+        let off = Config::parse_mem("").unwrap();
+        assert!(!off.shaders_in_capture);
+    }
+
+    #[test]
+    fn shader_animation_max_fps_parses() {
+        let capped = Config::parse_mem("shader-animation-max-fps 30\n").unwrap();
+        assert_eq!(capped.shader_animation_max_fps, 30);
+        // Absent → 0 (uncapped).
+        let unset = Config::parse_mem("").unwrap();
+        assert_eq!(unset.shader_animation_max_fps, 0);
+        // Explicit 0 is accepted and means uncapped.
+        let zero = Config::parse_mem("shader-animation-max-fps 0\n").unwrap();
+        assert_eq!(zero.shader_animation_max_fps, 0);
+    }
+
+    #[test]
+    fn consolidated_carousel_parses() {
+        // Enabled with explicit threshold.
+        let enabled = Config::parse_mem(
+            "overview {\n    consolidated-carousel {\n        reveal-zoom 0.5\n    }\n}\n",
+        )
+        .unwrap();
+        let cc = enabled
+            .overview
+            .consolidated_carousel
+            .expect("block present => Some");
+        assert_eq!(cc.reveal_zoom, 0.5);
+
+        // Enabled, threshold omitted => default 0.48.
+        let defaulted = Config::parse_mem("overview {\n    consolidated-carousel {}\n}\n").unwrap();
+        assert_eq!(
+            defaulted
+                .overview
+                .consolidated_carousel
+                .unwrap()
+                .reveal_zoom,
+            0.48
+        );
+
+        // Absent => None (default global overview unchanged).
+        let disabled = Config::parse_mem("").unwrap();
+        assert!(disabled.overview.consolidated_carousel.is_none());
+    }
+
+    #[test]
+    fn consolidated_carousel_assembled_zoom_parses() {
+        let cfg = Config::parse_mem(
+            "overview {\n    consolidated-carousel {\n        reveal-zoom 0.5\n        assembled-zoom 0.2\n    }\n}\n",
+        )
+        .unwrap();
+        let cc = cfg.overview.consolidated_carousel.unwrap();
+        assert_eq!(cc.reveal_zoom, 0.5);
+        assert_eq!(cc.assembled_zoom, 0.2);
+
+        // Omitted -> default 0.22.
+        let d = Config::parse_mem("overview {\n    consolidated-carousel {}\n}\n").unwrap();
+        assert_eq!(
+            d.overview.consolidated_carousel.unwrap().assembled_zoom,
+            0.22
+        );
+    }
+
+    #[test]
+    fn consolidated_carousel_invalid_band_falls_back() {
+        let cfg = Config::parse_mem(
+            "overview {\n    consolidated-carousel {\n        reveal-zoom 0.1\n        assembled-zoom 0.5\n    }\n}\n",
+        )
+        .unwrap();
+        let cc = cfg.overview.consolidated_carousel.unwrap();
+        assert_eq!(cc.reveal_zoom, 0.48);
+        assert_eq!(cc.assembled_zoom, 0.22);
+    }
+
+    #[test]
+    fn named_keyboard_inherits_unset_fields_from_unnamed_block() {
+        let config = do_parse(
+            r#"
+            input {
+                keyboard {
+                    xkb {
+                        layout "gb"
+                    }
+                    repeat-rate 40
+                    numlock
+                }
+                keyboard "Topre Realforce 87U" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(config.input.keyboards.len(), 2);
+
+        let fallback = config.input.fallback_keyboard();
+        assert_eq!(fallback.name, None);
+        assert_eq!(fallback.xkb.layout, "gb");
+
+        let realforce = config.input.keyboard_named("Topre Realforce 87U");
+        assert_eq!(realforce.name.as_deref(), Some("Topre Realforce 87U"));
+        assert_eq!(realforce.xkb.layout, "us");
+        // Fields the named block leaves unset come from the unnamed block,
+        // not from the bare defaults.
+        assert_eq!(realforce.repeat_rate, 40);
+        assert!(realforce.numlock);
+    }
+
+    #[test]
+    fn named_keyboard_xkb_block_replaces_the_unnamed_one_wholesale() {
+        let config = do_parse(
+            r#"
+            input {
+                keyboard {
+                    xkb {
+                        layout "gb"
+                        options "caps:escape"
+                    }
+                }
+                keyboard "Ext" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            "#,
+        );
+
+        // `xkb` is a single setting: a named block that sets it does not
+        // inherit individual xkb fields such as `options` from the unnamed block.
+        let ext = config.input.keyboard_named("Ext");
+        assert_eq!(ext.xkb.layout, "us");
+        assert_eq!(ext.xkb.options, None);
+    }
+
+    #[test]
+    fn keyboard_named_matches_device_names_case_insensitively() {
+        let config = do_parse(
+            r#"
+            input {
+                keyboard "Topre Realforce 87U" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            "#,
+        );
+
+        let found = config.input.keyboard_named("topre REALFORCE 87u");
+        assert_eq!(found.name.as_deref(), Some("Topre Realforce 87U"));
+        assert_eq!(found.xkb.layout, "us");
+    }
+
+    #[test]
+    fn keyboard_named_falls_back_to_unnamed_block_for_unknown_devices() {
+        let config = do_parse(
+            r#"
+            input {
+                keyboard {
+                    xkb {
+                        layout "gb"
+                    }
+                }
+                keyboard "Ext" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            "#,
+        );
+
+        let unknown = config.input.keyboard_named("AT Translated Set 2 keyboard");
+        assert_eq!(unknown, config.input.fallback_keyboard());
+        assert_eq!(unknown.xkb.layout, "gb");
+    }
+
+    #[test]
+    fn named_keyboard_without_unnamed_sibling_falls_back_to_defaults() {
+        let config = do_parse(
+            r#"
+            input {
+                keyboard "Ext" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            "#,
+        );
+
+        let fallback = config.input.fallback_keyboard();
+        assert_eq!(fallback, crate::input::Keyboard::default());
+
+        let ext = config.input.keyboard_named("Ext");
+        assert_eq!(ext.xkb.layout, "us");
+        assert_eq!(ext.repeat_delay, 600);
+        assert_eq!(ext.repeat_rate, 25);
+    }
+
+    #[test]
+    fn included_input_section_replaces_all_keyboard_blocks() {
+        // Duplicate top-level `input` nodes are rejected within one file, so a
+        // second `input` section can only come from an included file.
+        let dir =
+            std::env::temp_dir().join(format!("niri-config-keyboards-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("keyboards.kdl"),
+            r#"
+            input {
+                keyboard "Other" {
+                    xkb {
+                        layout "de"
+                    }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let text = r#"
+            input {
+                keyboard {
+                    xkb {
+                        layout "gb"
+                    }
+                }
+                keyboard "Ext" {
+                    xkb {
+                        layout "us"
+                    }
+                }
+            }
+            include "keyboards.kdl"
+            "#;
+        let parsed = Config::parse(&dir.join("config.kdl"), text).config;
+        std::fs::remove_dir_all(&dir).unwrap();
+        let config = parsed.map_err(miette::Report::new).unwrap();
+
+        // The included section's keyboard blocks replace the earlier ones
+        // entirely, the same way `touchpad {}` and friends behave.
+        assert_eq!(config.input.keyboards.len(), 1);
+        assert_eq!(config.input.keyboard_named("Other").xkb.layout, "de");
+        assert_eq!(config.input.keyboard_named("Ext").xkb.layout, "");
+        assert_eq!(config.input.fallback_keyboard().xkb.layout, "");
+    }
 }
