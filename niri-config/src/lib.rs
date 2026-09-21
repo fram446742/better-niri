@@ -2262,6 +2262,7 @@ mod tests {
                     ),
                     inactive_gradient: None,
                     urgent_gradient: None,
+                    rainbow_ripple: None,
                 },
                 border: Border {
                     off: false,
@@ -2287,6 +2288,7 @@ mod tests {
                     active_gradient: None,
                     inactive_gradient: None,
                     urgent_gradient: None,
+                    rainbow_ripple: None,
                 },
                 shadow: Shadow {
                     on: false,
@@ -2898,6 +2900,7 @@ mod tests {
                         active_gradient: None,
                         inactive_gradient: None,
                         urgent_gradient: None,
+                        rainbow_ripple: None,
                     },
                     border: BorderRule {
                         off: false,
@@ -2913,6 +2916,7 @@ mod tests {
                         active_gradient: None,
                         inactive_gradient: None,
                         urgent_gradient: None,
+                        rainbow_ripple: None,
                     },
                     shadow: ShadowRule {
                         off: false,
