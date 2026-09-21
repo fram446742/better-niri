@@ -145,6 +145,7 @@ fn main() -> anyhow::Result<()> {
                 inactive_gradient: None,
                 urgent_gradient: None,
                 rainbow_ripple: None,
+                shader: None,
             },
             focused_window_above_floating: enabled,
             ..Default::default()

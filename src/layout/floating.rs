@@ -356,7 +356,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     pub fn new_window_toplevel_bounds(&self, rules: &ResolvedWindowRules) -> Size<i32, Logical> {
-        let border_config = self.options.layout.border.merged_with(&rules.border);
+        let border_config = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
         compute_toplevel_bounds(border_config, self.working_area.size)
     }
 
@@ -1335,7 +1340,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 .map(|resize| resize.data);
             win.set_interactive_resize(resize_data);
 
-            let border_config = self.options.layout.border.merged_with(&win.rules().border);
+            let border_config = self
+                .options
+                .layout
+                .border
+                .clone()
+                .merged_with(&win.rules().border);
             let bounds = compute_toplevel_bounds(border_config, self.working_area.size);
             win.set_bounds(bounds);
 
@@ -1399,7 +1409,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
         height: Option<PresetSize>,
         rules: &ResolvedWindowRules,
     ) -> Size<i32, Logical> {
-        let border = self.options.layout.border.merged_with(&rules.border);
+        let border = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
 
         let resolve = |size: Option<PresetSize>, working_area_size: f64| {
             if let Some(size) = size {

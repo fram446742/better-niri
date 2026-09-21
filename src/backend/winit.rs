@@ -195,6 +195,7 @@ impl Winit {
         crate::render_helpers::blend::FrameBlendState::init(renderer);
 
         let config = self.config.borrow();
+        shaders::set_decoration_programs(renderer, &config);
         if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
             shaders::set_custom_resize_program(renderer, Some(src));
         }

@@ -694,7 +694,7 @@ impl State {
             .niri
             .cursor_texture_cache
             .get(CursorIcon::Default, scale, &xcursor, 0);
-        let focus_ring = self.niri.config.borrow().layout.focus_ring;
+        let focus_ring = self.niri.config.borrow().layout.focus_ring.clone();
 
         let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(toplevel) else {
             return;

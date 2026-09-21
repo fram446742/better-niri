@@ -32,6 +32,7 @@ pub mod animations;
 pub mod appearance;
 pub mod binds;
 pub mod debug;
+pub mod decoration_shader;
 pub mod error;
 pub mod gestures;
 pub mod global_shader;
@@ -2263,6 +2264,7 @@ mod tests {
                     inactive_gradient: None,
                     urgent_gradient: None,
                     rainbow_ripple: None,
+                    shader: None,
                 },
                 border: Border {
                     off: false,
@@ -2289,6 +2291,7 @@ mod tests {
                     inactive_gradient: None,
                     urgent_gradient: None,
                     rainbow_ripple: None,
+                    shader: None,
                 },
                 shadow: Shadow {
                     on: false,
@@ -2901,6 +2904,7 @@ mod tests {
                         inactive_gradient: None,
                         urgent_gradient: None,
                         rainbow_ripple: None,
+                        shader: None,
                     },
                     border: BorderRule {
                         off: false,
@@ -2917,6 +2921,7 @@ mod tests {
                         inactive_gradient: None,
                         urgent_gradient: None,
                         rainbow_ripple: None,
+                        shader: None,
                     },
                     shadow: ShadowRule {
                         off: false,

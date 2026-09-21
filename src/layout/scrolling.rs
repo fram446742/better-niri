@@ -793,7 +793,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn new_window_toplevel_bounds(&self, rules: &ResolvedWindowRules) -> Size<i32, Logical> {
-        let border_config = self.options.layout.border.merged_with(&rules.border);
+        let border_config = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
 
         let display_mode = rules
             .default_column_display
@@ -819,7 +824,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         height: Option<PresetSize>,
         rules: &ResolvedWindowRules,
     ) -> Size<i32, Logical> {
-        let border = self.options.layout.border.merged_with(&rules.border);
+        let border = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
 
         let display_mode = rules
             .default_column_display
@@ -4737,7 +4747,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
                 win.set_interactive_resize(col_resize_data);
 
-                let border_config = self.options.layout.border.merged_with(&win.rules().border);
+                let border_config = self
+                    .options
+                    .layout
+                    .border
+                    .clone()
+                    .merged_with(&win.rules().border);
                 let bounds = compute_toplevel_bounds(
                     border_config,
                     self.working_area.size,
