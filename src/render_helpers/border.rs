@@ -31,6 +31,7 @@ pub struct BorderRenderElement {
     rainbow_ripple: [f32; 4],
     shader_time: f32,
     ring_width: f32,
+    emission_threshold: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,6 +70,7 @@ impl BorderRenderElement {
             rainbow_ripple: [0.; 4],
             shader_time: 0.,
             ring_width: 0.,
+            emission_threshold: -1.,
             params: Parameters {
                 size,
                 gradient_area,
@@ -94,6 +96,7 @@ impl BorderRenderElement {
             rainbow_ripple: [0.; 4],
             shader_time: 0.,
             ring_width: 0.,
+            emission_threshold: -1.,
             params: Parameters {
                 size: Default::default(),
                 gradient_area: Default::default(),
@@ -165,6 +168,13 @@ impl BorderRenderElement {
             self.ring_width = width;
             self.update_inner();
         }
+    }
+
+    /// Copy the ring into an emission layer, retaining its geometry, phase and opacity.
+    pub fn as_emission(mut self, threshold: f32) -> Self {
+        self.emission_threshold = threshold;
+        self.update_inner();
+        self
     }
 
     fn update_inner(&mut self) {
@@ -241,6 +251,7 @@ impl BorderRenderElement {
                 Uniform::new("rainbow_ripple", self.rainbow_ripple),
                 Uniform::new("niri_time", self.shader_time),
                 Uniform::new("ring_width", self.ring_width),
+                Uniform::new("emission_threshold", self.emission_threshold),
             ]),
             HashMap::new(),
         );
