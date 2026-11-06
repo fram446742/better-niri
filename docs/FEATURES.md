@@ -122,7 +122,7 @@ This table is the integration contract, not a claim of completion.
 | PipeWire | Upstream | upstream | upstream | Upstream | |
 | DMA-BUF → SHM fallback | Upstream | upstream | upstream | Upstream | niri-elite's fallback was merged upstream. |
 | HDR capture conversion | Absent | niri-spicy | niri-spicy | Planned | Must not blow out SDR output. |
-| Privacy in captures | Partial (`block-out-from`) | demoji `block-out-blur` | demoji | Planned | Also blur must respect block-out. |
+| Privacy in captures | Partial (`block-out-from`) | demoji `block-out-blur` | demoji | Integrated | Blocked-out windows can be blurred instead of black; popups still hidden. |
 
 ## Architecture, configuration, tooling
 

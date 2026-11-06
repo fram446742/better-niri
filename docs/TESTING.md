@@ -10,7 +10,7 @@ when the row says so.
 | --- | --- | --- |
 | Workspace check (safe `main`) | `cargo check --workspace` with Smithay `a38bb709` | **Pass** |
 | Workspace check (elite branch) | `cargo check --workspace` with Smithay `2e8e9edb` | **Pass** |
-| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 666 tests, 0 failed |
+| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 667 tests, 0 failed |
 | Clippy (elite branch) | `cargo clippy --workspace --all-targets` | **Pass**, no errors; warnings remain in elite-derived code |
 | Format (elite branch) | `cargo fmt --check` | **Pass** |
 | Smithay consolidated, GLES | `cargo check -p smithay` with niri's feature set | **Pass** |
