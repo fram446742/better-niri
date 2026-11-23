@@ -10,7 +10,7 @@ async fn run() -> anyhow::Result<()> {
     let connection = zbus::connection::Builder::session()?
         .name(BUS_NAME)?
         .serve_at(OBJECT_PATH, ScreenshotBackend)?
-        .serve_at(OBJECT_PATH, ScreenCastBackend)?
+        .serve_at(OBJECT_PATH, ScreenCastBackend::default())?
         .build()
         .await?;
 

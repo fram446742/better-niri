@@ -33,7 +33,8 @@ use wayland_client::{Connection, QueueHandle};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Region,
-    ScreenCast,
+    Output,
+    Window,
 }
 
 struct PickerSurface {
@@ -72,11 +73,25 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let mode = if std::env::args().any(|arg| arg == "--screencast") {
-        Mode::ScreenCast
+    let mode = if std::env::args().any(|arg| arg == "--screencast-window") {
+        Mode::Window
+    } else if std::env::args().any(|arg| arg == "--screencast") {
+        Mode::Output
     } else {
         Mode::Region
     };
+    if mode == Mode::Window {
+        let path = std::env::var_os("NIRI_SOCKET")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("NIRI_SOCKET is not set"))?;
+        match better_portal::pick_window_via_niri(&path).map_err(anyhow::Error::msg)? {
+            Some(id) => {
+                println!("{}", serde_json::json!({ "window": id }));
+                return Ok(());
+            }
+            None => std::process::exit(2),
+        }
+    }
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<Picker>(&conn)?;
     let qh = queue.handle();
@@ -534,7 +549,7 @@ impl PointerHandler for Picker {
                     }
                 }
                 PointerEventKind::Press { button: 0x110, .. } => {
-                    if self.mode == Mode::ScreenCast {
+                    if self.mode == Mode::Output {
                         self.result_output = self.surfaces[index].output_name.clone();
                         self.exit = true;
                         continue;
