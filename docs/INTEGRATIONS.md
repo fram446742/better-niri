@@ -189,7 +189,7 @@ commits. This is the lowest-risk large integration today.
 | Vertical main axis | `f20e14a7`…`0f3860a8` |
 | Global shader | `f948f557`…`2c2591c0` |
 | Scoped/region/window shaders | `31cc5af9`…`f0f0ce01` |
-| Region/window/focus-ring shaders | `f4b5c4b9`…`0cb779d1` |
+| Region/window/focus-ring shaders | `f4b5c4b9`…`0cb779d1` (focus-ring: `85a572d8`…`2d91912d`; light spill `0cb779d1` pending carousel) |
 | Per-output shader presets | `fde00905`…`3774b4c9` |
 | `toggle-dwt` | `54d1770c` |
 | Carousel overview | `d6d75c40`…`87b37916` |
