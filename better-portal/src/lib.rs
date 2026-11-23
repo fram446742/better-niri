@@ -28,6 +28,9 @@ pub const RESPONSE_OTHER: u32 = 2;
 const NIRI_BUS: &str = "org.gnome.Shell.Screenshot";
 const NIRI_PATH: &str = "/org/gnome/Shell/Screenshot";
 
+const NIRI_PORTAL_BUS: &str = "org.freedesktop.impl.portal.desktop.niri";
+const NIRI_PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+
 pub type PortalResult = (u32, HashMap<String, OwnedValue>);
 
 #[derive(Debug)]
@@ -289,8 +292,210 @@ mod tests {
     }
 
     #[test]
+    fn screencast_version_is_exposed() {
+        assert_eq!(ScreenCastBackend.version(), 4);
+    }
+
+    #[test]
     fn encodes_absolute_paths_only() {
         assert!(file_uri(&PathBuf::from("/")).is_ok());
         assert!(file_uri(&PathBuf::from("")).is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ScreenCast
+// ---------------------------------------------------------------------------
+
+/// Proxy backend for `org.freedesktop.impl.portal.ScreenCast`.
+///
+/// The compositor owns the capture sessions and PipeWire nodes; this backend
+/// forwards CreateSession/SelectSources/Start unchanged and re-exports the
+/// session and request objects on its own bus name so the portal frontend can
+/// close them. The PipeWire node ids in Start's results stay valid because the
+/// frontend connects to the same PipeWire daemon.
+pub struct ScreenCastBackend;
+
+async fn portal_proxy(interface: &'static str) -> Result<Proxy<'static>, String> {
+    let connection = zbus::Connection::session()
+        .await
+        .map_err(|err| format!("session bus: {err}"))?;
+    Proxy::new_owned(connection, NIRI_PORTAL_BUS, NIRI_PORTAL_PATH, interface)
+        .await
+        .map_err(|err| format!("niri portal proxy: {err}"))
+}
+
+async fn forward_close(path: &OwnedObjectPath, interface: &'static str) {
+    let Ok(connection) = zbus::Connection::session().await else {
+        return;
+    };
+    let Ok(proxy) = Proxy::new_owned(
+        connection,
+        NIRI_PORTAL_BUS,
+        path.as_str().to_owned(),
+        interface,
+    )
+    .await
+    else {
+        return;
+    };
+    let _: Result<(), _> = proxy.call("Close", &()).await;
+}
+
+/// Session object re-exported on the better-portal bus.
+struct ProxySession {
+    path: OwnedObjectPath,
+}
+
+#[interface(name = "org.freedesktop.impl.portal.Session")]
+impl ProxySession {
+    async fn close(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> fdo::Result<()> {
+        forward_close(&self.path, "org.freedesktop.impl.portal.Session").await;
+        let _ = server.remove::<ProxySession, _>(&self.path).await;
+        let _ = Self::closed(&emitter).await;
+        Ok(())
+    }
+
+    #[zbus(signal)]
+    async fn closed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// Request object re-exported on the better-portal bus.
+struct ProxyRequest {
+    path: OwnedObjectPath,
+}
+
+#[interface(name = "org.freedesktop.impl.portal.Request")]
+impl ProxyRequest {
+    async fn close(&self) -> fdo::Result<()> {
+        forward_close(&self.path, "org.freedesktop.impl.portal.Request").await;
+        Ok(())
+    }
+}
+
+async fn export_session(server: &ObjectServer, path: OwnedObjectPath) {
+    let session = ProxySession { path: path.clone() };
+    if let Err(err) = server.at(path.clone(), session).await {
+        eprintln!(
+            "better-portal: cannot export session {}: {err}",
+            path.as_str()
+        );
+    }
+}
+
+async fn unexport_session(server: &ObjectServer, path: &OwnedObjectPath) {
+    let _ = server.remove::<ProxySession, _>(path).await;
+}
+
+async fn export_request(server: &ObjectServer, path: OwnedObjectPath) {
+    let request = ProxyRequest { path: path.clone() };
+    if let Err(err) = server.at(path.clone(), request).await {
+        eprintln!(
+            "better-portal: cannot export request {}: {err}",
+            path.as_str()
+        );
+    }
+}
+
+async fn unexport_request(server: &ObjectServer, path: &OwnedObjectPath) {
+    let _ = server.remove::<ProxyRequest, _>(path).await;
+}
+
+#[interface(name = "org.freedesktop.impl.portal.ScreenCast")]
+impl ScreenCastBackend {
+    async fn create_session(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        handle: OwnedObjectPath,
+        session_handle: OwnedObjectPath,
+        app_id: String,
+        options: HashMap<String, OwnedValue>,
+    ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        export_session(server, session_handle.clone()).await;
+        let result = async {
+            let proxy = portal_proxy("org.freedesktop.impl.portal.ScreenCast")
+                .await
+                .map_err(fdo::Error::Failed)?;
+            proxy
+                .call(
+                    "CreateSession",
+                    &(handle, session_handle.clone(), app_id, options),
+                )
+                .await
+                .map_err(|err| fdo::Error::Failed(format!("niri CreateSession: {err}")))
+        }
+        .await;
+        if !matches!(&result, Ok((RESPONSE_SUCCESS, _))) {
+            unexport_session(server, &session_handle).await;
+        }
+        result
+    }
+
+    async fn select_sources(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        handle: OwnedObjectPath,
+        session_handle: OwnedObjectPath,
+        app_id: String,
+        options: HashMap<String, OwnedValue>,
+    ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        export_request(server, handle.clone()).await;
+        let result = async {
+            let proxy = portal_proxy("org.freedesktop.impl.portal.ScreenCast")
+                .await
+                .map_err(fdo::Error::Failed)?;
+            proxy
+                .call(
+                    "SelectSources",
+                    &(handle.clone(), session_handle, app_id, options),
+                )
+                .await
+                .map_err(|err| fdo::Error::Failed(format!("niri SelectSources: {err}")))
+        }
+        .await;
+        unexport_request(server, &handle).await;
+        result
+    }
+
+    async fn start(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        handle: OwnedObjectPath,
+        session_handle: OwnedObjectPath,
+        app_id: String,
+        parent_window: String,
+        options: HashMap<String, OwnedValue>,
+    ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        export_request(server, handle.clone()).await;
+        let result = async {
+            let proxy = portal_proxy("org.freedesktop.impl.portal.ScreenCast")
+                .await
+                .map_err(fdo::Error::Failed)?;
+            proxy
+                .call(
+                    "Start",
+                    &(
+                        handle.clone(),
+                        session_handle,
+                        app_id,
+                        parent_window,
+                        options,
+                    ),
+                )
+                .await
+                .map_err(|err| fdo::Error::Failed(format!("niri Start: {err}")))
+        }
+        .await;
+        unexport_request(server, &handle).await;
+        result
+    }
+
+    #[zbus(property)]
+    fn version(&self) -> u32 {
+        4
     }
 }
