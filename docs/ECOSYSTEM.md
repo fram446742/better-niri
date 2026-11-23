@@ -92,7 +92,7 @@ operate the desktop without the shell.
 | better-sidepanels | Persistent side panels | new, medium |
 | better-shot | Capture/recording/annotation | **started**: `better-shot/` UI/screen/window capture + copy/annotate |
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
-| better-audio | PipeWire routing | new, exploratory |
+| better-audio | PipeWire routing | **started**: `better-audio/` rules + `pactl` backend + watcher |
 | better-wallpaper | Scenes, per-workspace wallpapers | **started**: `better-wallpaper/` scenes + focus watcher |
 | better-settings | Unified GTK4 settings frontend | **started**: `better-settings/` text-preserving model + GTK4 UI + `settingsctl` |
 | better-portal | XDG portal backend + external layer-shell picker daemon | committed, after Phase 1 |

@@ -192,8 +192,10 @@ picked up without re-auditing.
    event stream (`swaybg`/`swww` style command templates, one process per
    output); `better-settings/` edits niri's KDL config through a
    text-preserving patcher (comments/formatting kept, timestamped backups) with
-   a GTK4 frontend plus a scriptable `better-settingsctl`. Remaining apps:
-   better-sidepanels, better-audio.
+   a GTK4 frontend plus a scriptable `better-settingsctl`; `better-audio/`
+   routes playback streams by app rule to sinks through `pactl` (priority,
+   glob/substring matching, dry-run, default sink, watcher). Remaining app:
+   better-sidepanels.
    Remaining: richer swallowing rules and the companion apps from
    `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
