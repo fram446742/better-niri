@@ -478,6 +478,7 @@ mod tests {
         };
         crate::render_helpers::resources::init(&mut renderer);
         shaders::init(&mut renderer);
+        crate::render_helpers::blend::FrameBlendState::init(&mut renderer);
         let draw =
             |renderer: &mut GlesRenderer, config: niri_config::FocusRing, time, scale: f64| {
                 let mut ring = FocusRing::new(config);
@@ -631,6 +632,7 @@ mod tests {
         };
         crate::render_helpers::resources::init(&mut renderer);
         shaders::init(&mut renderer);
+        crate::render_helpers::blend::FrameBlendState::init(&mut renderer);
         assert!(
             BorderRenderElement::has_shader(&mut renderer),
             "border shader must compile"
