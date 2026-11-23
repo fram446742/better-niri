@@ -808,7 +808,12 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>, isolated: bool) {
+    pub fn add_output(
+        &mut self,
+        output: Output,
+        layout_config: Option<LayoutPart>,
+        isolated: bool,
+    ) {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,

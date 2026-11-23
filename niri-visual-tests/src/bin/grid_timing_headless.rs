@@ -165,7 +165,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut layout = niri::layout::Layout::<TestWindow>::with_options(clock.clone(), options);
-    layout.add_output(output.clone(), None);
+    layout.add_output(output.clone(), None, false);
 
     let window_colors = [
         [0.15, 0.64, 0.41, 1.],

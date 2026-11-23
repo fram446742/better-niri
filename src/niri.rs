@@ -4477,7 +4477,8 @@ impl Niri {
             None,
         );
 
-        self.layout.add_output(output.clone(), layout_config, isolated);
+        self.layout
+            .add_output(output.clone(), layout_config, isolated);
 
         let lock_render_state = if self.is_locked() {
             // We haven't rendered anything yet so it's as good as locked.

@@ -72,7 +72,7 @@ impl Layout {
             ..Default::default()
         };
         let mut layout = niri::layout::Layout::with_options(clock.clone(), options);
-        layout.add_output(output.clone(), None);
+        layout.add_output(output.clone(), None, false);
 
         let start_time = clock.now_unadjusted();
 

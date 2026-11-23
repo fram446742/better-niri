@@ -152,7 +152,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut layout = niri::layout::Layout::<TestWindow>::with_options(clock.clone(), options);
-    layout.add_output(output.clone(), None);
+    layout.add_output(output.clone(), None, false);
 
     // 0: green tiled, 1: red tiled, 2: blue floating over the right part of the green one.
     let window_colors = [
