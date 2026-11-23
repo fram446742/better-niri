@@ -21,6 +21,35 @@ pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.better";
 pub const OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
 pub const SCREENSHOT_INTERFACE: &str = "org.freedesktop.impl.portal.Screenshot";
 
+/// A logical, global screenshot selection returned by `better-portal-picker`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SelectionRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl SelectionRect {
+    pub fn from_drag(output_pos: (i32, i32), start: (f64, f64), end: (f64, f64)) -> Option<Self> {
+        let x0 = start.0.min(end.0);
+        let y0 = start.1.min(end.1);
+        let x1 = start.0.max(end.0);
+        let y1 = start.1.max(end.1);
+        let width = (x1 - x0).round() as i32;
+        let height = (y1 - y0).round() as i32;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        Some(Self {
+            x: output_pos.0 + x0.round() as i32,
+            y: output_pos.1 + y0.round() as i32,
+            width,
+            height,
+        })
+    }
+}
+
 pub const RESPONSE_SUCCESS: u32 = 0;
 pub const RESPONSE_CANCELLED: u32 = 1;
 pub const RESPONSE_OTHER: u32 = 2;
@@ -125,10 +154,90 @@ async fn fullscreen_screenshot() -> Result<String, Failure> {
     file_uri(&path).map_err(Failure::Other)
 }
 
+/// Outcome of running the external layer-shell picker.
+#[derive(Debug, PartialEq)]
+pub enum PickerOutcome {
+    Selected(SelectionRect),
+    Cancelled,
+    Unavailable,
+}
+
+/// Resolves `better-portal-picker`: `$BETTER_PORTAL_PICKER`, then a sibling of
+/// this executable, then `$PATH`.
+pub fn picker_program() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("BETTER_PORTAL_PICKER") {
+        return Some(std::path::PathBuf::from(path));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("better-portal-picker");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("better-portal-picker"))
+        .find(|candidate| candidate.is_file())
+}
+
+fn run_picker(program: &std::path::Path) -> Result<PickerOutcome, String> {
+    use std::process::Command;
+
+    let output = match Command::new(program).output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PickerOutcome::Unavailable)
+        }
+        Err(err) => return Err(format!("cannot run {}: {err}", program.display())),
+    };
+    if !output.status.success() {
+        return Ok(PickerOutcome::Cancelled);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rect: SelectionRect = serde_json::from_str(stdout.trim())
+        .map_err(|err| format!("invalid picker output: {err}"))?;
+    Ok(PickerOutcome::Selected(rect))
+}
+
+async fn area_screenshot(rect: SelectionRect) -> Result<String, Failure> {
+    let proxy = niri_proxy().await.map_err(Failure::Other)?;
+    let (ok, path): (bool, std::path::PathBuf) = proxy
+        .call(
+            "ScreenshotArea",
+            &(
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                false,
+                String::new(),
+            ),
+        )
+        .await
+        .map_err(|err| Failure::Other(format!("niri ScreenshotArea: {err}")))?;
+    if !ok {
+        return Err(Failure::Cancelled);
+    }
+    file_uri(&path).map_err(Failure::Other)
+}
+
 async fn interactive_screenshot(cancelled: Arc<AtomicBool>) -> Result<String, Failure> {
     if cancelled.load(Ordering::SeqCst) {
         return Err(Failure::Cancelled);
     }
+
+    // Prefer the external layer-shell picker when it is installed. Anything
+    // other than a clean selection falls back to the compositor's own UI.
+    if let Some(program) = picker_program() {
+        match run_picker(&program) {
+            Ok(PickerOutcome::Selected(rect)) => return area_screenshot(rect).await,
+            Ok(PickerOutcome::Cancelled) => return Err(Failure::Cancelled),
+            Ok(PickerOutcome::Unavailable) | Err(_) => (),
+        }
+    }
+
     let proxy = niri_proxy().await.map_err(Failure::Other)?;
     let (ok, uri): (bool, String) = proxy
         .call("InteractiveScreenshot", &())
@@ -294,6 +403,58 @@ mod tests {
     #[test]
     fn screencast_version_is_exposed() {
         assert_eq!(ScreenCastBackend.version(), 4);
+    }
+
+    #[test]
+    fn selection_rect_normalizes_drag_and_output_offset() {
+        let rect = SelectionRect::from_drag((1920, 0), (300.4, 200.6), (100.2, 50.1)).unwrap();
+        assert_eq!(
+            rect,
+            SelectionRect {
+                x: 1920 + 100,
+                y: 50,
+                width: 200,
+                height: 151,
+            }
+        );
+        assert!(SelectionRect::from_drag((0, 0), (10., 10.), (10., 10.)).is_none());
+    }
+
+    #[test]
+    fn run_picker_parses_selection_and_cancellation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("better-portal-picker-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let selected = dir.join("selected");
+        std::fs::write(
+            &selected,
+            "#!/bin/sh\nprintf '{\"x\":10,\"y\":20,\"width\":30,\"height\":40}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            run_picker(&selected).unwrap(),
+            PickerOutcome::Selected(SelectionRect {
+                x: 10,
+                y: 20,
+                width: 30,
+                height: 40
+            })
+        );
+
+        let cancelled = dir.join("cancelled");
+        std::fs::write(&cancelled, "#!/bin/sh\nexit 2\n").unwrap();
+        std::fs::set_permissions(&cancelled, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run_picker(&cancelled).unwrap(), PickerOutcome::Cancelled);
+
+        assert_eq!(
+            run_picker(&dir.join("missing")).unwrap(),
+            PickerOutcome::Unavailable
+        );
     }
 
     #[test]

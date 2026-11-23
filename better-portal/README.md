@@ -37,10 +37,23 @@ screenshots return `uri`; colour picks return `color` as `(ddd)`.
 
 ## Delegation
 
-`Screenshot` with `interactive: true` calls niri's
-`org.gnome.Shell.Screenshot.InteractiveScreenshot`; otherwise it calls
-`Screenshot`. `PickColor` calls `PickColor`. The compositor must be running with
-that interface available (niri does).
+`Screenshot` with `interactive: true` uses **`better-portal-picker`**, a
+layer-shell overlay that lets the user drag a rectangle on any output and then
+captures that area through niri's `ScreenshotArea`. If the picker is missing,
+exits non-zero, or cannot run, it falls back to niri's
+`InteractiveScreenshot`. Non-interactive screenshots call `Screenshot`;
+`PickColor` calls `PickColor`.
+
+Set `BETTER_PORTAL_PICKER=/path/to/picker` to override the picker binary; by
+default it resolves a sibling `better-portal-picker`, then `$PATH`.
+
+```sh
+cargo build
+./target/debug/better-portal-picker   # prints {"x","y","width","height"} or exits 2
+```
+
+ScreenCast source selection still uses the compositor's picker (an external
+ScreenCast picker needs a capture API from the compositor).
 
 ScreenCast delegates to the compositor's existing
 `org.freedesktop.impl.portal.desktop.niri` backend; it does not own capture or
