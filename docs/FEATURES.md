@@ -99,7 +99,7 @@ This table is the integration contract, not a claim of completion.
 | Per-keyboard configuration | Absent | biri (niri PR #4459, open) | biri | Integrated (core) | Named `keyboard` blocks inherit unset fields; keymap/repeat/numlock/locale1/IPC follow the last physical keyboard. |
 | Num Lock state | Upstream config | biri | biri | Planned | biri fixes Num Lock/locale1/IPC across keyboard switches. |
 | Keyboard layouts | Upstream | upstream | upstream | Upstream | Per-keyboard support extends this. |
-| Disable-while-typing controls | Upstream config | biri | biri | Planned | Runtime `toggle-dwt`, composes with config. |
+| Disable-while-typing controls | Upstream config | biri | biri | Integrated (core input) | Runtime `toggle-dwt`, composes with config; resets on restart; applies to hot-plugged touchpads. |
 | Pointer behaviour | Upstream | upstream + urayde | urayde | Planned | Pointer warp; niri-elite's confine-to-fullscreen. |
 | Gestures | Upstream | upstream + niri-elite/biri | combine | Planned | Grid and carousel gestures reuse input plumbing. |
 | Accessibility | Upstream | upstream + niri-elite | hybrid | Planned | Existing a11y plus agent/AT-SPI tooling. |
