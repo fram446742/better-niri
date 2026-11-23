@@ -80,7 +80,7 @@ output "sunshine" {
     create-virtual
     mode "1920x1080@144.000"
     scale 1.25
-    transform 90
+    transform "90"
     position x=1920 y=0
 }
 ```

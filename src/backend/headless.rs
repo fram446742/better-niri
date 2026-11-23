@@ -94,6 +94,15 @@ impl Headless {
     }
 
     pub fn init(&mut self, niri: &mut Niri) {
+        // Unit tests use the headless backend as a pure fixture; creating a real EGL renderer
+        // changes frame-callback timing and requires a GPU. Visual/headless binaries still get it.
+        #[cfg(test)]
+        {
+            let _ = niri;
+            return;
+        }
+
+        #[cfg(not(test))]
         if let Err(err) = self.add_renderer() {
             warn!("failed to create headless renderer: {err:?}");
         } else if let Some(renderer) = self.renderer.as_mut() {
@@ -264,10 +273,6 @@ impl Headless {
             model: Some(model),
             serial: Some(serial),
         });
-
-        output
-            .user_data()
-            .insert_if_missing(VirtualOutputMarker::default);
 
         let physical_properties = output.physical_properties();
         self.ipc_outputs.lock().unwrap().insert(

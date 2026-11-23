@@ -1,11 +1,10 @@
-use std::collections::HashMap;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use niri_config::Config;
-use niri_config::OutputName;
+use niri_config::{Config, OutputName};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::utils::Size;
 
