@@ -66,6 +66,9 @@ pub struct OffscreenData {
     pub id: Id,
     /// States for the render into the offscreen buffer.
     pub states: RenderElementStates,
+    /// Whether the texture pixels changed compared to the previous `render` call on this buffer.
+    /// Buffer (re)creation resets the tracker and reports `true`.
+    pub damaged: bool,
 }
 
 impl OffscreenBuffer {
@@ -197,7 +200,10 @@ impl OffscreenBuffer {
                 .context("error rendering")?
         };
 
-        // Add the resulting damage to the outer tracker.
+        // Add the resulting damage to the outer tracker. `render_output` returns `damage: None`
+        // exactly when there was no damage, so `is_some()` is a reliable "contents changed"
+        // signal.
+        let damaged = res.damage.is_some();
         if let Some(damage) = res.damage {
             // OutputDamageTracker gives us Physical coordinate space, but it's actually the Buffer
             // space because we were rendering to a texture.
@@ -223,6 +229,7 @@ impl OffscreenBuffer {
         let data = OffscreenData {
             id: self.id.clone(),
             states: res.states,
+            damaged,
         };
 
         Ok((elem, res.sync, data))

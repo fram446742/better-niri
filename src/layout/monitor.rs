@@ -7,6 +7,7 @@ use niri_config::{CornerRadius, LayoutPart};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement,
 };
+use smithay::backend::renderer::element::{Element as _, Id};
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -2460,6 +2461,16 @@ impl<W: LayoutElement> Monitor<W> {
             });
     }
 
+    fn decoration_light_ids(&self) -> Vec<Id> {
+        self.workspaces
+            .iter()
+            .flat_map(|ws| ws.tiles())
+            .chain(self.sticky.tiles())
+            .flat_map(|tile| [tile.focus_ring().light_id(), tile.border().light_id()])
+            .flatten()
+            .collect()
+    }
+
     pub fn render_workspaces<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -2467,6 +2478,19 @@ impl<W: LayoutElement> Monitor<W> {
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Monitor::render_workspaces");
+
+        // Render lists are front-to-back. Emit light first, then preserve the exact
+        // relative order of every normal element. IDs survive crop/scale wrappers.
+        let light_ids = self.decoration_light_ids();
+        let mut deferred = Vec::new();
+        let output = push;
+        let mut push = |elem: MonitorRenderElement<R>| {
+            if light_ids.is_empty() || light_ids.contains(elem.id()) {
+                output(elem);
+            } else {
+                deferred.push(elem);
+            }
+        };
 
         let scale = self.scale.fractional_scale();
         // Ceil the height in physical pixels.
@@ -2773,6 +2797,9 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                 }
             }
+        }
+        for element in deferred {
+            output(element);
         }
     }
 

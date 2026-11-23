@@ -12302,15 +12302,20 @@ fn grid_floating_only_windows_stay_in_their_rows() {
 
 #[test]
 fn rainbow_ripple_redraw_visibility() {
-    decoration_redraw_visibility(false);
+    decoration_redraw_visibility(false, false);
 }
 
 #[test]
 fn custom_decoration_redraw_visibility() {
-    decoration_redraw_visibility(true);
+    decoration_redraw_visibility(true, false);
 }
 
-fn decoration_redraw_visibility(custom: bool) {
+#[test]
+fn lit_decoration_redraw_visibility() {
+    decoration_redraw_visibility(true, true);
+}
+
+fn decoration_redraw_visibility(custom: bool, light: bool) {
     let mut options = Options::default();
     if custom {
         options.layout.focus_ring.shader = niri_config::Config::parse_mem(
@@ -12318,6 +12323,17 @@ fn decoration_redraw_visibility(custom: bool) {
         ).unwrap().layout.focus_ring.shader;
     } else {
         options.layout.focus_ring.rainbow_ripple = Some(Default::default());
+    }
+    if light {
+        options.layout.focus_ring.shader.as_mut().unwrap().light = niri_config::Config::parse_mem(
+            r#"layout { focus-ring { shader { source "x"; light; }; }; }"#,
+        )
+        .unwrap()
+        .layout
+        .focus_ring
+        .shader
+        .unwrap()
+        .light;
     }
     let mut layout = check_ops_with_options(
         options,
@@ -12403,4 +12419,104 @@ fn decoration_redraw_visibility(custom: bool) {
         !layout.decorations_are_animating(&output),
         "a frozen rainbow needs no redraws"
     );
+}
+
+#[test]
+fn egl_decoration_light_precedes_floating_and_tiled_content() {
+    use smithay::backend::egl::native::EGLSurfacelessDisplay;
+    use smithay::backend::egl::{EGLContext, EGLDisplay};
+    use smithay::backend::renderer::element::{Element as _, Id};
+    use smithay::backend::renderer::gles::GlesRenderer;
+
+    use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
+
+    let config = niri_config::Config::parse_mem(r#"
+        layout {
+            border { on; }
+            focus-ring { shader { source "vec4 ring_color(vec2 p) { return vec4(0.2, 0.8, 1., 1.); }"; light; }; }
+        }
+    "#).unwrap();
+    let mut renderer = unsafe {
+        let display = EGLDisplay::new(EGLSurfacelessDisplay).unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        GlesRenderer::new(context).unwrap()
+    };
+    resources::init(&mut renderer);
+    shaders::init(&mut renderer);
+    crate::render_helpers::blend::FrameBlendState::init(&mut renderer);
+    shaders::set_decoration_programs(&mut renderer, &config);
+    let options = Options {
+        layout: config.layout,
+        ..Default::default()
+    };
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams {
+                    is_floating: true,
+                    ..TestWindowParams::new(2)
+                },
+            },
+            Op::FocusWindow(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    let output = layout.outputs().next().unwrap().clone();
+    layout.update_render_elements(Some(&output));
+    let light_ids: Vec<_> = layout
+        .active_workspace()
+        .unwrap()
+        .tiles()
+        .filter_map(|tile| tile.focus_ring().light_id())
+        .collect();
+    assert_eq!(light_ids.len(), 1);
+    let render = |layout: &Layout<TestWindow>, renderer: &mut GlesRenderer, overview| {
+        let mut ids: Vec<Id> = Vec::new();
+        let ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::Output,
+            intent: RenderIntent::Normal,
+            xray: None,
+            shader_time: 0.,
+        };
+        let monitor = layout.monitor_for_output(&output).unwrap();
+        let _ = overview;
+        monitor.render_workspaces(ctx, true, &mut |e| ids.push(e.id().clone()));
+        ids
+    };
+    let normal = render(&layout, &mut renderer, false);
+    let overview = render(&layout, &mut renderer, true);
+    for ids in [&normal, &overview] {
+        assert!(
+            light_ids.contains(&ids[0]),
+            "spill must appear above floating content too"
+        );
+        assert!(
+            ids.len() > light_ids.len(),
+            "fixture must contain ordinary decorations"
+        );
+        assert!(!ids[light_ids.len()..]
+            .iter()
+            .any(|id| light_ids.contains(id)));
+    }
+    let mut options = (*layout.options).clone();
+    options.layout.focus_ring.shader.as_mut().unwrap().light = None;
+    layout.update_options(options);
+    layout.update_render_elements(Some(&output));
+    for (before, overview) in [(normal, false), (overview, true)] {
+        let ordinary: Vec<_> = before
+            .into_iter()
+            .filter(|id| !light_ids.contains(id))
+            .collect();
+        assert_eq!(
+            ordinary,
+            render(&layout, &mut renderer, overview),
+            "normal stacking order must not change"
+        );
+    }
 }
