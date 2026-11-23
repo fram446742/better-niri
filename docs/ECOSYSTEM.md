@@ -90,7 +90,7 @@ operate the desktop without the shell.
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
 | better-session | Context/session save/restore | **started**: `better-session/` workspace/window snapshots + restore |
 | better-sidepanels | Persistent side panels | new, medium |
-| better-shot | Capture/recording/annotation | new, medium |
+| better-shot | Capture/recording/annotation | **started**: `better-shot/` UI/screen/window capture + copy/annotate |
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
 | better-audio | PipeWire routing | new, exploratory |
 | better-wallpaper | Scenes, per-workspace wallpapers | new, medium |
