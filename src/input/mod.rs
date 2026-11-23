@@ -3096,20 +3096,29 @@ impl State {
                 self.niri.layout.toggle_overview();
                 self.niri.queue_redraw_all();
             }
+            #[cfg(feature = "navigation")]
             Action::ToggleGridOverview => {
                 self.niri.layout.toggle_grid_overview();
                 self.niri.queue_redraw_all();
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::ToggleGridOverview => {}
+            #[cfg(feature = "navigation")]
             Action::OpenGridOverview => {
                 if self.niri.layout.open_grid_overview() {
                     self.niri.queue_redraw_all();
                 }
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::OpenGridOverview => {}
+            #[cfg(feature = "navigation")]
             Action::CloseGridOverview => {
                 if self.niri.layout.close_grid_overview() {
                     self.niri.queue_redraw_all();
                 }
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::CloseGridOverview => {}
             Action::OpenOverview => {
                 if self.niri.layout.open_overview() {
                     self.niri.queue_redraw_all();
@@ -5444,13 +5453,16 @@ impl State {
                 // Four fingers open and close the grid overview, following the fingers. Like
                 // the hot corner, it opens on the monitor under the cursor unless it opens on
                 // all of them.
-                if !self.niri.config.borrow().grid_overview.grid_all_monitors {
-                    if let Some(output) = self.niri.output_under_cursor() {
-                        self.niri.layout.focus_output(&output);
+                #[cfg(feature = "navigation")]
+                {
+                    if !self.niri.config.borrow().grid_overview.grid_all_monitors {
+                        if let Some(output) = self.niri.output_under_cursor() {
+                            self.niri.layout.focus_output(&output);
+                        }
                     }
+                    self.niri.layout.grid_gesture_begin();
+                    self.niri.queue_redraw_all();
                 }
-                self.niri.layout.grid_gesture_begin();
-                self.niri.queue_redraw_all();
 
                 // We handled this event.
                 return;
@@ -5564,10 +5576,13 @@ impl State {
             handled = true;
         }
 
+        #[cfg(feature = "navigation")]
         let res = self
             .niri
             .layout
             .grid_gesture_update(-uninverted_delta_y, timestamp);
+        #[cfg(not(feature = "navigation"))]
+        let res: Option<bool> = None;
         if let Some(redraw) = res {
             if redraw {
                 self.niri.queue_redraw_all();
@@ -5611,7 +5626,10 @@ impl State {
             handled = true;
         }
 
+        #[cfg(feature = "navigation")]
         let res = self.niri.layout.grid_gesture_end();
+        #[cfg(not(feature = "navigation"))]
+        let res = false;
         if res {
             self.niri.queue_redraw_all();
             handled = true;
@@ -6805,34 +6823,41 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
 }
 
 fn hardcoded_grid_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
-    let mods = modifiers_from_state(mods);
-    if !mods.is_empty() {
+    #[cfg(not(feature = "navigation"))]
+    {
+        let _ = (raw, mods);
         return None;
     }
+    #[cfg(feature = "navigation")]
+    {
+        let mods = modifiers_from_state(mods);
+        if !mods.is_empty() {
+            return None;
+        }
 
-    let action = match raw {
-        Keysym::h => Action::FocusColumnLeft,
-        Keysym::l => Action::FocusColumnRight,
-        Keysym::k => Action::FocusWindowOrWorkspaceUp,
-        Keysym::j => Action::FocusWindowOrWorkspaceDown,
-        _ => return None,
-    };
+        let action = match raw {
+            Keysym::h => Action::FocusColumnLeft,
+            Keysym::l => Action::FocusColumnRight,
+            Keysym::k => Action::FocusWindowOrWorkspaceUp,
+            Keysym::j => Action::FocusWindowOrWorkspaceDown,
+            _ => return None,
+        };
 
-    Some(Bind {
-        key: Key {
-            trigger: Trigger::Keysym(raw),
-            modifiers: Modifiers::empty(),
-        },
-        action: BoundAction::Press(vec![action]),
-        repeat: true,
-        cooldown: None,
-        allow_when_locked: false,
-        allow_inhibiting: true,
-        hotkey_overlay_title: None,
-        pass_through: None,
-    })
+        Some(Bind {
+            key: Key {
+                trigger: Trigger::Keysym(raw),
+                modifiers: Modifiers::empty(),
+            },
+            action: BoundAction::Press(vec![action]),
+            repeat: true,
+            cooldown: None,
+            allow_when_locked: false,
+            allow_inhibiting: true,
+            hotkey_overlay_title: None,
+            pass_through: None,
+        })
+    }
 }
-
 pub fn apply_libinput_settings(
     config: &niri_config::Input,
     device: &mut input::Device,
@@ -7567,6 +7592,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "navigation")]
     fn grid_and_overview_hjkl_are_hardcoded_focus_binds() {
         let no_mods = ModifiersState::default();
         let with_mod = ModifiersState {

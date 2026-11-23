@@ -11,11 +11,17 @@ mod color_management;
 mod confine_mouse;
 mod floating;
 mod fullscreen;
+#[cfg(feature = "navigation")]
 mod grid_actions;
+#[cfg(feature = "navigation")]
 mod grid_activation;
+#[cfg(feature = "navigation")]
 mod grid_flow;
+#[cfg(feature = "navigation")]
 mod grid_focus_follows_mouse;
+#[cfg(feature = "navigation")]
 mod grid_input;
+#[cfg(feature = "navigation")]
 mod grid_scroll;
 
 mod keyboard_config;

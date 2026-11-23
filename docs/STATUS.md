@@ -103,7 +103,7 @@ Verified on this branch:
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
 | `cargo test --workspace --no-default-features` | pass, 807 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
-| `cargo test -p niri --no-default-features` | pass, 629 tests (effects/navigation tests compiled out) |
+| `cargo test -p niri --no-default-features` | pass, 598 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
@@ -172,11 +172,13 @@ picked up without re-auditing.
    gates the global/region/output/window shader engine and decoration light
    (render path, reload hooks, continuous-redraw gates, backend pass
    registration, decoration-light damage ordering, and the tty ping-pong
-   handoff). `navigation` is now a real feature that gates the screen
-   magnifier end to end (actions, drag grab, center animation, cursor
-   pre-transform, render pass, capture suppression, screencast mapping);
-   grid overview and carousel still need cfg gating across
-   layout/monitor/input. The true minimal build is verified per package with
+   handoff). `navigation` gates the screen magnifier end to end (actions,
+   drag grab, center animation, cursor pre-transform, render pass, capture
+   suppression, screencast mapping) and the grid-overview entry points
+   (toggle/open/close actions, hot corner, four-finger gesture, hardcoded
+   H/J/K/L binds), so a minimal build cannot open the grid. The grid layout
+   model still compiles; eliminating it and gating the carousel remain. The
+   true minimal build is verified per package with
    `cargo check -p niri --no-default-features`, since workspace builds unify
    defaults from other members.
 8. **Multi-action binds — done.** Binds hold ordered action lists per phase
