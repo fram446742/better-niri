@@ -6,6 +6,7 @@ members = [
     "companion-automation",
     "companion-hooks",
     "companion-system",
+    "companion-niri",
     "companion-daemon",
     "companionctl",
 ]
@@ -24,3 +25,4 @@ companion-parking = { path = "companion-parking" }
 companion-automation = { path = "companion-automation" }
 companion-hooks = { path = "companion-hooks" }
 companion-system = { path = "companion-system" }
+companion-niri = { path = "companion-niri" }

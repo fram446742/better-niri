@@ -15,4 +15,5 @@ companion-parking.workspace = true
 companion-automation.workspace = true
 companion-hooks.workspace = true
 companion-system.workspace = true
+companion-niri.workspace = true
 serde_json.workspace = true

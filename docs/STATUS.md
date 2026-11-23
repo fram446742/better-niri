@@ -168,10 +168,12 @@ picked up without re-auditing.
    (JSON-line UDS protocol + registry), `companion-parking`,
    `companion-automation` (registry-dispatched sequences),
    `companion-hooks`, `companion-system`, the `better-companion` daemon and
-   `companionctl`. Remaining: compositor-side parking/sticky integration,
-   Phase B/C rules and adapters, and the companion apps from
-   `ECOSYSTEM.md`. `better-portal` extraction from the compositor's existing
-   portal backend is still pending.
+   `companionctl`; `companion-niri` adds a `compositor.*` bridge that performs
+   typed niri actions and queries outputs/workspaces/windows over IPC.
+   Remaining: parking/sticky auto-tracking from compositor events, Phase B/C
+   rules and adapters, and the companion apps from `ECOSYSTEM.md`.
+   `better-portal` extraction from the compositor's existing portal backend is
+   still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
    `effects` and `navigation` are done. The vertical main axis is available
    globally, per output and per workspace; axis-aware wheel/gesture input
