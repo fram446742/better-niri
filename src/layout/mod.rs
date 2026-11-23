@@ -78,6 +78,7 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
+pub mod carousel;
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
@@ -414,6 +415,15 @@ pub struct Layout<W: LayoutElement> {
     overview_progress: Option<OverviewProgress>,
     /// Ongoing touchpad gesture opening or closing the grid overview.
     grid_gesture: Option<OverviewGesture>,
+    /// Which output the consolidated carousel is centered on. Meaningful only
+    /// while in the carousel regime; defaults to the active monitor.
+    /// Which output the consolidated carousel is centered on. Initialized to 0;
+    /// Phase 2 sets it to the centered output when entering the carousel regime.
+    /// Meaningful only while in the carousel regime.
+    ///
+    /// Not yet read anywhere; consumed by carousel rendering in a follow-up task.
+    #[allow(dead_code)]
+    carousel_centered_output_idx: usize,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
@@ -816,6 +826,7 @@ impl<W: LayoutElement> Layout<W> {
             grid_overview_open_count: 0,
             overview_progress: None,
             grid_gesture: None,
+            carousel_centered_output_idx: 0,
             options: Rc::new(options),
         }
     }
@@ -843,6 +854,7 @@ impl<W: LayoutElement> Layout<W> {
             grid_overview_open_count: 0,
             overview_progress: None,
             grid_gesture: None,
+            carousel_centered_output_idx: 0,
             options: opts,
         }
     }
@@ -2221,6 +2233,17 @@ impl<W: LayoutElement> Layout<W> {
         monitors.iter()
     }
 
+    /// Sibling outputs to show as cards for `host`: every monitor that is not
+    /// `host`, not isolated, and has at least one window. Deterministic order
+    /// (layout monitor order).
+    pub fn carousel_participants(&self, host: &Output) -> Vec<&Monitor<W>> {
+        self.monitors()
+            .filter(|m| m.output() != host)
+            .filter(|m| !m.is_isolated())
+            .filter(|m| m.has_windows())
+            .collect()
+    }
+
     pub fn monitors_mut(&mut self) -> impl Iterator<Item = &mut Monitor<W>> + '_ {
         let monitors = if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
             &mut monitors[..]
@@ -3542,6 +3565,25 @@ impl<W: LayoutElement> Layout<W> {
         compute_overview_zoom(self.options.overview.zoom, progress)
     }
 
+    pub fn in_carousel_regime(&self) -> bool {
+        let Some(cc) = self.options.overview.consolidated_carousel else {
+            return false;
+        };
+        // Use the active monitor's runtime zoom target, not the config default: the carousel
+        // regime depends on how far the user actually zoomed out.
+        let Some(mon) = self.active_monitor_ref() else {
+            return false;
+        };
+        self.overview_open && mon.overview_zoom() <= cc.activation_zoom
+    }
+
+    #[cfg(test)]
+    fn set_overview_zoom_for_test(&mut self, target: f64) {
+        if let Some(monitor) = self.active_monitor() {
+            monitor.set_zoom_target_no_anim(target);
+        }
+    }
+
     #[cfg(test)]
     fn verify_invariants(&self) {
         use std::collections::HashSet;
@@ -3698,7 +3740,11 @@ impl<W: LayoutElement> Layout<W> {
                 "monitor base options must be synchronized with layout"
             );
 
-            assert_eq!(self.overview_open, monitor.overview_open);
+            let consolidated = self.options.overview.consolidated_carousel.is_some();
+            let expect_open = self.overview_open
+                && !monitor.isolated
+                && (!consolidated || idx == active_monitor_idx);
+            assert_eq!(expect_open, monitor.overview_open);
             assert_eq!(
                 self.overview_progress.as_ref().map(|p| p.value()),
                 monitor.overview_progress_value()
@@ -6779,13 +6825,25 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn set_monitors_overview_state(&mut self) {
-        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+        let consolidated = self.options.overview.consolidated_carousel.is_some();
+        let overview_open = self.overview_open;
+
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &mut self.monitor_set
+        else {
             return;
         };
+        let active_idx = *active_monitor_idx;
 
-        for mon in monitors {
-            // Isolated outputs never enter the overview.
-            mon.overview_open = self.overview_open && !mon.isolated;
+        for (idx, mon) in monitors.iter_mut().enumerate() {
+            // Isolated outputs never enter the overview. In consolidated-carousel
+            // mode the overview is a lens on the focused output only, so every
+            // other physical output stays live.
+            mon.overview_open =
+                overview_open && !mon.isolated && (!consolidated || idx == active_idx);
             mon.set_overview_progress(self.overview_progress.as_ref());
         }
     }
