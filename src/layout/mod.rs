@@ -4174,6 +4174,21 @@ impl<W: LayoutElement> Layout<W> {
         true
     }
 
+    /// Main axis of the carousel lens's monitor, when a lens is settled.
+    #[cfg(feature = "navigation")]
+    pub fn carousel_lens_main_axis(&self) -> Option<niri_config::MainAxis> {
+        if !self.in_carousel_lens() {
+            return None;
+        }
+        let rotation = self.carousel_rotation_target();
+        let ring = self.carousel_ring();
+        let (target_idx, _) = ring
+            .iter()
+            .find(|(_, pos)| pos.round() == rotation.round())?;
+        let outputs = self.carousel_outputs();
+        Some(outputs.get(*target_idx)?.active_workspace_ref().main_axis())
+    }
+
     /// The monitor the settled lens is showing, when `in_carousel_lens()`
     /// holds (rotation settled on a non-host ring member).
     #[cfg(feature = "navigation")]
@@ -8715,6 +8730,10 @@ impl<W: LayoutElement> Layout<W> {
     }
     pub fn carousel_configured(&self) -> bool {
         false
+    }
+
+    pub fn carousel_lens_main_axis(&self) -> Option<niri_config::MainAxis> {
+        None
     }
 
     fn on_active_monitor_changed(&mut self) {

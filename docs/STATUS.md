@@ -103,7 +103,7 @@ Verified on this branch:
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
 | `cargo test --workspace --no-default-features` | pass, 807 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
-| `cargo test -p niri --no-default-features` | pass, 393 tests (effects/navigation tests compiled out) |
+| `cargo test -p niri --no-default-features` | pass, 403 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
@@ -168,7 +168,10 @@ picked up without re-auditing.
    `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
    Companion repos start only after Phase 1.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
-   `effects` and `navigation` are done. `effects`
+   `effects` and `navigation` are done. The vertical main axis is available
+   globally, per output and per workspace; axis-aware wheel/gesture input
+   (`axis_policy`), spatial-movement and move-grab mapping, touch-overview
+   gestures and closing-window view offsets are ported. `effects`
    gates the global/region/output/window shader engine and decoration light
    (render path, reload hooks, continuous-redraw gates, backend pass
    registration, decoration-light damage ordering, and the tty ping-pong

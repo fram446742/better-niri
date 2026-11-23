@@ -121,6 +121,23 @@ layout {
 }
 ```
 
+For a portrait monitor next to a landscape one, override it per output:
+
+```kdl
+output "DP-2" {
+    layout {
+        main-axis "vertical"
+        default-column-width { proportion 0.5; }
+    }
+}
+```
+
+The same `main-axis` can be set in a named workspace's `layout` block; workspace settings
+override output settings, which override the global layout. Directional focus/move actions
+keep their physical screen directions, while `first`/`last`, column indices and size actions
+follow the layout axes. Workspaces sit along the cross axis (horizontally in vertical mode),
+and scrolling gestures follow the same two axes.
+
 ### `gaps`
 
 Set gaps around (inside and outside) windows in logical pixels.

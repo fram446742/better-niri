@@ -4896,7 +4896,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let view_x = self.view_pos();
         self.closing_windows
             .iter()
-            .map(move |closing| closing.position_in_view(view_x))
+            .map(move |closing| closing.position_in_view(Point::from((view_x, 0.))))
     }
 
     #[cfg(test)]

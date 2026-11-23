@@ -220,10 +220,10 @@ impl ClosingWindow {
         ));
     }
 
-    pub(super) fn position_in_view(&self, view_x: f64) -> Point<f64, Logical> {
+    pub(super) fn position_in_view(&self, view_loc: Point<f64, Logical>) -> Point<f64, Logical> {
         let mut pos = self.pos;
         pos.x += self.move_x.as_ref().map_or(0., Animation::value);
-        pos.x -= view_x;
+        pos -= view_loc;
         pos
     }
 
@@ -259,7 +259,7 @@ impl ClosingWindow {
                 let elem = PrimaryGpuTextureRenderElement(elem);
                 let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), 1.);
 
-                let location = self.position_in_view(view_rect.loc.x) + offset;
+                let location = self.position_in_view(view_rect.loc) + offset;
                 let elem = RelocateRenderElement::from_element(
                     elem,
                     location.to_physical_precise_round(scale),
@@ -283,7 +283,7 @@ impl ClosingWindow {
 
             // Round to physical pixels relative to the view position. This is similar to what
             // happens when rendering normal windows.
-            let relative = self.position_in_view(view_rect.loc.x);
+            let relative = self.position_in_view(view_rect.loc);
             let pos = view_rect.loc + relative.to_physical_precise_round(scale).to_logical(scale);
 
             let geo_loc = Vec2::new(pos.x as f32, pos.y as f32);
@@ -340,7 +340,7 @@ impl ClosingWindow {
             ((1. - clamped_progress) / 5. + 0.8).max(0.),
         );
 
-        let location = self.position_in_view(view_rect.loc.x) + offset;
+        let location = self.position_in_view(view_rect.loc) + offset;
         let elem = RelocateRenderElement::from_element(
             elem,
             location.to_physical_precise_round(scale),
