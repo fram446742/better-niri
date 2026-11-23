@@ -110,16 +110,16 @@ duplicates at startup.
 
 | Category / prefix | Owner module | Actions (examples) | State |
 | --- | --- | --- | --- |
-| `sticky.*` | `sticky` | add, remove, toggle, list, set follow policy | pinned windows, per-output policy |
-| `stage.*` | `stage` | add, remove, toggle, list, restore, add-all, remove-all | staged windows, stage workspace |
-| `scratchpad.*` | `scratchpad` | add, restore, toggle, list, set workspace | LIFO stacks, parking areas |
-| `rules.*` | `rules` | reload, validate, explain, dry-run, set priority | rule set |
-| `launch.*` | `launch` | focus-or-spawn, cycle, list matches | app match cache |
-| `singleton.*` | `singleton` | ensure, focus-existing, spawn-policy | instance tracking |
-| `swallow.*` | `swallow` | enable, disable, associate, status | parent/child map |
-| `hooks.*` | `hooks` | workspace/output/session enter/leave, run, list | hook table |
-| `idle.*` | `idle` (candidate) | inhibit, release, set profile, status | idle state |
-| `orientation.*` | `orientation` (candidate) | enable, disable, set orientation, status | sensor state |
+| `window.sticky.*` | `sticky` | add, remove, toggle, list, set follow policy | pinned windows, per-output policy |
+| `window.stage.*` | `stage` | add, remove, toggle, list, restore, add-all, remove-all | staged windows, stage workspace |
+| `window.scratchpad.*` | `scratchpad` | add, restore, toggle, list, set workspace | LIFO stacks, parking areas |
+| `automation.rules.*` | `rules` | reload, validate, explain, dry-run, set priority | rule set |
+| `automation.launch.*` | `launch` | focus-or-spawn, cycle, list matches | app match cache |
+| `automation.singleton.*` | `singleton` | ensure, focus-existing, spawn-policy | instance tracking |
+| `automation.swallow.*` | `swallow` | enable, disable, associate, status | parent/child map |
+| `event.hooks.*` | `hooks` | workspace/output/session enter/leave, run, list | hook table |
+| `system.idle.*` | `idle` | inhibit, release, set profile, status | idle state |
+| `system.orientation.*` | `orientation` | enable, disable, set orientation, status | sensor state |
 
 Core, not module-owned:
 
@@ -148,13 +148,32 @@ Core, not module-owned:
 6. Every action returns a typed result/error, is listed by
    `companionctl actions --json`, and is covered by the module's tests.
 
-### Naming
+### Naming and hierarchy
 
-- CLI: `companionctl sticky toggle`, `companionctl stage restore`,
-  `companionctl scratchpad toggle`, `companionctl rules explain`.
-- UDS/JSON: `sticky.toggle`, `stage.restore`, `scratchpad.toggle`.
-- Config: `[modules.sticky]`, `[modules.stage]`, `[modules.scratchpad]`.
-- Rust: `modules::sticky::StickyModule`, one `Action` enum per category.
+Actions are hierarchical and explicit:
+
+- `window.sticky.toggle`
+- `window.stage.restore`
+- `window.scratchpad.toggle`
+- `automation.rules.explain`
+- `automation.launch.focus-or-spawn`
+- `system.idle.inhibit`
+
+Namespaces (`window`, `automation`, `event`, `system`, `core`) are grouping
+nodes; a module owns a **leaf subtree**, not the whole namespace. The registry
+uses longest-prefix matching and rejects duplicate subtree owners.
+
+- CLI: `companionctl window sticky toggle`,
+  `companionctl automation launch focus-or-spawn`,
+  `companionctl system idle inhibit`.
+- UDS/JSON: `window.sticky.toggle`, `automation.rules.explain`.
+- Config: `[modules.sticky]`, `[modules.stage]`, `[modules.scratchpad]`,
+  `[modules.rules]`, `[modules.launch]`, `[modules.idle]`. Config names stay
+  short; action names stay explicit.
+- Events: `event.window.opened`, `event.window.changed`, `event.window.closed`,
+  `event.workspace.activated`, `event.output.changed`, `event.focus.changed`,
+  `event.config.reloaded`.
+- Rust: `modules::sticky::StickyModule`, one `Action` enum per leaf category.
 
 ### Dispatch
 
@@ -281,7 +300,13 @@ input = false
 - Input injection is off by default and requires explicit permission.
 - Every external request is validated; sockets are `0600`.
 
-## 8. Extension models (explained)
+## 8. Plugin runtimes and extension models
+
+The runtime-neutral plugin manager and the benchmark plan are specified in
+[`PLUGINS.md`](PLUGINS.md). The short version: Piri's compiled `Plugin` trait is
+the internal contract, not a public ABI; external services use UDS; native ABI
+and WASM are staged experiments.
+
 
 Piri (MIT, `fdfa170`) is **not** a dynamic plugin host. Its plugins are Rust
 modules implementing a `Plugin` trait (`src/plugins/mod.rs`), registered through
@@ -346,10 +371,10 @@ iteration.
 - But duplicates niri IPC/state or depends on companion anyway; another service
   to package and supervise.
 
-**Recommendation:** start both as `companion-system` modules (`idle`,
-`orientation`). Split into `better-idle`/`better-rotate` only if one needs
-independent system permissions, runs without companion, or grows its own UI/
-release cycle. The action names and config can stay compatible if split later.
+**Decision:** start both as `companion-system` modules (`idle`,
+`orientation`). Split into separate services only if one needs independent
+system permissions, runs without companion, or grows its own UI/release cycle.
+Action names and config stay compatible if split later.
 
 ## 9. Roadmap
 

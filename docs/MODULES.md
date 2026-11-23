@@ -146,15 +146,15 @@ A built-in module must:
 The same category rule applies to built-in compositor modules. Each module owns
 its action namespace and registers it once; core action matching stays small.
 
-| Module | Owned actions (examples) |
-| --- | --- |
-| core (`layout`, `outputs`, `input`, `presentation`) | window/column/workspace moves, float/fullscreen/minimise, sticky primitive, hidden workspaces, virtual/isolated outputs, per-output HDR/VRR/tearing |
-| `effects` | toggle/cycle global, region, window and output shaders; reload presets; list shader status |
-| `navigation` | toggle/open/close grid; overview zoom; carousel rotate; magnifier toggle/move/zoom |
-| `cursor` | SVG theme reload/selection, shake actions/status |
-| `agent` | agent seat enable/disable, agent input/actions, capture receipts, take-over |
-| `kde` | KDE output order, screenshot/colour-picker requests, blur capability |
-| `vulkan` | renderer selection/status/diagnostics (not a user-facing visual feature) |
+| Module | Owned action prefix | Examples |
+| --- | --- | --- |
+| core (`layout`, `outputs`, `input`, `presentation`) | `compositor.core.*` (native actions) | window/column/workspace moves, float/fullscreen/minimise, sticky primitive, hidden workspaces, virtual/isolated outputs, per-output HDR/VRR/tearing |
+| `effects` | `compositor.effects.*` | toggle/cycle global, region, window and output shaders; reload presets; shader status |
+| `navigation` | `compositor.navigation.*` | toggle/open/close grid; overview zoom; carousel rotate; magnifier toggle/move/zoom |
+| `cursor` | `compositor.cursor.*` | SVG theme reload/selection, shake actions/status |
+| `agent` | `compositor.agent.*` | agent seat enable/disable, agent input/actions, capture receipts, take-over |
+| `kde` | `compositor.kde.*` | KDE output order, screenshot/colour-picker requests, blur capability |
+| `vulkan` | `compositor.vulkan.*` | renderer selection/status/diagnostics (not a user-facing visual feature) |
 
 Rules:
 
@@ -164,6 +164,13 @@ Rules:
 - Disabled modules do not register actions and are absent from the action list.
 - IPC capability discovery reports module/action availability so tools can
   degrade gracefully.
+- Namespaces (`compositor`, `compositor.effects`, ...) are grouping nodes; a
+  module owns a leaf subtree. Longest-prefix matching resolves dispatch.
+- The native niri action names remain unchanged for compatibility; the
+  hierarchical names are the module registry/UDS surface.
+
+The plugin runtime architecture (compiled, native ABI, WASM, UDS) is in
+[`PLUGINS.md`](PLUGINS.md).
 
 ## 5. Performance rules by tier
 

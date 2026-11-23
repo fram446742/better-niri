@@ -145,10 +145,11 @@ registry grouped by category:
 
 - `better-niri` IPC: module/capability query plus the native actions.
 - `better-companion`: `companionctl actions --json`, UDS `core.api.actions`.
-- Each action has a stable name, category, owner, argument schema, permissions
-  and whether it is runtime-available.
-- Tools and Noctalia plugins should query this registry instead of hardcoding
-  feature detection.
+- Each action has a stable hierarchical name (`window.sticky.toggle`,
+  `automation.rules.explain`, `compositor.navigation.open-grid`), owner,
+  argument schema, permissions and runtime availability.
+- Namespaces are grouping nodes; a module owns a leaf subtree. Tools and
+  Noctalia plugins query this registry instead of hardcoding feature detection.
 
 ### Companion APIs
 
