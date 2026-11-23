@@ -53,9 +53,21 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use tile::{Tile, TileRenderElement};
 use workspace::{WorkspaceAddWindowTarget, WorkspaceId};
 
-use self::grid_overview::GridDirection;
+#[cfg(feature = "navigation")]
+pub use self::grid_overview::GridDirection;
+#[cfg(not(feature = "navigation"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
 pub use self::monitor::MonitorRenderElement;
 use self::monitor::{Monitor, WorkspaceSwitch};
+#[cfg(feature = "navigation")]
+use self::workspace::{GridWindowVisual, OutputId, Workspace};
+#[cfg(not(feature = "navigation"))]
 use self::workspace::{GridWindowVisual, OutputId, Workspace};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
@@ -82,6 +94,7 @@ pub mod carousel;
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
+#[cfg(feature = "navigation")]
 pub mod grid_overview;
 pub mod insert_hint_element;
 pub mod monitor;
@@ -6075,6 +6088,7 @@ impl<W: LayoutElement> Layout<W> {
     /// Whether the grid overview is open on the monitor of this output.
     ///
     /// While it is open, minimized windows on the output show live previews.
+    #[cfg(feature = "navigation")]
     pub fn is_grid_overview_open_on(&self, output: &Output) -> bool {
         if let MonitorSet::Normal { monitors, .. } = &self.monitor_set {
             return monitors
@@ -8106,10 +8120,12 @@ impl<W: LayoutElement> Layout<W> {
         self.overview_open
     }
 
+    #[cfg(feature = "navigation")]
     pub fn is_grid_overview_open(&self) -> bool {
         self.grid_overview_open_in_scope()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn window_is_in_open_grid_overview(&self, id: &W::Id) -> bool {
         // A window dragged over the grid is out of the layout for the time being, but it is still
         // a grid window rather than one sitting on top of the grid (like an ignore-grid-overview
@@ -8128,6 +8144,7 @@ impl<W: LayoutElement> Layout<W> {
         self.options.grid_overview.grid_all_monitors
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_overview_open_in_scope(&self) -> bool {
         let MonitorSet::Normal {
             monitors,
@@ -8145,6 +8162,7 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn set_grid_overview_open_in_scope(&mut self, open: bool) -> bool {
         let all_monitors = self.grid_all_monitors();
         let MonitorSet::Normal {
@@ -8174,6 +8192,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     /// The number of times the grid overview was opened.
+    #[cfg(feature = "navigation")]
     pub fn grid_overview_open_count(&self) -> u64 {
         self.grid_overview_open_count
     }
@@ -8182,6 +8201,7 @@ impl<W: LayoutElement> Layout<W> {
     ///
     /// The window can be in the grid of any monitor; that monitor becomes the active one, since
     /// closing the grid confirms the focused cell of the active monitor.
+    #[cfg(feature = "navigation")]
     pub fn focus_grid_cell_for_window(&mut self, id: &W::Id) -> bool {
         let MonitorSet::Normal {
             monitors,
@@ -8206,6 +8226,7 @@ impl<W: LayoutElement> Layout<W> {
         false
     }
 
+    #[cfg(feature = "navigation")]
     fn close_grid_overview_for_monitor(&mut self, monitor_idx: usize) {
         let all_monitors = self.grid_all_monitors();
         let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
@@ -8221,6 +8242,7 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn activate_grid_focused_window_on_active_monitor(&mut self) -> bool {
         let MonitorSet::Normal {
             monitors,
@@ -8240,6 +8262,7 @@ impl<W: LayoutElement> Layout<W> {
         ws.activate_grid_focused_window_before_close()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn toggle_grid_overview(&mut self) {
         if self.grid_overview_open_in_scope() {
             self.close_grid_overview();
@@ -8248,6 +8271,7 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn open_grid_overview(&mut self) -> bool {
         if self.grid_overview_open_in_scope() {
             return false;
@@ -8255,6 +8279,7 @@ impl<W: LayoutElement> Layout<W> {
         self.set_grid_overview_open_in_scope(true)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn close_grid_overview(&mut self) -> bool {
         if !self.grid_overview_open_in_scope() {
             return false;
@@ -8263,11 +8288,13 @@ impl<W: LayoutElement> Layout<W> {
         self.set_grid_overview_open_in_scope(false)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_focused_window_id(&self) -> Option<W::Id> {
         self.active_workspace()
             .and_then(|ws| ws.grid_focused_window_id())
     }
 
+    #[cfg(feature = "navigation")]
     pub fn confirm_grid_selection(&mut self) {
         let Some(id) = self.grid_focused_window_id() else {
             return;
@@ -8275,6 +8302,7 @@ impl<W: LayoutElement> Layout<W> {
         self.confirm_grid_selection_for_window(&id);
     }
 
+    #[cfg(feature = "navigation")]
     pub fn confirm_grid_selection_for_window(&mut self, id: &W::Id) -> bool {
         let overview_open = self.overview_open;
         let overview_anim = self.options.animations.overview_open_close.0;
@@ -8337,10 +8365,12 @@ impl<W: LayoutElement> Layout<W> {
         true
     }
 
+    #[cfg(feature = "navigation")]
     pub fn dismiss_grid_overview(&mut self) -> bool {
         self.close_grid_overview()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_click_activated(&mut self) {
         if let Some(ws) = self.active_workspace_mut() {
             if let Some(active_id) = ws.grid_focused_window_id() {
@@ -8537,4 +8567,41 @@ fn compute_overview_zoom(target_zoom: f64, overview_progress: Option<f64>) -> f6
     } else {
         1.
     }
+}
+
+#[cfg(not(feature = "navigation"))]
+impl<W: LayoutElement> Layout<W> {
+    pub fn is_grid_overview_open(&self) -> bool {
+        false
+    }
+    pub fn window_is_in_open_grid_overview(&self, _id: &W::Id) -> bool {
+        false
+    }
+    pub fn grid_overview_open_count(&self) -> u64 {
+        0
+    }
+    pub fn is_grid_overview_open_on(&self, _output: &Output) -> bool {
+        false
+    }
+    pub fn focus_grid_cell_for_window(&mut self, _id: &W::Id) -> bool {
+        false
+    }
+    pub fn toggle_grid_overview(&mut self) {}
+    pub fn open_grid_overview(&mut self) -> bool {
+        false
+    }
+    pub fn close_grid_overview(&mut self) -> bool {
+        false
+    }
+    pub fn grid_focused_window_id(&self) -> Option<W::Id> {
+        None
+    }
+    pub fn confirm_grid_selection(&mut self) {}
+    pub fn confirm_grid_selection_for_window(&mut self, _id: &W::Id) -> bool {
+        false
+    }
+    pub fn dismiss_grid_overview(&mut self) -> bool {
+        false
+    }
+    pub fn grid_click_activated(&mut self) {}
 }

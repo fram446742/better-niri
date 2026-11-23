@@ -12,6 +12,7 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
+#[cfg(feature = "navigation")]
 use super::grid_overview::GridDirection;
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
@@ -20,6 +21,8 @@ use super::workspace::{
     compute_working_area, GridRenderPass, OutputId, Workspace, WorkspaceAddWindowTarget,
     WorkspaceId, WorkspaceRenderElement,
 };
+#[cfg(not(feature = "navigation"))]
+use super::GridDirection;
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;

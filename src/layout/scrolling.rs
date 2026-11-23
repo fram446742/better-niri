@@ -11,6 +11,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
+#[cfg(feature = "navigation")]
 use super::grid_overview::GridItem;
 use super::monitor::InsertPosition;
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
@@ -516,6 +517,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns.iter_mut().flat_map(|col| col.tiles.iter_mut())
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_overview_items(&self) -> Vec<(GridItem<W>, Size<f64, Logical>)> {
         let mut items = Vec::new();
 
@@ -546,6 +548,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         items
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_item_for_window(&self, window: &W::Id) -> Option<GridItem<W>> {
         self.columns.iter().enumerate().find_map(|(col_idx, col)| {
             let tile_idx = col.position(window)?;
@@ -565,10 +568,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         })
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_preview(&self, item: &GridItem<W>) -> Option<GridPreview<'_, W>> {
         self.grid_preview_at_view_pos(item, self.view_pos(), false)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_preview_with_stable_origin(
         &self,
         item: &GridItem<W>,
@@ -576,10 +581,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.grid_preview_at_view_pos(item, self.view_pos(), true)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_preview_at_target(&self, item: &GridItem<W>) -> Option<GridPreview<'_, W>> {
         self.grid_preview_at_view_pos(item, self.target_view_pos(), false)
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_preview_at_view_pos(
         &self,
         item: &GridItem<W>,
@@ -677,6 +684,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         })
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_item_visible_when_closing(&self, item: &GridItem<W>) -> bool {
         // Minimized windows disappear with the grid instead of flying back into the strip.
         match item {
@@ -695,6 +703,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn update_grid_item_render_elements(
         &mut self,
         item: &GridItem<W>,

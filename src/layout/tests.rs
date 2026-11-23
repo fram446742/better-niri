@@ -6243,6 +6243,7 @@ fn grid_with_minimized_ignored_floating() -> Layout<TestWindow> {
     layout
 }
 
+#[cfg(feature = "navigation")]
 fn grid_entry_render_scale(layout: &Layout<TestWindow>, window: usize) -> Option<f64> {
     let ws = layout.active_workspace().unwrap();
     let go = ws.grid_overview()?;
@@ -6413,6 +6414,7 @@ fn grid_or_monitor_focus_actions_cross_to_the_other_monitor_at_the_edge() {
     layout.verify_invariants();
 }
 
+#[cfg(feature = "navigation")]
 fn grid_cell_ids(layout: &Layout<TestWindow>, output: &str) -> Vec<usize> {
     let mon = layout
         .monitors()
@@ -6544,6 +6546,7 @@ fn grid_reflows_when_a_window_goes_fullscreen_out_of_its_column() {
 
 #[cfg(feature = "navigation")]
 #[test]
+#[cfg(feature = "navigation")]
 fn grid_with_a_gap_too_large_keeps_positive_sizes() {
     let options = Options {
         grid_overview: niri_config::GridOverview {
@@ -6571,6 +6574,7 @@ fn grid_with_a_gap_too_large_keeps_positive_sizes() {
     }
 }
 
+#[cfg(feature = "navigation")]
 type GridLayoutItems = Vec<(
     super::grid_overview::GridItem<TestWindow>,
     super::grid_overview::GridSource,
@@ -6583,6 +6587,7 @@ type GridFloatingSpec = ((f64, f64), (f64, f64));
 
 /// Grid layout items: tiled windows, with the tabs of one column sharing its index, then floating
 /// windows. Window ids count up from 1 in that order.
+#[cfg(feature = "navigation")]
 fn grid_layout_items(tiled: &[GridTiledSpec], floating: &[GridFloatingSpec]) -> GridLayoutItems {
     use super::grid_overview::{GridItem, GridSource};
 
@@ -6621,6 +6626,7 @@ fn grid_layout_items(tiled: &[GridTiledSpec], floating: &[GridFloatingSpec]) -> 
     items
 }
 
+#[cfg(feature = "navigation")]
 fn assert_grid_layout_is_sound(
     layout: &super::grid_overview::GridLayout<TestWindow>,
     area: Rectangle<f64, Logical>,
@@ -6711,6 +6717,7 @@ fn grid_layout_keeps_strip_order_and_tabs_together() {
 
 #[cfg(feature = "navigation")]
 #[test]
+#[cfg(feature = "navigation")]
 fn grid_layout_is_sound_for_many_shapes() {
     use super::grid_overview::GridLayout;
 
@@ -6823,6 +6830,7 @@ fn grid_layout_keeps_its_scale_for_small_changes_while_open() {
     );
 }
 
+#[cfg(feature = "navigation")]
 fn floating_centers(
     layout: &super::grid_overview::GridLayout<TestWindow>,
 ) -> Vec<(usize, Point<f64, Logical>)> {
@@ -7145,6 +7153,7 @@ fn grid_focus_ring_layout(transition: niri_config::GridFocusRingTransition) -> L
     layout
 }
 
+#[cfg(feature = "navigation")]
 fn grid_focus_ring_windows(layout: &Layout<TestWindow>) -> Vec<usize> {
     let go = layout.active_workspace().unwrap().grid_overview().unwrap();
     let mut ids: Vec<usize> = go.focus_ring_windows().copied().collect();
@@ -7401,6 +7410,7 @@ fn grid_window_visual_rect(layout: &Layout<TestWindow>, window: usize) -> Rectan
     Rectangle::new(tile_pos, tile_size.upscale(scale))
 }
 
+#[cfg(feature = "navigation")]
 fn grid_entry_target_size(layout: &Layout<TestWindow>, window: usize) -> Size<f64, Logical> {
     layout
         .active_workspace()
@@ -7414,6 +7424,7 @@ fn grid_entry_target_size(layout: &Layout<TestWindow>, window: usize) -> Size<f6
         .unwrap()
 }
 
+#[cfg(feature = "navigation")]
 fn grid_rearrange_anim_value(layout: &Layout<TestWindow>) -> f64 {
     layout
         .active_workspace()
@@ -7426,6 +7437,7 @@ fn grid_rearrange_anim_value(layout: &Layout<TestWindow>) -> f64 {
         .value()
 }
 
+#[cfg(feature = "navigation")]
 fn grid_has_rearrange_anim(layout: &Layout<TestWindow>) -> bool {
     layout
         .active_workspace()
@@ -11975,6 +11987,7 @@ fn half_width_window(id: usize) -> TestWindowParams {
     params
 }
 
+#[cfg(feature = "navigation")]
 fn grid_rows(layout: &Layout<TestWindow>) -> usize {
     let go = layout.active_workspace().unwrap().grid_overview().unwrap();
     go.layout
@@ -11985,6 +11998,7 @@ fn grid_rows(layout: &Layout<TestWindow>) -> usize {
         .map_or(0, |row| row + 1)
 }
 
+#[cfg(feature = "navigation")]
 fn grid_scale(layout: &Layout<TestWindow>) -> f64 {
     layout
         .active_workspace()
@@ -12218,6 +12232,7 @@ fn grid_gesture_layout() -> Layout<TestWindow> {
     check_ops(ops)
 }
 
+#[cfg(feature = "navigation")]
 fn grid_progress(layout: &Layout<TestWindow>) -> Option<f64> {
     let go = layout.active_workspace().unwrap().grid_overview()?;
     go.progress.is_some().then(|| go.progress_value())

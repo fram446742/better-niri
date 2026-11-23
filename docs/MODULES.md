@@ -311,6 +311,8 @@ compositor IPC fallback.
   pre-transform, magnifier render pass, screenshot-capture suppression and
   screencast pointer mapping — plus the grid-overview entry points (toggle/
   open/close actions, hot corner, four-finger gesture and the hardcoded
-  H/J/K/L binds). Off builds have no way to open the grid; its layout model
-  still compiles, with full elimination and the carousel as follow-ups.
+  H/J/K/L binds), the grid gesture state, its visual helpers and renderer,
+  and the whole `grid_overview` model plus the `Workspace.grid_overview`
+  field (grid methods fall back to no-op stubs). Only thin layout plumbing
+  remains; the carousel is still a follow-up.
 - `agent` (off by default): the automation seat.

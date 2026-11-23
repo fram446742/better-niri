@@ -216,6 +216,7 @@ fn unfullscreen_lets_pointer_leave() {
 }
 
 #[test]
+#[cfg(feature = "navigation")]
 fn grid_overview_lets_pointer_leave() {
     let (mut f, id, surface, pointer) = set_up(true);
     fullscreen(&mut f, id, &surface);

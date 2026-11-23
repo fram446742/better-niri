@@ -103,7 +103,7 @@ Verified on this branch:
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
 | `cargo test --workspace --no-default-features` | pass, 807 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
-| `cargo test -p niri --no-default-features` | pass, 438 tests (effects/navigation tests compiled out) |
+| `cargo test -p niri --no-default-features` | pass, 437 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
@@ -177,9 +177,9 @@ picked up without re-auditing.
    suppression, screencast mapping) and the grid-overview entry points
    (toggle/open/close actions, hot corner, four-finger gesture, hardcoded
    H/J/K/L binds), the grid gesture state, the grid focus-ring/tab-indicator/
-   minimized-highlight visual updates and the grid renderer. The grid layout
-   model and the Workspace grid glue still compile; eliminating them and
-   gating the carousel remain. The
+   minimized-highlight visual updates, the grid renderer, and the whole
+   `grid_overview` model plus the `Workspace.grid_overview` field (methods
+   fall back to no-op stubs). The carousel gating remains. The
    true minimal build is verified per package with
    `cargo check -p niri --no-default-features`, since workspace builds unify
    defaults from other members.
