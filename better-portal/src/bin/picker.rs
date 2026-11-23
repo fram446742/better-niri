@@ -30,8 +30,15 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Region,
+    ScreenCast,
+}
+
 struct PickerSurface {
     output: wl_output::WlOutput,
+    output_name: Option<String>,
     layer: LayerSurface,
     pool: SlotPool,
     size: (u32, u32),
@@ -42,6 +49,7 @@ struct PickerSurface {
 }
 
 struct Picker {
+    mode: Mode,
     registry_state: RegistryState,
     compositor: CompositorState,
     layer_shell: LayerShell,
@@ -53,6 +61,7 @@ struct Picker {
     pointer: Option<wl_pointer::WlPointer>,
     exit: bool,
     result: Option<SelectionRect>,
+    result_output: Option<String>,
 }
 
 fn main() {
@@ -63,6 +72,11 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
+    let mode = if std::env::args().any(|arg| arg == "--screencast") {
+        Mode::ScreenCast
+    } else {
+        Mode::Region
+    };
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<Picker>(&conn)?;
     let qh = queue.handle();
@@ -72,6 +86,7 @@ fn run() -> anyhow::Result<()> {
     let shm = Shm::bind(&globals, &qh)?;
 
     let mut picker = Picker {
+        mode,
         registry_state: RegistryState::new(&globals),
         compositor,
         layer_shell,
@@ -83,6 +98,7 @@ fn run() -> anyhow::Result<()> {
         pointer: None,
         exit: false,
         result: None,
+        result_output: None,
     };
 
     queue.roundtrip(&mut picker)?;
@@ -96,12 +112,16 @@ fn run() -> anyhow::Result<()> {
         queue.blocking_dispatch(&mut picker)?;
     }
 
-    match picker.result {
-        Some(rect) => {
+    match (picker.result, picker.result_output) {
+        (_, Some(output)) => {
+            println!("{}", serde_json::json!({ "output": output }));
+            Ok(())
+        }
+        (Some(rect), None) => {
             println!("{}", serde_json::to_string(&rect)?);
             Ok(())
         }
-        None => std::process::exit(2),
+        (None, None) => std::process::exit(2),
     }
 }
 
@@ -110,11 +130,12 @@ impl Picker {
         if self.surfaces.iter().any(|s| s.output == output) {
             return;
         }
-        let output_pos = self
-            .output_state
-            .info(&output)
+        let info = self.output_state.info(&output);
+        let output_pos = info
+            .as_ref()
             .and_then(|info| info.logical_position)
             .unwrap_or((0, 0));
+        let output_name = info.and_then(|info| info.name);
         let surface = self.compositor.create_surface(qh);
         let layer = self.layer_shell.create_layer_surface(
             qh,
@@ -131,6 +152,7 @@ impl Picker {
         let pool = SlotPool::new(1024, &self.shm).expect("create shm pool");
         self.surfaces.push(PickerSurface {
             output,
+            output_name,
             layer,
             pool,
             size: (1, 1),
@@ -512,6 +534,11 @@ impl PointerHandler for Picker {
                     }
                 }
                 PointerEventKind::Press { button: 0x110, .. } => {
+                    if self.mode == Mode::ScreenCast {
+                        self.result_output = self.surfaces[index].output_name.clone();
+                        self.exit = true;
+                        continue;
+                    }
                     self.surfaces[index].start = Some(event.position);
                     self.surfaces[index].current = Some(event.position);
                     self.draw(qh, index);

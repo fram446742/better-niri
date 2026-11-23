@@ -50,6 +50,8 @@ impl SelectionRect {
     }
 }
 
+const SOURCE_TYPE_MONITOR: u32 = 1;
+
 pub const RESPONSE_SUCCESS: u32 = 0;
 pub const RESPONSE_CANCELLED: u32 = 1;
 pub const RESPONSE_OTHER: u32 = 2;
@@ -158,6 +160,7 @@ async fn fullscreen_screenshot() -> Result<String, Failure> {
 #[derive(Debug, PartialEq)]
 pub enum PickerOutcome {
     Selected(SelectionRect),
+    SelectedOutput(String),
     Cancelled,
     Unavailable,
 }
@@ -183,9 +186,17 @@ pub fn picker_program() -> Option<std::path::PathBuf> {
 }
 
 fn run_picker(program: &std::path::Path) -> Result<PickerOutcome, String> {
+    run_picker_mode(program, false)
+}
+
+fn run_picker_mode(program: &std::path::Path, screencast: bool) -> Result<PickerOutcome, String> {
     use std::process::Command;
 
-    let output = match Command::new(program).output() {
+    let mut command = Command::new(program);
+    if screencast {
+        command.arg("--screencast");
+    }
+    let output = match command.output() {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PickerOutcome::Unavailable)
@@ -196,9 +207,47 @@ fn run_picker(program: &std::path::Path) -> Result<PickerOutcome, String> {
         return Ok(PickerOutcome::Cancelled);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
+    if screencast {
+        #[derive(serde::Deserialize)]
+        struct Output {
+            output: String,
+        }
+        let output: Output = serde_json::from_str(stdout.trim())
+            .map_err(|err| format!("invalid screencast picker output: {err}"))?;
+        return Ok(PickerOutcome::SelectedOutput(output.output));
+    }
     let rect: SelectionRect = serde_json::from_str(stdout.trim())
         .map_err(|err| format!("invalid picker output: {err}"))?;
     Ok(PickerOutcome::Selected(rect))
+}
+
+async fn set_screen_cast_selection(
+    session_handle: &OwnedObjectPath,
+    output: &str,
+) -> Result<(), String> {
+    let connection = zbus::Connection::session()
+        .await
+        .map_err(|err| format!("session bus: {err}"))?;
+    let proxy = Proxy::new_owned(
+        connection,
+        NIRI_PORTAL_BUS,
+        NIRI_PORTAL_PATH,
+        "org.better.portal.ScreenCastSelection",
+    )
+    .await
+    .map_err(|err| format!("niri selection proxy: {err}"))?;
+    let _: () = proxy
+        .call(
+            "SetSelection",
+            &(
+                session_handle.clone(),
+                vec![(SOURCE_TYPE_MONITOR, output.to_owned())],
+                0u32,
+            ),
+        )
+        .await
+        .map_err(|err| format!("niri SetSelection: {err}"))?;
+    Ok(())
 }
 
 async fn area_screenshot(rect: SelectionRect) -> Result<String, Failure> {
@@ -234,7 +283,7 @@ async fn interactive_screenshot(cancelled: Arc<AtomicBool>) -> Result<String, Fa
         match run_picker(&program) {
             Ok(PickerOutcome::Selected(rect)) => return area_screenshot(rect).await,
             Ok(PickerOutcome::Cancelled) => return Err(Failure::Cancelled),
-            Ok(PickerOutcome::Unavailable) | Err(_) => (),
+            Ok(PickerOutcome::Unavailable) | Ok(PickerOutcome::SelectedOutput(_)) | Err(_) => (),
         }
     }
 
@@ -458,6 +507,30 @@ mod tests {
     }
 
     #[test]
+    fn screencast_picker_returns_an_output_name() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "better-portal-screencast-picker-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("picker");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = \"--screencast\" ]; then printf '{\"output\":\"eDP-1\"}'\nelse exit 9\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            run_picker_mode(&script, true).unwrap(),
+            PickerOutcome::SelectedOutput("eDP-1".to_owned())
+        );
+    }
+
+    #[test]
     fn encodes_absolute_paths_only() {
         assert!(file_uri(&PathBuf::from("/")).is_ok());
         assert!(file_uri(&PathBuf::from("")).is_err());
@@ -632,6 +705,25 @@ impl ScreenCastBackend {
         options: HashMap<String, OwnedValue>,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         export_request(server, handle.clone()).await;
+
+        // Prefer the external picker when available. If the compositor does not
+        // implement the selection API, fall back to its own picker.
+        if let Some(program) = picker_program() {
+            match run_picker_mode(&program, true) {
+                Ok(PickerOutcome::SelectedOutput(output)) => {
+                    if let Err(err) = set_screen_cast_selection(&session_handle, &output).await {
+                        eprintln!("better-portal: external ScreenCast selection failed: {err}");
+                    }
+                }
+                Ok(PickerOutcome::Cancelled) => {
+                    unexport_request(server, &handle).await;
+                    return Ok((RESPONSE_CANCELLED, HashMap::new()));
+                }
+                Ok(PickerOutcome::Unavailable) | Err(_) => (),
+                Ok(PickerOutcome::Selected(_)) => (),
+            }
+        }
+
         let result = async {
             let proxy = portal_proxy("org.freedesktop.impl.portal.ScreenCast")
                 .await
