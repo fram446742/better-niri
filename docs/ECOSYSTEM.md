@@ -89,7 +89,7 @@ operate the desktop without the shell.
 | better-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; better-companion absorbs its code and offers compatibility aliases/config |
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
 | better-session | Context/session save/restore | **started**: `better-session/` workspace/window snapshots + restore |
-| better-sidepanels | Persistent side panels | new, medium |
+| better-sidepanels | Persistent side panels | **started**: `better-sidepanels/` layer-shell panels + modules |
 | better-shot | Capture/recording/annotation | **started**: `better-shot/` UI/screen/window capture + copy/annotate |
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
 | better-audio | PipeWire routing | **started**: `better-audio/` rules + `pactl` backend + watcher |

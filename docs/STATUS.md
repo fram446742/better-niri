@@ -194,10 +194,13 @@ picked up without re-auditing.
    text-preserving patcher (comments/formatting kept, timestamped backups) with
    a GTK4 frontend plus a scriptable `better-settingsctl`; `better-audio/`
    routes playback streams by app rule to sinks through `pactl` (priority,
-   glob/substring matching, dry-run, default sink, watcher). Remaining app:
-   better-sidepanels.
-   Remaining: richer swallowing rules and the companion apps from
-   `ECOSYSTEM.md`.
+   glob/substring matching, dry-run, default sink, watcher);
+   `better-sidepanels/` creates persistent layer-shell side panels per output
+   (exclusive zone, click commands, module rows refreshed on an interval,
+   cairo-rendered, configurable theme) with a testable model/renderer.
+   Remaining: richer swallowing rules; the companion apps listed in
+   `ECOSYSTEM.md` all have a first implementation (see above), with deeper
+   features still open per app.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
