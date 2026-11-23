@@ -88,7 +88,7 @@ operate the desktop without the shell.
 | better-smithay | Wayland/DRM/render infrastructure | active |
 | better-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; better-companion absorbs its code and offers compatibility aliases/config |
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
-| better-session | Context/session save/restore | new, high priority |
+| better-session | Context/session save/restore | **started**: `better-session/` workspace/window snapshots + restore |
 | better-sidepanels | Persistent side panels | new, medium |
 | better-shot | Capture/recording/annotation | new, medium |
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
