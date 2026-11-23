@@ -391,11 +391,14 @@ niri's Cargo workspace):
 - `companion-hooks`: event → commands registration and resolution (`fire`
   returns matches; the daemon does not execute commands implicitly).
 - `companion-system`: ping/status/paths.
+- `companion-niri`: `compositor.*` bridge over the niri IPC socket — perform a
+  typed `Action`, and query version/outputs/workspaces/windows/focused window.
 - `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
 - `companionctl`: list/status/call client.
 
-Not yet: compositor-side parking/sticky wiring, Phase B `rules`/`run_or_raise`
-and the optional adapters/companions.
+Not yet: parking/sticky auto-tracking from compositor events (the bridge can
+already drive actions and query state), Phase B `rules`/`run_or_raise` and the
+optional adapters/companions.
 
 ## 9. Roadmap
 

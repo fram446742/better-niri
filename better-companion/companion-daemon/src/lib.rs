@@ -14,6 +14,7 @@ pub fn build_registry(socket: &Path) -> io::Result<Registry> {
     registry.register(companion_automation::Automation::from_state_dir()?);
     registry.register(companion_hooks::Hooks::from_state_dir()?);
     registry.register(companion_system::System::new(socket));
+    registry.register(companion_niri::Compositor::from_env());
     Ok(registry)
 }
 
@@ -109,6 +110,7 @@ mod tests {
                 assert!(contexts.contains_key("automation"));
                 assert!(contexts.contains_key("hooks"));
                 assert!(contexts.contains_key("system"));
+                assert!(contexts.contains_key("compositor"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -136,7 +138,10 @@ mod tests {
         let socket = temp_socket("registry");
         let registry = build_registry(&socket).unwrap();
         let names = registry.namespaces();
-        assert_eq!(names, vec!["automation", "hooks", "parking", "system"]);
+        assert_eq!(
+            names,
+            vec!["automation", "compositor", "hooks", "parking", "system"]
+        );
         let _ = std::fs::remove_file(&socket);
     }
 

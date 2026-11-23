@@ -16,6 +16,7 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-automation` | `automation.*` | Named action sequences executed through the registry |
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
 | `companion-system` | `system.*` | Ping, status and paths |
+| `companion-niri` | `compositor.*` | niri IPC bridge: actions and output/workspace/window queries |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
 
@@ -46,7 +47,12 @@ companionctl call system ping
 companionctl call parking park '{"id":"win-1","value":{"title":"editor"}}'
 companionctl call automation set '{"name":"focus","steps":[{"namespace":"system","action":"ping"}]}'
 companionctl call automation run '{"name":"focus"}'
+NIRI_SOCKET=... companionctl call compositor version
+companionctl call compositor action '{"action":{"FocusColumnRight":{}}}'
 ```
+
+`compositor.*` connects to the running niri IPC socket (`$NIRI_SOCKET`, or
+`--socket` on the daemon if it was started with a different environment).
 
 ## Contexts
 
