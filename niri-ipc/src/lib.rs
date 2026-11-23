@@ -72,6 +72,8 @@ pub enum Request {
     Outputs,
     /// Request information about workspaces.
     Workspaces,
+    /// Request information for workspaces, including hidden.
+    WorkspacesWithHidden,
     /// Request information about open windows.
     Windows,
     /// Request information about layer-shell surfaces.
@@ -1165,6 +1167,14 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Toggle whether a window is sticky across all workspaces on the current output.
+    ToggleWindowSticky {
+        /// Id of the window to toggle.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Cycle the window's shader through the configured window-shaders presets.
     CycleWindowShader {
         /// Id of the window to cycle.
@@ -1817,6 +1827,8 @@ pub struct Window {
     ///
     /// If the window isn't floating then it is in the tiling layout.
     pub is_floating: bool,
+    /// Whether this window is sticky across all workspaces on its output.
+    pub is_sticky: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
     /// Whether this window is currently minimized.
@@ -1968,6 +1980,8 @@ pub struct Workspace {
     pub is_focused: bool,
     /// Id of the active window on this workspace, if any.
     pub active_window_id: Option<u64>,
+    /// Is this workspace hidden
+    pub is_hidden: bool,
 }
 
 /// Configured keyboard layouts.

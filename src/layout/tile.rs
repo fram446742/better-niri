@@ -14,7 +14,7 @@ use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
 use super::{
     HitType, LayoutElement, LayoutElementRenderElement, LayoutElementRenderSnapshot, Options,
-    SizeFrac, RESIZE_ANIMATION_THRESHOLD,
+    SizeFrac, StickyRestoreInfo, RESIZE_ANIMATION_THRESHOLD,
 };
 use crate::animation::{Animation, Clock};
 use crate::layout::SizingMode;
@@ -93,6 +93,9 @@ pub struct Tile<W: LayoutElement> {
     /// Whether this tiled window was focused since a floating window last was, which keeps it
     /// above the floating windows with `focused-window-above-floating`.
     pub(super) above_floating: bool,
+
+    /// Placement used when restoring a sticky window back to regular workspace layout.
+    pub(super) sticky_restore_info: Option<StickyRestoreInfo<W::Id>>,
 
     /// The size that the window should assume when going floating.
     ///
@@ -243,6 +246,7 @@ impl<W: LayoutElement> Tile<W> {
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), fullscreen_backdrop_color),
             restore_to_floating: false,
             above_floating: false,
+            sticky_restore_info: None,
             floating_window_size: None,
             floating_pos: None,
             floating_preset_width_idx: None,

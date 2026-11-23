@@ -276,4 +276,6 @@ impl LayoutElement for TestWindow {
     fn set_minimized(&mut self, minimized: bool) {
         self.inner.borrow_mut().minimized = minimized;
     }
+
+    fn set_sticky(&mut self, _sticky: bool) {}
 }

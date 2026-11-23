@@ -160,6 +160,8 @@ impl TestWindow {
 impl LayoutElement for TestWindow {
     type Id = usize;
 
+    fn set_sticky(&mut self, _sticky: bool) {}
+
     fn id(&self) -> &Self::Id {
         &self.0.id
     }
@@ -984,6 +986,7 @@ impl Op {
                         .map(|name| format!("output{name}"))
                         .collect(),
                     layout: layout_config.map(|x| niri_config::WorkspaceLayoutPart(*x)),
+                    hidden: None,
                 });
             }
             Op::UnnameWorkspace { ws_name } => {
@@ -1345,7 +1348,7 @@ impl Op {
             Op::CenterVisibleColumns => layout.center_visible_columns(),
             Op::FocusWorkspaceDown => layout.switch_workspace_down(),
             Op::FocusWorkspaceUp => layout.switch_workspace_up(),
-            Op::FocusWorkspace(idx) => layout.switch_workspace(idx),
+            Op::FocusWorkspace(idx) => layout.switch_workspace(idx, false),
             Op::FocusWorkspaceAutoBackAndForth(idx) => {
                 layout.switch_workspace_auto_back_and_forth(idx)
             }
@@ -8778,7 +8781,7 @@ fn grid_layout_with_occupied_workspace_below() -> Layout<TestWindow> {
         },
     ]);
     layout.move_to_workspace(None, 1, ActivateWindow::Yes);
-    layout.switch_workspace(0);
+    layout.switch_workspace(0, false);
     check_ops_on_layout(
         &mut layout,
         [
@@ -9634,7 +9637,7 @@ fn grid_close_after_moving_focused_window_to_workspace_refits_view() {
     ]);
     layout.toggle_grid_overview();
     layout.move_to_workspace(None, 1, ActivateWindow::Smart);
-    layout.switch_workspace(0);
+    layout.switch_workspace(0, false);
     layout.verify_invariants();
 
     assert!(layout.is_grid_overview_open());
@@ -9989,7 +9992,7 @@ fn grid_close_after_moving_focused_window_to_workspace_refits_render_positions()
         ],
     );
     layout.move_to_workspace(None, 1, ActivateWindow::Smart);
-    layout.switch_workspace(0);
+    layout.switch_workspace(0, false);
     layout.verify_invariants();
 
     assert!(layout.close_grid_overview());
@@ -10054,7 +10057,7 @@ fn overview_grid_close_after_moving_focused_window_to_workspace_refits_source_wo
     layout.verify_invariants();
 
     assert!(layout.close_grid_overview());
-    layout.switch_workspace(0);
+    layout.switch_workspace(0, false);
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 
     assert_eq!(layout.focus().map(|window| *window.id()), Some(2));

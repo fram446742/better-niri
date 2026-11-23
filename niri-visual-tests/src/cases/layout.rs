@@ -193,14 +193,16 @@ impl Layout {
         );
         window.communicate();
 
-        self.layout.add_window(
+        self.layout.add_window_with_flags(
             window.clone(),
             AddWindowTarget::Auto,
             width,
             None,
             false,
             false,
+            false,
             ActivateWindow::default(),
+            false,
         );
         self.windows.push(window);
     }
@@ -222,14 +224,16 @@ impl Layout {
         );
         window.communicate();
 
-        self.layout.add_window(
+        self.layout.add_window_with_flags(
             window.clone(),
             AddWindowTarget::NextTo(right_of.id()),
             width,
             None,
             false,
             false,
+            false,
             ActivateWindow::default(),
+            false,
         );
         self.windows.push(window);
     }
