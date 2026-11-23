@@ -316,6 +316,9 @@ pub struct Niri {
 
     // When false, we're idling with monitors powered off.
     pub monitors_active: bool,
+    /// When monitors are powered off but the power-off requested skip-isolated, isolated outputs
+    /// stay powered on and keep rendering. Meaningless while `monitors_active` is true.
+    pub power_off_skip_isolated: bool,
 
     /// Whether the laptop lid is closed.
     ///
@@ -4061,6 +4064,7 @@ impl Niri {
             blocker_cleared_tx,
             blocker_cleared_rx,
             monitors_active: true,
+            power_off_skip_isolated: false,
             is_lid_closed: false,
             ignore_power_key_until: None,
             touchpad_disabled_by_toggle: false,
@@ -4656,13 +4660,19 @@ impl Niri {
         self.queue_redraw(output);
     }
 
-    pub fn deactivate_monitors(&mut self, backend: &mut Backend) {
+    pub fn deactivate_monitors(&mut self, backend: &mut Backend, skip_isolated: bool) {
         if !self.monitors_active {
             return;
         }
 
         self.monitors_active = false;
-        backend.set_monitors_active(false);
+        self.power_off_skip_isolated = skip_isolated;
+        backend.set_monitors_active(false, skip_isolated);
+
+        // Isolated outputs stay on when skipping them, so they must keep redrawing.
+        if skip_isolated {
+            self.queue_redraw_all();
+        }
     }
 
     pub fn activate_monitors(&mut self, backend: &mut Backend) {
@@ -4671,7 +4681,8 @@ impl Niri {
         }
 
         self.monitors_active = true;
-        backend.set_monitors_active(true);
+        self.power_off_skip_isolated = false;
+        backend.set_monitors_active(true, false);
 
         self.queue_redraw_all();
     }
@@ -7268,7 +7279,10 @@ impl Niri {
         }
 
         let mut res = RenderResult::Skipped;
-        if self.monitors_active {
+        // Isolated outputs keep rendering while the rest are powered off with skip-isolated.
+        let output_active = self.monitors_active
+            || (self.power_off_skip_isolated && self.is_output_isolated(output));
+        if output_active {
             // Check if shake-to-enlarge hold duration expired and update animation.
             self.update_pointer_scale_animation(false);
             self.update_magnifier_animation();
