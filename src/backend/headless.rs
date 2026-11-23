@@ -122,10 +122,13 @@ impl Headless {
                 shaders::set_custom_open_program(renderer, Some(src));
             }
             // Headless/virtual outputs render the configured post-process chains too.
-            let passes = crate::niri::global_shader_pass_sources(&config.global_shader);
-            shaders::set_custom_global_passes(renderer, &passes);
-            let chains = crate::niri::scoped_shader_chains(&config);
-            shaders::set_scoped_programs(renderer, &chains);
+            #[cfg(feature = "effects")]
+            {
+                let passes = crate::niri::global_shader_pass_sources(&config.global_shader);
+                shaders::set_custom_global_passes(renderer, &passes);
+                let chains = crate::niri::scoped_shader_chains(&config);
+                shaders::set_scoped_programs(renderer, &chains);
+            }
             drop(config);
 
             niri.update_shaders();

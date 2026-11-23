@@ -300,4 +300,10 @@ compositor IPC fallback.
 - `cursor` (default on): SVG/scalable cursor rendering (`resvg`/`usvg` are
   optional dependencies) and shake-to-enlarge. Off builds fall back to XCursor
   bitmaps and compile the shake path out.
+- `effects` (default on): the post-processing shader engine — global output
+  passes, region/per-output passes, window-scoped passes, and decoration
+  light. Off builds compile those render paths, their config-reload and
+  continuous-redraw hooks, and the decoration-light element out; core
+  rendering (shadows, borders, blur, HDR, open/close/resize animations) is
+  unaffected.
 - `agent` (off by default): the automation seat.

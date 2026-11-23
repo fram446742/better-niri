@@ -27,6 +27,7 @@ pub struct FocusRing {
     animating: bool,
     custom_key: Option<u64>,
     custom_shader_available: Cell<bool>,
+    #[cfg(feature = "effects")]
     light: RefCell<crate::render_helpers::decoration_light::DecorationLight>,
 }
 
@@ -54,6 +55,7 @@ impl FocusRing {
             animating: false,
             custom_key: None,
             custom_shader_available: Cell::new(true),
+            #[cfg(feature = "effects")]
             light: RefCell::new(Default::default()),
         }
     }
@@ -298,6 +300,7 @@ impl FocusRing {
                 alpha,
             );
         }
+        #[cfg(feature = "effects")]
         if self.light_config().is_none() {
             self.light.borrow_mut().clear();
         }
@@ -315,6 +318,7 @@ impl FocusRing {
         }
     }
 
+    #[cfg(feature = "effects")]
     fn light_config(&self) -> Option<niri_config::decoration_shader::DecorationLight> {
         self.config
             .shader
@@ -323,11 +327,13 @@ impl FocusRing {
             .filter(|light| self.custom_key.is_some() && light.enable && light.intensity.0 > 0.)
     }
 
+    #[cfg(feature = "effects")]
     pub fn light_id(&self) -> Option<smithay::backend::renderer::element::Id> {
         self.light_config()
             .map(|_| self.light.borrow().id().clone())
     }
 
+    #[cfg(feature = "effects")]
     pub fn render_light(
         &self,
         renderer: &mut impl NiriRenderer,
@@ -521,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "effects")]
     // Golden-image test: it depends on global EGL/shader-registry warm-up state shared by the
     // lib test binary, so it is order-dependent when the whole suite runs. `cargo test -p niri
     // --lib focus_ring` passes; the z-order half is covered by

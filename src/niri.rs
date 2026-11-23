@@ -190,11 +190,13 @@ use crate::render_helpers::blend::{
 };
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
+#[cfg(feature = "effects")]
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::panel::PanelRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
+#[cfg(feature = "effects")]
 use crate::render_helpers::scoped_shader_element::{ScopedShaderElement, ScopedSource};
 use crate::render_helpers::shaders::{ProgramType, Shaders};
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -446,6 +448,7 @@ pub struct Niri {
     #[cfg(feature = "kde")]
     pub kde_output_order_v1_state: KdeOutputOrderV1State,
     /// Capability flags for the active global shader, cached per config load.
+    #[cfg(feature = "effects")]
     pub global_shader_caps: Cell<Option<niri_config::GlobalShaderCaps>>,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
@@ -623,6 +626,7 @@ pub struct DndIcon {
 /// Per-output, per-pass feedback + offscreen state for the multi-pass global shader. Each `Vec`
 /// has one entry per pass in the active chain; they are ping-ponged across frames. Sized lazily by
 /// [`GlobalShaderChain::resize`] from the (`&self`) render path via the enclosing `RefCell`.
+#[cfg(feature = "effects")]
 #[derive(Default)]
 pub struct GlobalShaderChain {
     /// Each pass's output last frame (its `niri_prev`).
@@ -639,6 +643,7 @@ pub struct GlobalShaderChain {
     pub buffer_result: Vec<Rc<RefCell<Option<GlesTexture>>>>,
 }
 
+#[cfg(feature = "effects")]
 impl GlobalShaderChain {
     /// Ensure all per-pass vecs are sized to `n`, preserving existing textures when the length is
     /// unchanged. A length change resets all per-pass feedback (the chain itself changed).
@@ -887,16 +892,20 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// When the global shader became active; origin for `niri_time`. Interior-mutable because the
     /// time origin is lazily initialized from the (`&self`) `render_inner` path.
+    #[cfg(feature = "effects")]
     pub global_shader_start: Cell<Option<std::time::Instant>>,
     /// Previous frame's `niri_screen` capture (screen only), exposed as `niri_screen_prev`. This
     /// is frame-level (the real screen), shared by all passes.
+    #[cfg(feature = "effects")]
     pub global_shader_screen_prev: Option<GlesTexture>,
     /// Sink written by `GlobalShaderElement::draw` with this frame's screen capture; moved into
     /// `global_shader_screen_prev` after submit.
+    #[cfg(feature = "effects")]
     pub global_shader_screen_result: Rc<RefCell<Option<GlesTexture>>>,
     /// Per-pass feedback + offscreen state for the multi-pass chain, sized to the active chain
     /// length and ping-ponged across frames. Wrapped in a `RefCell` so it can be (re)sized lazily
     /// from the `&self` render path (like the other interior-mutable shader sinks).
+    #[cfg(feature = "effects")]
     pub global_shader_chain: RefCell<GlobalShaderChain>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
@@ -2449,6 +2458,7 @@ impl State {
             shaders_changed = true;
         }
 
+        #[cfg(feature = "effects")]
         if config.global_shader.enable != old_config.global_shader.enable
             || config.global_shader.source != old_config.global_shader.source
             || config.global_shader.path != old_config.global_shader.path
@@ -2474,6 +2484,7 @@ impl State {
             shaders_changed = true;
         }
 
+        #[cfg(feature = "effects")]
         let output_shaders_changed = {
             let shaders_of = |c: &niri_config::Config| {
                 c.outputs
@@ -2498,6 +2509,7 @@ impl State {
             shaders_changed = true;
         }
 
+        #[cfg(feature = "effects")]
         if config.region_shaders != old_config.region_shaders
             || config.window_rules != old_config.window_rules
             || config.window_shaders != old_config.window_shaders
@@ -3867,6 +3879,7 @@ fn reset_damage_tracker_if_changed(
 }
 
 impl Niri {
+    #[cfg(feature = "effects")]
     pub fn global_shader_caps(&self) -> niri_config::GlobalShaderCaps {
         if let Some(caps) = self.global_shader_caps.get() {
             return caps;
@@ -4560,6 +4573,7 @@ impl Niri {
             fifo_manager_state,
             #[cfg(feature = "kde")]
             kde_output_order_v1_state,
+            #[cfg(feature = "effects")]
             global_shader_caps: Cell::new(None),
             #[cfg(test)]
             single_pixel_buffer_state,
@@ -4920,9 +4934,13 @@ impl Niri {
             lock_surface: None,
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
+            #[cfg(feature = "effects")]
             global_shader_start: Cell::new(None),
+            #[cfg(feature = "effects")]
             global_shader_screen_prev: None,
+            #[cfg(feature = "effects")]
             global_shader_screen_result: Rc::new(RefCell::new(None)),
+            #[cfg(feature = "effects")]
             global_shader_chain: RefCell::new(GlobalShaderChain::default()),
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
             blend_description: None,
@@ -7061,6 +7079,7 @@ impl Niri {
     ///
     /// This is the single place output shader chains are resolved, so the `scoped_key` computed
     /// at compile time always matches the one looked up at render time.
+    #[cfg(feature = "effects")]
     pub(crate) fn output_shader_chain(
         &self,
         output: &smithay::output::Output,
@@ -7449,36 +7468,217 @@ impl Niri {
             self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
         }
 
-        // Global post-process shader: only push for the real Output sink (never screenshots or
-        // screencopy), so the effect does not leak into recordings and the per-output ping-pong
-        // state is not corrupted by capture renders. A compiled program is also required; this
-        // gate has zero overhead when no program is loaded.
-        //
-        // When reads_cursor is active, the element must render ABOVE the cursor (pushed before
-        // render_pointer) so the cursor is captured into the screen texture. Otherwise it renders
-        // BELOW the cursor (pushed after render_pointer) so the hardware cursor is unaffected.
-        let reads_cursor = {
-            let cfg = self.config.borrow();
-            cfg.global_shader.enable && cfg.global_shader.reads_cursor
-        };
-        let capture_enabled = self.config.borrow().shaders_in_capture;
-        let capture_render = ctx.target != RenderTarget::Output;
-        let mut global_shader_elem: Option<GlobalShaderElement> =
-            if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled)
-                && Shaders::get(ctx.renderer)
-                    .program(ProgramType::GlobalPass(0))
-                    .is_some()
-            {
-                let start = state.global_shader_start.get().unwrap_or_else(|| {
-                    let now = std::time::Instant::now();
-                    state.global_shader_start.set(Some(now));
-                    now
-                });
-                let time = start.elapsed().as_secs_f32();
-                let scale = output.current_scale().fractional_scale() as f32;
-                let area = Rectangle::from_size(output_size(output));
+        #[cfg(feature = "effects")]
+        {
+            // Global post-process shader: only push for the real Output sink (never screenshots or
+            // screencopy), so the effect does not leak into recordings and the per-output ping-pong
+            // state is not corrupted by capture renders. A compiled program is also required; this
+            // gate has zero overhead when no program is loaded.
+            //
+            // When reads_cursor is active, the element must render ABOVE the cursor (pushed before
+            // render_pointer) so the cursor is captured into the screen texture. Otherwise it
+            // renders BELOW the cursor (pushed after render_pointer) so the hardware cursor is
+            // unaffected.
+            let reads_cursor = {
+                let cfg = self.config.borrow();
+                cfg.global_shader.enable && cfg.global_shader.reads_cursor
+            };
+            let capture_enabled = self.config.borrow().shaders_in_capture;
+            let capture_render = ctx.target != RenderTarget::Output;
+            let mut global_shader_elem: Option<GlobalShaderElement> =
+                if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled)
+                    && Shaders::get(ctx.renderer)
+                        .program(ProgramType::GlobalPass(0))
+                        .is_some()
+                {
+                    let start = state.global_shader_start.get().unwrap_or_else(|| {
+                        let now = std::time::Instant::now();
+                        state.global_shader_start.set(Some(now));
+                        now
+                    });
+                    let time = start.elapsed().as_secs_f32();
+                    let scale = output.current_scale().fractional_scale() as f32;
+                    let area = Rectangle::from_size(output_size(output));
 
-                // Cursor in output-local physical pixels (same source as render_pointer).
+                    // Cursor in output-local physical pixels (same source as render_pointer).
+                    let output_pos = self.global_space.output_geometry(output).unwrap().loc;
+                    let pointer_pos = self
+                        .tablet_cursor_location
+                        .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                    let pointer_local = pointer_pos - output_pos.to_f64();
+                    let cursor = (
+                        (pointer_local.x * scale as f64) as f32,
+                        (pointer_local.y * scale as f64) as f32,
+                    );
+
+                    let output_size_phys = (
+                        (area.size.w * scale as f64) as f32,
+                        (area.size.h * scale as f64) as f32,
+                    );
+
+                    // Region-local rendering: when cursor-radius is set on a cursor-only
+                    // (non-animating) shader, shrink the element to a box around the
+                    // cursor so damage + scanout are limited to that box. Otherwise
+                    // cover the whole output.
+                    let caps = self.global_shader_caps();
+                    let cursor_radius = self.config.borrow().global_shader.cursor_radius;
+                    // Number of passes in the active chain (registry length). Region mode is
+                    // whole-output only; multi-pass chains (N >= 2) always reshade the
+                    // full output.
+                    let n_passes = Shaders::get(ctx.renderer)
+                        .custom_global_passes
+                        .borrow()
+                        .len();
+                    let (area, region_norm) = match cursor_radius {
+                        Some(r)
+                            if caps.uses_cursor
+                                && !caps.is_animating()
+                                && r > 0
+                                && n_passes <= 1 =>
+                        {
+                            let r = r as f64; // logical px
+                            let full = area;
+                            let box_loc = (
+                                (pointer_local.x - r).max(full.loc.x),
+                                (pointer_local.y - r).max(full.loc.y),
+                            );
+                            let box_end = (
+                                (pointer_local.x + r).min(full.loc.x + full.size.w),
+                                (pointer_local.y + r).min(full.loc.y + full.size.h),
+                            );
+                            let box_rect = Rectangle::new(
+                                (box_loc.0, box_loc.1).into(),
+                                (
+                                    (box_end.0 - box_loc.0).max(0.0),
+                                    (box_end.1 - box_loc.1).max(0.0),
+                                )
+                                    .into(),
+                            );
+                            if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
+                                // Cursor is off this output (e.g. on another monitor) so the
+                                // clamped box is empty: render whole-output here. A
+                                // zero-size region would otherwise
+                                // divide by zero in the shader's tex2D_* remap.
+                                (full, [0.0, 0.0, 1.0, 1.0])
+                            } else {
+                                let region_norm = [
+                                    ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
+                                    ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
+                                    (box_rect.size.w / full.size.w) as f32,
+                                    (box_rect.size.h / full.size.h) as f32,
+                                ];
+                                (box_rect, region_norm)
+                            }
+                        }
+                        _ => (area, [0.0, 0.0, 1.0, 1.0]),
+                    };
+
+                    // A fresh Id every frame makes smithay damage both the new box and the vacated
+                    // old box (the removed element's last geometry), which is what gives region
+                    // mode its correct box(cursor) ∪ box(prev_cursor) damage. If this is ever
+                    // changed to a stable per-output Id for a damage optimization, region mode must
+                    // damage the vacated box explicitly or moving-cursor effects will
+                    // leave trails. Size the per-output chain state to the active chain
+                    // length and snapshot each pass's feedback handles for this frame.
+                    // The borrow is dropped before constructing the element (it only
+                    // needs the cloned handles, not the chain itself).
+                    let passes =
+                        {
+                            let mut chain = state.global_shader_chain.borrow_mut();
+                            chain.resize(n_passes);
+                            (0..n_passes)
+                                .map(|i| GlobalPassState {
+                                    // Read the live trail either way.
+                                    prev: chain.prev[i].clone(),
+                                    buffer_prev: chain.buffer_prev[i].clone(),
+                                    // Capture renders write to throwaway sinks/offscreens so the
+                                    // live output's ping-pong is never corrupted;
+                                    // the Output render uses the real shared ones.
+                                    result: if capture_render {
+                                        std::rc::Rc::new(std::cell::RefCell::new(None))
+                                    } else {
+                                        chain.result[i].clone()
+                                    },
+                                    buffer_result: if capture_render {
+                                        std::rc::Rc::new(std::cell::RefCell::new(None))
+                                    } else {
+                                        chain.buffer_result[i].clone()
+                                    },
+                                    pass_offscreen: if capture_render {
+                                        std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                                    } else {
+                                        chain.pass_offscreen[i].clone()
+                                    },
+                                    buffer: if capture_render {
+                                        std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                                    } else {
+                                        chain.buffer[i].clone()
+                                    },
+                                })
+                                .collect::<Vec<_>>()
+                        };
+                    // screen_result is the niri_screen_prev ping-pong sink; throwaway for capture
+                    // renders.
+                    let screen_result = if capture_render {
+                        std::rc::Rc::new(std::cell::RefCell::new(None))
+                    } else {
+                        state.global_shader_screen_result.clone()
+                    };
+
+                    Some(GlobalShaderElement::new(
+                        Id::new(),
+                        area,
+                        scale,
+                        time,
+                        cursor,
+                        region_norm,
+                        output_size_phys,
+                        state.global_shader_screen_prev.clone(),
+                        screen_result,
+                        passes,
+                    ))
+                } else {
+                    None
+                };
+
+            // When reads_cursor is on, push the global shader element first so the cursor is
+            // composited into niri_screen (the cursor becomes part of the captured screen texture).
+            if reads_cursor {
+                if let Some(elem) = global_shader_elem.take() {
+                    push(elem.into());
+                }
+            }
+
+            // The pointer goes on the top (or below the global shader when reads_cursor is on).
+            if include_pointer && self.pointer_visibility.is_visible() {
+                self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
+            }
+
+            // When reads_cursor is off (default), push the global shader element after the pointer
+            // so the hardware cursor remains above the effect.
+            if !reads_cursor {
+                if let Some(elem) = global_shader_elem {
+                    push(elem.into());
+                }
+            }
+        }
+
+        // Push region shader elements for regions matching this output.
+        #[cfg(feature = "effects")]
+        {
+            let capture_enabled = self.config.borrow().shaders_in_capture;
+            if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled) {
+                let scale = output.current_scale().fractional_scale() as f32;
+                let out_name = output.name();
+                let full = Rectangle::from_size(output_size(output));
+                let out_phys = (
+                    (full.size.w * scale as f64) as f32,
+                    (full.size.h * scale as f64) as f32,
+                );
                 let output_pos = self.global_space.output_geometry(output).unwrap().loc;
                 let pointer_pos = self
                     .tablet_cursor_location
@@ -7488,190 +7688,86 @@ impl Niri {
                     (pointer_local.x * scale as f64) as f32,
                     (pointer_local.y * scale as f64) as f32,
                 );
+                let time = state
+                    .global_shader_start
+                    .get()
+                    .map_or(0.0, |s| s.elapsed().as_secs_f32());
 
-                let output_size_phys = (
-                    (area.size.w * scale as f64) as f32,
-                    (area.size.h * scale as f64) as f32,
-                );
-
-                // Region-local rendering: when cursor-radius is set on a cursor-only
-                // (non-animating) shader, shrink the element to a box around the
-                // cursor so damage + scanout are limited to that box. Otherwise
-                // cover the whole output.
-                let caps = self.global_shader_caps();
-                let cursor_radius = self.config.borrow().global_shader.cursor_radius;
-                // Number of passes in the active chain (registry length). Region mode is
-                // whole-output only; multi-pass chains (N >= 2) always reshade the
-                // full output.
-                let n_passes = Shaders::get(ctx.renderer)
-                    .custom_global_passes
-                    .borrow()
-                    .len();
-                let (area, region_norm) = match cursor_radius {
-                    Some(r)
-                        if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 =>
+                // The output shader is a full-output region: same element, no geometry to
+                // configure.
+                let output_chain = self.output_shader_chain(output);
+                if !output_chain.is_empty() {
+                    let key = shaders::scoped_key(&output_chain);
+                    if Shaders::get(ctx.renderer)
+                        .program(ProgramType::Scoped(key, 0))
+                        .is_some()
                     {
-                        let r = r as f64; // logical px
-                        let full = area;
-                        let box_loc = (
-                            (pointer_local.x - r).max(full.loc.x),
-                            (pointer_local.y - r).max(full.loc.y),
+                        let n_passes = output_chain.len();
+                        let offscreens = (0..n_passes.saturating_sub(1))
+                            .map(|_| {
+                                std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let elem = ScopedShaderElement::new(
+                            Id::new(),
+                            full,
+                            scale,
+                            time,
+                            cursor,
+                            [0., 0., 1., 1.],
+                            out_phys,
+                            key,
+                            n_passes,
+                            ScopedSource::Capture,
+                            offscreens,
                         );
-                        let box_end = (
-                            (pointer_local.x + r).min(full.loc.x + full.size.w),
-                            (pointer_local.y + r).min(full.loc.y + full.size.h),
-                        );
-                        let box_rect = Rectangle::new(
-                            (box_loc.0, box_loc.1).into(),
-                            (
-                                (box_end.0 - box_loc.0).max(0.0),
-                                (box_end.1 - box_loc.1).max(0.0),
-                            )
-                                .into(),
-                        );
-                        if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
-                            // Cursor is off this output (e.g. on another monitor) so the clamped
-                            // box is empty: render whole-output here. A
-                            // zero-size region would otherwise
-                            // divide by zero in the shader's tex2D_* remap.
-                            (full, [0.0, 0.0, 1.0, 1.0])
-                        } else {
-                            let region_norm = [
-                                ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
-                                ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
-                                (box_rect.size.w / full.size.w) as f32,
-                                (box_rect.size.h / full.size.h) as f32,
-                            ];
-                            (box_rect, region_norm)
-                        }
+                        push(elem.into());
                     }
-                    _ => (area, [0.0, 0.0, 1.0, 1.0]),
-                };
+                }
 
-                // A fresh Id every frame makes smithay damage both the new box and the vacated old
-                // box (the removed element's last geometry), which is what gives region mode its
-                // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a
-                // stable per-output Id for a damage optimization, region mode must
-                // damage the vacated box explicitly or moving-cursor effects will
-                // leave trails. Size the per-output chain state to the active chain
-                // length and snapshot each pass's feedback handles for this frame.
-                // The borrow is dropped before constructing the element (it only
-                // needs the cloned handles, not the chain itself).
-                let passes = {
-                    let mut chain = state.global_shader_chain.borrow_mut();
-                    chain.resize(n_passes);
-                    (0..n_passes)
-                        .map(|i| GlobalPassState {
-                            // Read the live trail either way.
-                            prev: chain.prev[i].clone(),
-                            buffer_prev: chain.buffer_prev[i].clone(),
-                            // Capture renders write to throwaway sinks/offscreens so the live
-                            // output's ping-pong is never corrupted;
-                            // the Output render uses the real shared ones.
-                            result: if capture_render {
-                                std::rc::Rc::new(std::cell::RefCell::new(None))
-                            } else {
-                                chain.result[i].clone()
-                            },
-                            buffer_result: if capture_render {
-                                std::rc::Rc::new(std::cell::RefCell::new(None))
-                            } else {
-                                chain.buffer_result[i].clone()
-                            },
-                            pass_offscreen: if capture_render {
-                                std::rc::Rc::new(
-                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
-                                )
-                            } else {
-                                chain.pass_offscreen[i].clone()
-                            },
-                            buffer: if capture_render {
-                                std::rc::Rc::new(
-                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
-                                )
-                            } else {
-                                chain.buffer[i].clone()
-                            },
+                // Clone region data out before any mutable borrows.
+                let regions: Vec<_> = {
+                    let config = self.config.borrow();
+                    config
+                        .region_shaders
+                        .iter()
+                        .filter(|r| r.output.as_deref().map_or(true, |want| out_name == want))
+                        .map(|r| {
+                            let chain = r.pass_sources(|p| {
+                                let path = match expand_home(std::path::Path::new(p)) {
+                                    Ok(Some(e)) => e,
+                                    Ok(None) => std::path::PathBuf::from(p),
+                                    Err(_) => return None,
+                                };
+                                std::fs::read_to_string(&path).ok()
+                            });
+                            (r.geometry.clone(), chain)
                         })
-                        .collect::<Vec<_>>()
-                };
-                // screen_result is the niri_screen_prev ping-pong sink; throwaway for capture
-                // renders.
-                let screen_result = if capture_render {
-                    std::rc::Rc::new(std::cell::RefCell::new(None))
-                } else {
-                    state.global_shader_screen_result.clone()
+                        .collect()
                 };
 
-                Some(GlobalShaderElement::new(
-                    Id::new(),
-                    area,
-                    scale,
-                    time,
-                    cursor,
-                    region_norm,
-                    output_size_phys,
-                    state.global_shader_screen_prev.clone(),
-                    screen_result,
-                    passes,
-                ))
-            } else {
-                None
-            };
-
-        // When reads_cursor is on, push the global shader element first so the cursor is
-        // composited into niri_screen (the cursor becomes part of the captured screen texture).
-        if reads_cursor {
-            if let Some(elem) = global_shader_elem.take() {
-                push(elem.into());
-            }
-        }
-
-        // The pointer goes on the top (or below the global shader when reads_cursor is on).
-        if include_pointer && self.pointer_visibility.is_visible() {
-            self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
-        }
-
-        // When reads_cursor is off (default), push the global shader element after the pointer
-        // so the hardware cursor remains above the effect.
-        if !reads_cursor {
-            if let Some(elem) = global_shader_elem {
-                push(elem.into());
-            }
-        }
-
-        // Push region shader elements for regions matching this output.
-        if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled) {
-            let scale = output.current_scale().fractional_scale() as f32;
-            let out_name = output.name();
-            let full = Rectangle::from_size(output_size(output));
-            let out_phys = (
-                (full.size.w * scale as f64) as f32,
-                (full.size.h * scale as f64) as f32,
-            );
-            let output_pos = self.global_space.output_geometry(output).unwrap().loc;
-            let pointer_pos = self
-                .tablet_cursor_location
-                .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-            let pointer_local = pointer_pos - output_pos.to_f64();
-            let cursor = (
-                (pointer_local.x * scale as f64) as f32,
-                (pointer_local.y * scale as f64) as f32,
-            );
-            let time = state
-                .global_shader_start
-                .get()
-                .map_or(0.0, |s| s.elapsed().as_secs_f32());
-
-            // The output shader is a full-output region: same element, no geometry to configure.
-            let output_chain = self.output_shader_chain(output);
-            if !output_chain.is_empty() {
-                let key = shaders::scoped_key(&output_chain);
-                if Shaders::get(ctx.renderer)
-                    .program(ProgramType::Scoped(key, 0))
-                    .is_some()
-                {
-                    let n_passes = output_chain.len();
+                for (geom, chain) in regions {
+                    if chain.is_empty() {
+                        continue;
+                    }
+                    let key = shaders::scoped_key(&chain);
+                    if Shaders::get(ctx.renderer)
+                        .program(ProgramType::Scoped(key, 0))
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let area =
+                        Rectangle::new((geom.x, geom.y).into(), (geom.width, geom.height).into());
+                    let region_norm = [
+                        ((area.loc.x - full.loc.x as f64) / full.size.w) as f32,
+                        ((area.loc.y - full.loc.y as f64) / full.size.h) as f32,
+                        (area.size.w / full.size.w) as f32,
+                        (area.size.h / full.size.h) as f32,
+                    ];
+                    let n_passes = chain.len();
                     let offscreens = (0..n_passes.saturating_sub(1))
                         .map(|_| {
                             std::rc::Rc::new(
@@ -7679,13 +7775,14 @@ impl Niri {
                             )
                         })
                         .collect::<Vec<_>>();
+                    debug_assert_eq!(offscreens.len(), n_passes.saturating_sub(1));
                     let elem = ScopedShaderElement::new(
                         Id::new(),
-                        full,
+                        area,
                         scale,
                         time,
                         cursor,
-                        [0., 0., 1., 1.],
+                        region_norm,
                         out_phys,
                         key,
                         n_passes,
@@ -7694,71 +7791,6 @@ impl Niri {
                     );
                     push(elem.into());
                 }
-            }
-
-            // Clone region data out before any mutable borrows.
-            let regions: Vec<_> = {
-                let config = self.config.borrow();
-                config
-                    .region_shaders
-                    .iter()
-                    .filter(|r| r.output.as_deref().map_or(true, |want| out_name == want))
-                    .map(|r| {
-                        let chain = r.pass_sources(|p| {
-                            let path = match expand_home(std::path::Path::new(p)) {
-                                Ok(Some(e)) => e,
-                                Ok(None) => std::path::PathBuf::from(p),
-                                Err(_) => return None,
-                            };
-                            std::fs::read_to_string(&path).ok()
-                        });
-                        (r.geometry.clone(), chain)
-                    })
-                    .collect()
-            };
-
-            for (geom, chain) in regions {
-                if chain.is_empty() {
-                    continue;
-                }
-                let key = shaders::scoped_key(&chain);
-                if Shaders::get(ctx.renderer)
-                    .program(ProgramType::Scoped(key, 0))
-                    .is_none()
-                {
-                    continue;
-                }
-                let area =
-                    Rectangle::new((geom.x, geom.y).into(), (geom.width, geom.height).into());
-                let region_norm = [
-                    ((area.loc.x - full.loc.x as f64) / full.size.w) as f32,
-                    ((area.loc.y - full.loc.y as f64) / full.size.h) as f32,
-                    (area.size.w / full.size.w) as f32,
-                    (area.size.h / full.size.h) as f32,
-                ];
-                let n_passes = chain.len();
-                let offscreens = (0..n_passes.saturating_sub(1))
-                    .map(|_| {
-                        std::rc::Rc::new(
-                            crate::render_helpers::offscreen::OffscreenBuffer::default(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                debug_assert_eq!(offscreens.len(), n_passes.saturating_sub(1));
-                let elem = ScopedShaderElement::new(
-                    Id::new(),
-                    area,
-                    scale,
-                    time,
-                    cursor,
-                    region_norm,
-                    out_phys,
-                    key,
-                    n_passes,
-                    ScopedSource::Capture,
-                    offscreens,
-                );
-                push(elem.into());
             }
         }
 
@@ -8641,6 +8673,7 @@ impl Niri {
                 .is_some_and(|a| a.output.upgrade().as_ref() == Some(output) && !a.is_done());
 
             // Decide whether a time/feedback-driven global shader needs continuous redraws.
+            #[cfg(feature = "effects")]
             let global_shader_animate = {
                 let cfg = self.config.borrow();
                 let enabled = cfg.global_shader.enable;
@@ -8648,9 +8681,12 @@ impl Niri {
                 drop(cfg);
                 enabled && mode.wants_continuous_redraw(self.global_shader_caps())
             };
+            #[cfg(not(feature = "effects"))]
+            let global_shader_animate = false;
 
             // Decide whether any region shader on this output needs continuous redraws.
             let out_name = output.name();
+            #[cfg(feature = "effects")]
             let region_shader_animate = {
                 let cfg = self.config.borrow();
                 cfg.region_shaders.iter().any(|r| {
@@ -8668,13 +8704,18 @@ impl Niri {
                     niri_config::GlobalShaderCaps::scan_chain(&chain).is_animating()
                 })
             };
+            #[cfg(not(feature = "effects"))]
+            let region_shader_animate = false;
 
             // A hand-written animated output shader must keep redrawing, exactly like a region
             // shader. Every built-in filter is static, so it costs no extra frames.
+            #[cfg(feature = "effects")]
             let output_shader_animate = {
                 let chain = self.output_shader_chain(output);
                 niri_config::GlobalShaderCaps::scan_chain(&chain).is_animating()
             };
+            #[cfg(not(feature = "effects"))]
+            let output_shader_animate = false;
 
             // Decide whether a window on this output runs a time-driven per-window shader that
             // must keep redrawing. Scans resolved shader sources like the region shaders above;
@@ -8685,18 +8726,23 @@ impl Niri {
             // pegs the GPU for nothing. In the overview, though, several workspaces are shown
             // zoomed out (and the per-tile visible flag reflects normal-view culling), so there we
             // fall back to scanning all windows to keep their shaders animating as before.
-            let shader_animates = |win: &Mapped| {
-                win.effective_shader().map_or(false, |shader| {
-                    niri_config::GlobalShaderCaps::scan_chain(&shader.passes).is_animating()
-                })
+            #[cfg(feature = "effects")]
+            let window_shader_animate = {
+                let shader_animates = |win: &Mapped| {
+                    win.effective_shader().map_or(false, |shader| {
+                        niri_config::GlobalShaderCaps::scan_chain(&shader.passes).is_animating()
+                    })
+                };
+                if self.layout.is_overview_open() {
+                    self.layout.windows_for_output(output).any(shader_animates)
+                } else {
+                    self.layout
+                        .visible_windows_for_output(output)
+                        .any(shader_animates)
+                }
             };
-            let window_shader_animate = if self.layout.is_overview_open() {
-                self.layout.windows_for_output(output).any(shader_animates)
-            } else {
-                self.layout
-                    .visible_windows_for_output(output)
-                    .any(shader_animates)
-            };
+            #[cfg(not(feature = "effects"))]
+            let window_shader_animate = false;
 
             let decoration_animate = !self.is_locked()
                 && !self.screenshot_ui.is_open()
@@ -11960,6 +12006,7 @@ fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription>
 /// path cannot be expanded or read. This is the single source of truth for resolving a scoped
 /// shader path: the `scoped_key` computed at compile time (`scoped_shader_chains`) must match the
 /// one looked up at render time, so all `pass_sources` call sites resolve paths through this fn.
+#[cfg(feature = "effects")]
 pub(crate) fn read_scoped_shader_path(p: &str) -> Option<String> {
     let path = match expand_home(std::path::Path::new(p)) {
         Ok(Some(e)) => e,
@@ -11972,6 +12019,7 @@ pub(crate) fn read_scoped_shader_path(p: &str) -> Option<String> {
 /// Resolve every configured scoped shader (region shaders + window-rule shaders) into its
 /// `(source, hyprland)` pass list, reading any `path` files. The list is the full set compiled
 /// into `Shaders.scoped` (dedupe is by key inside `set_scoped_programs`).
+#[cfg(feature = "effects")]
 pub(crate) fn scoped_shader_chains(config: &niri_config::Config) -> Vec<Vec<(String, bool)>> {
     let mut chains: Vec<Vec<(String, bool)>> = config
         .region_shaders
@@ -12010,6 +12058,7 @@ pub(crate) fn scoped_shader_chains(config: &niri_config::Config) -> Vec<Vec<(Str
     chains
 }
 
+#[cfg(feature = "effects")]
 pub(crate) fn global_shader_pass_sources(cfg: &niri_config::GlobalShader) -> Vec<(String, bool)> {
     if !cfg.enable {
         return Vec::new();
@@ -12067,6 +12116,7 @@ pub(crate) fn global_shader_pass_sources(cfg: &niri_config::GlobalShader) -> Vec
     out
 }
 
+#[cfg(feature = "effects")]
 pub(crate) fn global_shader_source(cfg: &niri_config::GlobalShader) -> Option<String> {
     if !cfg.enable {
         return None;
@@ -12167,7 +12217,9 @@ niri_render_elements! {
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
         Magnified = RescaleRenderElement<Box<OutputRenderElements<R>>>,
+        #[cfg(feature = "effects")]
         GlobalShader = GlobalShaderElement,
+        #[cfg(feature = "effects")]
         ScopedShader = ScopedShaderElement,
         // Consolidated carousel: perspective-tilted cover-flow panel.
         Panel = PanelRenderElement,

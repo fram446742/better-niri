@@ -153,7 +153,7 @@ xshell = "0.2.7"
 pkg-config = "0.3.34"
 
 [features]
-default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor"]
+default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor", "effects"]
 # Enables the agent seat, a second input seat for automation over IPC.
 agent = []
 # Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1 and the KDE
@@ -161,6 +161,9 @@ agent = []
 kde = ["dep:wayland-protocols-plasma"]
 # Enables the cursor module: SVG/scalable cursor rendering and shake-to-enlarge.
 cursor = ["dep:resvg", "dep:usvg"]
+# Enables the effects module: the post-processing shader engine (global, region,
+# per-output and window-scoped passes) and decoration light.
+effects = []
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).

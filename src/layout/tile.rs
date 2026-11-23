@@ -26,6 +26,7 @@ use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
+#[cfg(feature = "effects")]
 use crate::render_helpers::scoped_shader_element::{ScopedShaderElement, ScopedSource};
 use crate::render_helpers::shaders::{ProgramType, Shaders};
 use crate::render_helpers::shadow::ShadowRenderElement;
@@ -168,7 +169,9 @@ niri_render_elements! {
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
+        #[cfg(feature = "effects")]
         Scoped = crate::render_helpers::scoped_shader_element::ScopedShaderElement,
+        #[cfg(feature = "effects")]
         DecorationLight = crate::render_helpers::shader_element::ShaderRenderElement,
     }
 }
@@ -1384,39 +1387,42 @@ impl<W: LayoutElement> Tile<W> {
         // rule is absent or the program is missing, nothing is pushed and the window
         // renders normally.
         if !pushed_resize {
-            if let Some(resolved) = self.window.effective_shader().cloned().filter(|_| {
-                crate::render_helpers::target_renders_shaders(
-                    ctx.target,
-                    self.options.shaders_in_capture,
-                )
-            }) {
-                let have_program = Shaders::get(ctx.renderer)
-                    .program(ProgramType::Scoped(resolved.key, 0))
-                    .is_some();
-                if have_program {
-                    let area = Rectangle::new(window_render_loc, window_size);
-                    let size_phys = (
-                        (window_size.w * self.scale) as f32,
-                        (window_size.h * self.scale) as f32,
-                    );
-                    let n_passes = resolved.passes.len();
-                    let offscreens = (0..n_passes.saturating_sub(1))
-                        .map(|_| Rc::new(OffscreenBuffer::default()))
-                        .collect::<Vec<_>>();
-                    let elem = ScopedShaderElement::new(
-                        Id::new(),
-                        area,
-                        self.scale as f32,
-                        ctx.shader_time,      // niri_time: shared compositor origin
-                        (0.0, 0.0),           // niri_cursor = (0, 0) (v1)
-                        [0.0, 0.0, 1.0, 1.0], // region_norm: whole window
-                        size_phys,            // niri_output_size = window physical size
-                        resolved.key,
-                        n_passes,
-                        ScopedSource::Capture,
-                        offscreens,
-                    );
-                    push(elem.into());
+            #[cfg(feature = "effects")]
+            {
+                if let Some(resolved) = self.window.effective_shader().cloned().filter(|_| {
+                    crate::render_helpers::target_renders_shaders(
+                        ctx.target,
+                        self.options.shaders_in_capture,
+                    )
+                }) {
+                    let have_program = Shaders::get(ctx.renderer)
+                        .program(ProgramType::Scoped(resolved.key, 0))
+                        .is_some();
+                    if have_program {
+                        let area = Rectangle::new(window_render_loc, window_size);
+                        let size_phys = (
+                            (window_size.w * self.scale) as f32,
+                            (window_size.h * self.scale) as f32,
+                        );
+                        let n_passes = resolved.passes.len();
+                        let offscreens = (0..n_passes.saturating_sub(1))
+                            .map(|_| Rc::new(OffscreenBuffer::default()))
+                            .collect::<Vec<_>>();
+                        let elem = ScopedShaderElement::new(
+                            Id::new(),
+                            area,
+                            self.scale as f32,
+                            ctx.shader_time, // niri_time: shared compositor origin
+                            (0.0, 0.0),      // niri_cursor = (0, 0) (v1)
+                            [0.0, 0.0, 1.0, 1.0], // region_norm: whole window
+                            size_phys,       // niri_output_size = window physical size
+                            resolved.key,
+                            n_passes,
+                            ScopedSource::Capture,
+                            offscreens,
+                        );
+                        push(elem.into());
+                    }
                 }
             }
         }
@@ -1630,6 +1636,7 @@ impl<W: LayoutElement> Tile<W> {
 
         // Keep light outside opening/fading snapshots so it can illuminate sibling windows.
         // Custom opening transforms have no stable scene-space light origin until they finish.
+        #[cfg(feature = "effects")]
         if self.open_animation.is_none() && self.expanded_progress() < 1. {
             let location = location + self.bob_offset();
             if focus_ring {

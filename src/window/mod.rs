@@ -661,6 +661,7 @@ mod shader_state_tests {
     }
 
     #[test]
+    #[cfg(feature = "effects")]
     fn preset_chains_are_compiled() {
         let config = niri_config::Config::parse_mem(
             r##"

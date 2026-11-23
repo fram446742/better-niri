@@ -4,20 +4,22 @@
 macro_rules! niri_render_elements {
     // The two callable variants: with <R> and without <R>. They include From impls because nested
     // repetitions ($type and $variant with + and $R with ?) don't work properly.
-    ($name:ident<R> => { $($variant:ident = $type:ty),+ $(,)? }) => {
-        $crate::niri_render_elements!(@impl $name () ($name<R>) => { $($variant = $type),+ });
+    ($name:ident<R> => { $($(#[$meta:meta])* $variant:ident = $type:ty),+ $(,)? }) => {
+        $crate::niri_render_elements!(@impl $name () ($name<R>) => { $($(#[$meta])* $variant = $type),+ });
 
-        $(impl<R: $crate::render_helpers::renderer::NiriRenderer> From<$type> for $name<R> {
+        $($(#[$meta])*
+        impl<R: $crate::render_helpers::renderer::NiriRenderer> From<$type> for $name<R> {
             fn from(x: $type) -> Self {
                 Self::$variant(x)
             }
         })+
     };
 
-    ($name:ident => { $($variant:ident = $type:ty),+ $(,)? }) => {
-        $crate::niri_render_elements!(@impl $name ($name) () => { $($variant = $type),+ });
+    ($name:ident => { $($(#[$meta:meta])* $variant:ident = $type:ty),+ $(,)? }) => {
+        $crate::niri_render_elements!(@impl $name ($name) () => { $($(#[$meta])* $variant = $type),+ });
 
-        $(impl From<$type> for $name {
+        $($(#[$meta])*
+        impl From<$type> for $name {
             fn from(x: $type) -> Self {
                 Self::$variant(x)
             }
@@ -28,41 +30,41 @@ macro_rules! niri_render_elements {
     // for the impl RenderElement<SomeRenderer> for $name<SomeRenderer>: since $R does not appear
     // in this line, we cannot condition based on $R like elsewhere, so we condition on duplicate
     // names instead. Like this: $($name_R<SomeRenderer>)? $($name_no_R)? so only one is chosen.
-    (@impl $name:ident ($($name_no_R:ident)?) ($($name_R:ident<$R:ident>)?) => { $($variant:ident = $type:ty),+ }) => {
+    (@impl $name:ident ($($name_no_R:ident)?) ($($name_R:ident<$R:ident>)?) => { $($(#[$meta:meta])* $variant:ident = $type:ty),+ }) => {
         #[allow(clippy::large_enum_variant)]
         #[derive(Debug)]
         pub enum $name$(<$R: $crate::render_helpers::renderer::NiriRenderer>)? {
-            $($variant($type)),+
+            $( $(#[$meta])* $variant($type) ),+
         }
 
         impl$(<$R: $crate::render_helpers::renderer::NiriRenderer>)? smithay::backend::renderer::element::Element for $name$(<$R>)? {
             fn id(&self) -> &smithay::backend::renderer::element::Id {
                 match self {
-                    $($name::$variant(elem) => elem.id()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.id()),+
                 }
             }
 
             fn current_commit(&self) -> smithay::backend::renderer::utils::CommitCounter {
                 match self {
-                    $($name::$variant(elem) => elem.current_commit()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.current_commit()),+
                 }
             }
 
             fn geometry(&self, scale: smithay::utils::Scale<f64>) -> smithay::utils::Rectangle<i32, smithay::utils::Physical> {
                 match self {
-                    $($name::$variant(elem) => elem.geometry(scale)),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.geometry(scale)),+
                 }
             }
 
             fn transform(&self) -> smithay::utils::Transform {
                 match self {
-                    $($name::$variant(elem) => elem.transform()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.transform()),+
                 }
             }
 
             fn src(&self) -> smithay::utils::Rectangle<f64, smithay::utils::Buffer> {
                 match self {
-                    $($name::$variant(elem) => elem.src()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.src()),+
                 }
             }
 
@@ -72,31 +74,31 @@ macro_rules! niri_render_elements {
                 commit: Option<smithay::backend::renderer::utils::CommitCounter>,
             ) -> smithay::backend::renderer::utils::DamageSet<i32, smithay::utils::Physical> {
                 match self {
-                    $($name::$variant(elem) => elem.damage_since(scale, commit)),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.damage_since(scale, commit)),+
                 }
             }
 
             fn opaque_regions(&self, scale: smithay::utils::Scale<f64>) -> smithay::backend::renderer::utils::OpaqueRegions<i32, smithay::utils::Physical> {
                 match self {
-                    $($name::$variant(elem) => elem.opaque_regions(scale)),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.opaque_regions(scale)),+
                 }
             }
 
             fn alpha(&self) -> f32 {
                 match self {
-                    $($name::$variant(elem) => elem.alpha()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.alpha()),+
                 }
             }
 
             fn kind(&self) -> smithay::backend::renderer::element::Kind {
                 match self {
-                    $($name::$variant(elem) => elem.kind()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.kind()),+
                 }
             }
 
             fn is_framebuffer_effect(&self) -> bool {
                 match self {
-                    $($name::$variant(elem) => elem.is_framebuffer_effect()),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.is_framebuffer_effect()),+
                 }
             }
         }
@@ -112,7 +114,7 @@ macro_rules! niri_render_elements {
                 cache: &smithay::utils::user_data::UserDataMap,
             ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
                 match self {
-                    $($name::$variant(elem) => {
+                    $( $(#[$meta])* $name::$variant(elem) => {
                         smithay::backend::renderer::element::RenderElement::<smithay::backend::renderer::gles::GlesRenderer>::capture_framebuffer(elem, frame, src, dst, cache)
                     })+
                 }
@@ -128,7 +130,7 @@ macro_rules! niri_render_elements {
                 cache: Option<&smithay::utils::user_data::UserDataMap>,
             ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
                 match self {
-                    $($name::$variant(elem) => {
+                    $( $(#[$meta])* $name::$variant(elem) => {
                         smithay::backend::renderer::element::RenderElement::<smithay::backend::renderer::gles::GlesRenderer>::draw(elem, frame, src, dst, damage, opaque_regions, cache)
                     })+
                 }
@@ -136,7 +138,7 @@ macro_rules! niri_render_elements {
 
             fn underlying_storage(&self, renderer: &mut smithay::backend::renderer::gles::GlesRenderer) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
                 match self {
-                    $($name::$variant(elem) => elem.underlying_storage(renderer)),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.underlying_storage(renderer)),+
                 }
             }
         }
@@ -152,7 +154,7 @@ macro_rules! niri_render_elements {
                 cache: &smithay::utils::user_data::UserDataMap,
             ) -> Result<(), $crate::backend::tty::TtyRendererError<'render>> {
                 match self {
-                    $($name::$variant(elem) => {
+                    $( $(#[$meta])* $name::$variant(elem) => {
                         smithay::backend::renderer::element::RenderElement::<$crate::backend::tty::TtyRenderer<'render>>::capture_framebuffer(elem, frame, src, dst, cache)
                     })+
                 }
@@ -168,7 +170,7 @@ macro_rules! niri_render_elements {
                 cache: Option<&smithay::utils::user_data::UserDataMap>,
             ) -> Result<(), $crate::backend::tty::TtyRendererError<'render>> {
                 match self {
-                    $($name::$variant(elem) => {
+                    $( $(#[$meta])* $name::$variant(elem) => {
                         smithay::backend::renderer::element::RenderElement::<$crate::backend::tty::TtyRenderer<'render>>::draw(elem, frame, src, dst, damage, opaque_regions, cache)
                     })+
                 }
@@ -179,7 +181,7 @@ macro_rules! niri_render_elements {
                 renderer: &mut $crate::backend::tty::TtyRenderer<'render>,
             ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
                 match self {
-                    $($name::$variant(elem) => elem.underlying_storage(renderer)),+
+                    $( $(#[$meta])* $name::$variant(elem) => elem.underlying_storage(renderer)),+
                 }
             }
         }
