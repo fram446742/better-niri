@@ -289,7 +289,7 @@ Remaining questions:
 
 `better-portal/` now exists as a separate daemon inside this repository,
 excluded from niri's Cargo workspace. It implements the portal Screenshot
-backend (fullscreen/interactive screenshot and colour picking) by delegating to
-the compositor's GNOME-Shell-style interfaces, with a cancellable
-`org.freedesktop.impl.portal.Request`. ScreenCast extraction and the external
-layer-shell picker remain.
+backend (fullscreen/interactive screenshot and colour picking) and proxies the
+ScreenCast backend (CreateSession/SelectSources/Start plus Session/Request
+Close) to the compositor's existing portal backend, with the PipeWire node ids
+passed through. The external layer-shell picker remains.
