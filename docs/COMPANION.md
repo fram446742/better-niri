@@ -395,12 +395,15 @@ niri's Cargo workspace):
   typed `Action`, and query version/outputs/workspaces/windows/focused window.
   It also consumes niri's event stream into two auto-tracked parking lots
   (`auto:workspaces`, `auto:windows`), so activation/focus/close/minimize/urgency
-  events keep a queryable snapshot without polling.
+  events keep a queryable snapshot without polling. `parker.*` consumes those
+  lots: `park`/`restore` a window and `park-workspace`/`restore-workspace` a
+  group, minimizing/unminimizing through niri and recording snapshots in the
+  `parker` lot.
 - `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
 - `companionctl`: list/status/call client.
 
-Not yet: compositor-side actions that consume the auto lots (park/restore), Phase
-B `rules`/`run_or_raise` and the optional adapters/companions.
+Not yet: Phase B `rules`/`run_or_raise`, the optional adapters/companions, and
+richer parking policies (e.g. stashing without minimizing).
 
 ## 9. Roadmap
 

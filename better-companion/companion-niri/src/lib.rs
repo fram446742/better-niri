@@ -25,6 +25,9 @@ use serde_json::{json, Value};
 pub const AUTO_WORKSPACES: &str = "auto:workspaces";
 pub const AUTO_WINDOWS: &str = "auto:windows";
 
+mod parker;
+pub use parker::{Parker, DEFAULT_LOT};
+
 pub struct Compositor {
     socket: Option<PathBuf>,
 }
