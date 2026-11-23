@@ -7752,10 +7752,8 @@ impl Niri {
         if self.layout.in_carousel_regime() && self.layout.active_output() == Some(output) {
             let host_scale = output.current_scale().fractional_scale();
             let participants = self.layout.carousel_participants(output);
-            let placements = crate::layout::carousel::carousel_card_layout(
-                mon.view_size(),
-                participants.len(),
-            );
+            let placements =
+                crate::layout::carousel::carousel_card_layout(mon.view_size(), participants.len());
             for (sibling, place) in participants.iter().zip(placements) {
                 // Scale-normalize so mixed-DPI siblings render at a consistent size.
                 let sibling_scale = sibling.scale().fractional_scale();

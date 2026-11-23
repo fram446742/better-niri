@@ -3569,7 +3569,12 @@ impl<W: LayoutElement> Layout<W> {
         let Some(cc) = self.options.overview.consolidated_carousel else {
             return false;
         };
-        self.overview_open && self.overview_zoom() <= cc.activation_zoom
+        // Use the active monitor's runtime zoom target, not the config default: the carousel
+        // regime depends on how far the user actually zoomed out.
+        let Some(mon) = self.active_monitor_ref() else {
+            return false;
+        };
+        self.overview_open && mon.overview_zoom() <= cc.activation_zoom
     }
 
     #[cfg(test)]

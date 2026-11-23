@@ -47,8 +47,9 @@ pub fn carousel_card_layout(view_size: Size<f64, Logical>, n_cards: usize) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use smithay::utils::Size;
+
+    use super::*;
 
     #[test]
     fn zero_cards_is_empty() {

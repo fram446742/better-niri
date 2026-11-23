@@ -2946,7 +2946,7 @@ impl<W: LayoutElement> Monitor<W> {
         let xray_pos = XrayPos::new(Point::from((0., 0.)), zoom);
 
         let scale_relocate = move |elem| {
-            let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
+            let elem = OverviewRescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
             RelocateRenderElement::from_element(elem, Point::from((0, 0)), Relocate::Relative)
         };
 
@@ -2962,8 +2962,20 @@ impl<W: LayoutElement> Monitor<W> {
             }};
         }
 
-        ws.render_floating(ctx.r(), xray_pos, focus_ring, push!());
-        ws.render_scrolling(ctx.r(), xray_pos, focus_ring, push!());
+        ws.render_floating(
+            ctx.r(),
+            xray_pos,
+            focus_ring,
+            super::RenderLayer::Normal,
+            push!(),
+        );
+        ws.render_scrolling(
+            ctx.r(),
+            xray_pos,
+            focus_ring,
+            super::RenderLayer::Normal,
+            push!(),
+        );
     }
 
     pub fn render_workspace_shadows<R: NiriRenderer>(

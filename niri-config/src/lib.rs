@@ -3989,10 +3989,13 @@ mod tests {
         assert_eq!(cc.activation_zoom, 0.2);
 
         // Enabled, threshold omitted => default 0.25.
-        let defaulted =
-            Config::parse_mem("overview {\n    consolidated-carousel {}\n}\n").unwrap();
+        let defaulted = Config::parse_mem("overview {\n    consolidated-carousel {}\n}\n").unwrap();
         assert_eq!(
-            defaulted.overview.consolidated_carousel.unwrap().activation_zoom,
+            defaulted
+                .overview
+                .consolidated_carousel
+                .unwrap()
+                .activation_zoom,
             0.25
         );
 
