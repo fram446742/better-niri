@@ -86,16 +86,16 @@ Added on top of the elite base after the initial merge:
   config, focused-output overview scoping, centered-output state and rotation,
   participant selection, card geometry with host clamping, scale-normalized
   rotating sibling rendering with edge fades, arrow/shift-scroll rotation, and
-  the reveal/lens zoom bands and the lens pass that fits the centered output's
-  overview into the host. The cover-flow panel-stack redesign (phase 3) is still
-  pending.
+  the reveal/lens zoom bands, damage-gated per-output panel sources, and the
+  cover-flow perspective panel stack. Post-stack rotation choreography, click
+  rotation and lens focus-jump remain.
 
 Verified on this branch:
 
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 752 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 765 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
