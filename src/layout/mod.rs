@@ -414,6 +414,7 @@ pub struct Layout<W: LayoutElement> {
     /// The overview zoom progress.
     overview_progress: Option<OverviewProgress>,
     /// Ongoing touchpad gesture opening or closing the grid overview.
+    #[cfg(feature = "navigation")]
     grid_gesture: Option<OverviewGesture>,
     /// Settled target rotation for the consolidated carousel, in ring-position
     /// units (see `carousel::ring_positions`): 0.0 = centered on the host
@@ -853,6 +854,7 @@ impl<W: LayoutElement> Layout<W> {
             overview_open: false,
             grid_overview_open_count: 0,
             overview_progress: None,
+            #[cfg(feature = "navigation")]
             grid_gesture: None,
             carousel_rotation: 0.,
             carousel_rotation_anim: None,
@@ -883,6 +885,7 @@ impl<W: LayoutElement> Layout<W> {
             overview_open: false,
             grid_overview_open_count: 0,
             overview_progress: None,
+            #[cfg(feature = "navigation")]
             grid_gesture: None,
             carousel_rotation: 0.,
             carousel_rotation_anim: None,
@@ -6368,6 +6371,7 @@ impl<W: LayoutElement> Layout<W> {
 
     /// Starts a touchpad gesture that opens the grid overview, or closes it if it's open, with
     /// the fingers.
+    #[cfg(feature = "navigation")]
     pub fn grid_gesture_begin(&mut self) {
         let opening = !self.grid_overview_open_in_scope();
         if opening {
@@ -6392,6 +6396,7 @@ impl<W: LayoutElement> Layout<W> {
         });
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_gesture_update(&mut self, delta_y: f64, timestamp: Duration) -> Option<bool> {
         let gesture = self.grid_gesture.as_mut()?;
         gesture.tracker.push(delta_y, timestamp);
@@ -6411,6 +6416,7 @@ impl<W: LayoutElement> Layout<W> {
         Some(true)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_gesture_end(&mut self) -> bool {
         let Some(mut gesture) = self.grid_gesture.take() else {
             return false;
@@ -6449,6 +6455,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     /// The grids of the workspaces that the grid overview opens and closes on.
+    #[cfg(feature = "navigation")]
     fn grid_overviews_in_scope(
         &mut self,
     ) -> impl Iterator<Item = &mut grid_overview::GridOverview<W>> + '_ {
