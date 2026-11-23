@@ -1,10 +1,14 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use glam::Mat3;
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::gles::{
-    GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
-    UniformValue,
+    GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName,
+    UniformType, UniformValue,
 };
+use smithay::backend::renderer::ImportMem;
+use smithay::utils::Size;
 
 use super::renderer::NiriRenderer;
 use super::shader_element::ShaderProgram;
@@ -23,6 +27,12 @@ pub struct Shaders {
     pub custom_resize: RefCell<Option<ShaderProgram>>,
     pub custom_close: RefCell<Option<ShaderProgram>>,
     pub custom_open: RefCell<Option<ShaderProgram>>,
+    pub custom_global_passes: RefCell<Vec<ShaderProgram>>,
+    pub custom_global_pass_buffers: RefCell<Vec<Option<ShaderProgram>>>,
+    pub scoped: RefCell<HashMap<u64, Vec<ShaderProgram>>>,
+    /// 1×1 transparent-black texture used to seed a feedback shader's first-frame niri_prev /
+    /// niri_buffer (an "empty feedback buffer"), instead of ingesting the live screen.
+    pub black_texture: GlesTexture,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,6 +42,10 @@ pub enum ProgramType {
     Resize,
     Close,
     Open,
+    Global,
+    GlobalBuffer,
+    GlobalPass(usize),
+    GlobalPassBuffer(usize),
 }
 
 impl Shaders {
@@ -251,6 +265,11 @@ impl Shaders {
             })
             .ok();
 
+        // 1×1 transparent black; sampled (clamped) it returns black for every uv at any size.
+        let black_texture = renderer
+            .import_memory(&[0u8, 0, 0, 0], Fourcc::Abgr8888, Size::from((1, 1)), false)
+            .expect("importing a 1x1 black texture must not fail");
+
         Self {
             texture_hdr,
             texture_hdr_to_sdr,
@@ -264,6 +283,10 @@ impl Shaders {
             custom_resize: RefCell::new(None),
             custom_close: RefCell::new(None),
             custom_open: RefCell::new(None),
+            custom_global_passes: RefCell::new(Vec::new()),
+            custom_global_pass_buffers: RefCell::new(Vec::new()),
+            scoped: RefCell::new(HashMap::new()),
+            black_texture,
         }
     }
 
@@ -312,6 +335,20 @@ impl Shaders {
                 .or_else(|| self.resize.clone()),
             ProgramType::Close => self.custom_close.borrow().clone(),
             ProgramType::Open => self.custom_open.borrow().clone(),
+            ProgramType::Global => self.custom_global_passes.borrow().first().cloned(),
+            ProgramType::GlobalBuffer => self
+                .custom_global_pass_buffers
+                .borrow()
+                .first()
+                .cloned()
+                .flatten(),
+            ProgramType::GlobalPass(i) => self.custom_global_passes.borrow().get(i).cloned(),
+            ProgramType::GlobalPassBuffer(i) => self
+                .custom_global_pass_buffers
+                .borrow()
+                .get(i)
+                .cloned()
+                .flatten(),
         }
     }
 }
@@ -454,6 +491,126 @@ pub fn set_custom_open_program(renderer: &mut GlesRenderer, src: Option<&str>) {
     if let Some(prev) = Shaders::get(renderer).replace_custom_open_program(program) {
         if let Err(err) = prev.destroy(renderer) {
             warn!("error destroying previous custom open shader: {err:?}");
+        }
+    }
+}
+
+fn compile_global_program(
+    renderer: &mut GlesRenderer,
+    src: &str,
+    hyprland: bool,
+) -> Result<ShaderProgram, GlesError> {
+    let mut program = if hyprland {
+        include_str!("global_hypr_prelude.frag").to_string()
+    } else {
+        include_str!("global_prelude.frag").to_string()
+    };
+    program.push_str(src);
+    if !hyprland {
+        program.push_str(include_str!("global_epilogue.frag"));
+    }
+
+    ShaderProgram::compile(
+        renderer,
+        &program,
+        &[
+            UniformName::new("niri_time", UniformType::_1f),
+            UniformName::new("niri_cursor", UniformType::_2f),
+            UniformName::new("niri_region", UniformType::_4f),
+            UniformName::new("niri_output_size", UniformType::_2f),
+        ],
+        &[
+            "niri_screen",
+            "niri_prev",
+            "niri_screen_prev",
+            "niri_buffer",
+            "niri_source",
+        ],
+    )
+}
+
+fn compile_global_buffer_program(
+    renderer: &mut GlesRenderer,
+    src: &str,
+) -> Result<ShaderProgram, GlesError> {
+    let mut program = include_str!("global_prelude.frag").to_string();
+    program.push_str(src);
+    program.push_str(include_str!("global_buffer_epilogue.frag"));
+
+    ShaderProgram::compile(
+        renderer,
+        &program,
+        &[
+            UniformName::new("niri_time", UniformType::_1f),
+            UniformName::new("niri_cursor", UniformType::_2f),
+            UniformName::new("niri_region", UniformType::_4f),
+            UniformName::new("niri_output_size", UniformType::_2f),
+        ],
+        &[
+            "niri_screen",
+            "niri_prev",
+            "niri_screen_prev",
+            "niri_buffer",
+            "niri_source",
+        ],
+    )
+}
+
+/// Install a whole pass chain: for each pass compile its display program and (niri mode only,
+/// when the source defines `global_buffer`) a dedicated-buffer program. Replaces both registry
+/// vecs wholesale and destroys every previously-installed program. An empty slice disables the
+/// chain. If any pass fails to compile, the whole chain is dropped (empty vecs) so we never run a
+/// partial chain.
+pub fn set_custom_global_passes(renderer: &mut GlesRenderer, passes: &[(String, bool)]) {
+    let mut display = Vec::with_capacity(passes.len());
+    let mut buffers = Vec::with_capacity(passes.len());
+    let mut ok = true;
+
+    for (src, hyprland) in passes {
+        match compile_global_program(renderer, src, *hyprland) {
+            Ok(p) => display.push(p),
+            Err(err) => {
+                warn!("error compiling global shader pass: {err:?}");
+                ok = false;
+                break;
+            }
+        }
+        let buffer = match (src.contains("global_buffer"), *hyprland) {
+            (true, false) => match compile_global_buffer_program(renderer, src) {
+                Ok(p) => Some(p),
+                Err(err) => {
+                    warn!("error compiling global_buffer pass: {err:?}");
+                    None
+                }
+            },
+            _ => None,
+        };
+        buffers.push(buffer);
+    }
+
+    if !ok {
+        // Destroy anything compiled this round before bailing.
+        for p in display.drain(..) {
+            let _ = p.destroy(renderer);
+        }
+        for p in buffers.drain(..).flatten() {
+            let _ = p.destroy(renderer);
+        }
+        display = Vec::new();
+        buffers = Vec::new();
+    }
+
+    let shaders = Shaders::get(renderer);
+    let old_display = shaders.custom_global_passes.replace(display);
+    let old_buffers = shaders.custom_global_pass_buffers.replace(buffers);
+    for p in old_display {
+        if let Err(err) = p.destroy(renderer) {
+            warn!("error destroying previous global pass: {err:?}");
+        }
+    }
+    for p in old_buffers.into_iter().flatten() {
+        if let Err(err) = p.destroy(renderer) {
+            warn!("error destroying previous global_buffer pass: {err:?}");
         }
     }
 }

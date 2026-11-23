@@ -34,6 +34,7 @@ pub mod binds;
 pub mod debug;
 pub mod error;
 pub mod gestures;
+pub mod global_shader;
 pub mod input;
 pub mod layer_rule;
 pub mod layout;
@@ -51,6 +52,7 @@ pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
+pub use crate::global_shader::{GlobalShader, GlobalShaderCaps, GlobalShaderPart};
 pub use crate::input::{
     Input, Keyboard, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb,
 };
@@ -87,6 +89,7 @@ pub struct Config {
     pub animations: Animations,
     pub blur: Blur,
     pub gestures: Gestures,
+    pub global_shader: GlobalShader,
     pub overview: Overview,
     pub grid_overview: GridOverview,
     pub magnifier: Magnifier,
@@ -212,6 +215,7 @@ where
                 "animations" => m_merge!(animations),
                 "blur" => m_merge!(blur),
                 "gestures" => m_merge!(gestures),
+                "global-shader" => m_merge!(global_shader),
                 "overview" => m_merge!(overview),
                 "grid-overview" => m_merge!(grid_overview),
                 "magnifier" => m_merge!(magnifier),
@@ -2632,6 +2636,16 @@ mod tests {
                     bottom_left: None,
                     bottom_right: None,
                 },
+            },
+            global_shader: GlobalShader {
+                enable: false,
+                source: None,
+                path: None,
+                mode: "niri",
+                reads_cursor: false,
+                cursor_radius: None,
+                redraw: "auto",
+                passes: [],
             },
             overview: Overview {
                 zoom: 0.5,
