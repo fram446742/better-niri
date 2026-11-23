@@ -122,6 +122,26 @@ pub fn sampling_matrix(corners: &[[f64; 2]; 4]) -> Option<glam::Mat3> {
     ]))
 }
 
+/// Hit-tests a screen-space point `p` against a panel quad. Bbox-normalizes `p` the same way
+/// `sampling_matrix` normalizes the quad's corners, applies the resulting homography, and returns
+/// the uv coordinate when it falls inside the unit square `[0,1]^2`. `None` when `p` is outside
+/// the quad or the quad is degenerate (mirrors `sampling_matrix`'s `None` cases).
+pub fn point_in_quad_uv(corners: &[[f64; 2]; 4], p: (f64, f64)) -> Option<(f64, f64)> {
+    let m = sampling_matrix(corners)?;
+    let (bx, by, bw, bh) = bounding_box(corners);
+    let norm = glam::Vec3::new(((p.0 - bx) / bw) as f32, ((p.1 - by) / bh) as f32, 1.0);
+    let s = m * norm;
+    if s.z == 0.0 {
+        return None;
+    }
+    let (u, v) = (s.x / s.z, s.y / s.z);
+    if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v) {
+        Some((u as f64, v as f64))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +235,28 @@ mod tests {
         let s = m * p;
         assert!((s.x / s.z).abs() < 1e-4);
         assert!((s.y / s.z).abs() < 1e-4);
+    }
+
+    #[test]
+    fn point_in_quad_uv_center_of_flat_quad_is_half_half() {
+        let c = tilted_panel_corners((100., 50.), (80., 40.), 0., 1000.);
+        let (u, v) = point_in_quad_uv(&c, (100., 50.)).expect("center must hit");
+        assert_close(u, 0.5);
+        assert_close(v, 0.5);
+    }
+
+    #[test]
+    fn point_in_quad_uv_outside_is_none() {
+        let c = tilted_panel_corners((100., 50.), (80., 40.), 0., 1000.);
+        assert!(point_in_quad_uv(&c, (1000., 1000.)).is_none());
+    }
+
+    #[test]
+    fn point_in_quad_uv_tilted_corner_round_trips() {
+        let c = tilted_panel_corners((0., 0.), (100., 60.), 0.5, 300.);
+        // TL corner (index 0) should round-trip to uv (0, 0).
+        let (u, v) = point_in_quad_uv(&c, (c[0][0], c[0][1])).expect("corner must hit");
+        assert_close(u, 0.0);
+        assert_close(v, 0.0);
     }
 }

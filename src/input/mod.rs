@@ -1701,8 +1701,11 @@ impl State {
                 }
             }
             Action::FocusColumnLeft => {
-                if self.niri.layout.in_carousel_regime() {
-                    self.niri.layout.slide_carousel(-1);
+                if self.niri.layout.is_overview_open()
+                    && self.niri.layout.carousel_configured()
+                    && self.niri.layout.carousel_ring().len() > 1
+                {
+                    self.niri.layout.carousel_request_rotate(-1);
                     self.niri.queue_redraw_all();
                     return;
                 }
@@ -1726,8 +1729,11 @@ impl State {
                 }
             }
             Action::FocusColumnRight => {
-                if self.niri.layout.in_carousel_regime() {
-                    self.niri.layout.slide_carousel(1);
+                if self.niri.layout.is_overview_open()
+                    && self.niri.layout.carousel_configured()
+                    && self.niri.layout.carousel_ring().len() > 1
+                {
+                    self.niri.layout.carousel_request_rotate(1);
                     self.niri.queue_redraw_all();
                     return;
                 }
@@ -3054,6 +3060,9 @@ impl State {
                 }
             }
             Action::OverviewZoomCycle(reverse) => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
                 let config = self.niri.config.borrow();
                 let presets = match &config.overview.zoom_presets {
                     Some(p) if !p.is_empty() => p.clone(),
@@ -3078,6 +3087,10 @@ impl State {
                 self.niri.queue_redraw_all();
             }
             Action::OverviewZoomIn => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
+
                 if !self.niri.layout.is_overview_open() {
                     return;
                 }
@@ -3117,6 +3130,10 @@ impl State {
                 self.niri.queue_redraw_all();
             }
             Action::OverviewZoomOut => {
+                // The user always wins over an in-flight carousel pull-back:
+                // cancel it here rather than let it fight this zoom input.
+                self.niri.layout.cancel_carousel_pullback();
+
                 let config = self.niri.config.borrow();
                 let presets = match &config.overview.zoom_presets {
                     Some(p) if !p.is_empty() => p.clone(),
@@ -4006,6 +4023,50 @@ impl State {
                 }
             }
 
+            // Carousel side-panel click-to-rotate. Must run BEFORE the regular overview click
+            // handling below (window activate-and-close, workspace click-to-focus): a panel
+            // click should rotate the ring rather than being interpreted as a click on whatever
+            // window/workspace happens to be under the same screen point. Falls through (does
+            // nothing here) when the hit panel is already the settled center — that's the lens
+            // case, owned by the regular handling below.
+            if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Left) {
+                let location = pointer.current_location();
+                if let Some((output, pos_within_output)) = self.niri.output_under(location) {
+                    let output = output.clone();
+                    // Clone out of the RefCell before calling into `self.niri.layout` below —
+                    // the hits cache read must not hold a borrow across the layout call.
+                    let hits: Vec<(f64, [[f64; 2]; 4])> = self
+                        .niri
+                        .output_state
+                        .get(&output)
+                        .map(|state| state.panel_hits.borrow().clone())
+                        .unwrap_or_default();
+
+                    let p = (pos_within_output.x, pos_within_output.y);
+                    let hit_ring_pos = hits.iter().find_map(|(ring_pos, corners)| {
+                        crate::render_helpers::panel_quad::point_in_quad_uv(corners, p)
+                            .map(|_uv| *ring_pos)
+                    });
+
+                    if let Some(ring_pos) = hit_ring_pos {
+                        let rotation = self.niri.layout.carousel_rotation();
+                        let settled =
+                            rotation == rotation.round() && !self.niri.layout.carousel_rotating();
+                        let target = self.niri.layout.carousel_rotation_target();
+
+                        if !(settled && ring_pos.round() == target.round()) {
+                            self.niri
+                                .layout
+                                .carousel_request_rotate_to(ring_pos.round());
+                            // FIXME: granular.
+                            self.niri.queue_redraw_all();
+                            return;
+                        }
+                        // Else: settled center hit — fall through to the lens click handling.
+                    }
+                }
+            }
+
             if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Right) {
                 if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
                     let ws_id = ws.id();
@@ -4554,14 +4615,17 @@ impl State {
                         });
                         (bind_up, bind_down)
                     } else if should_handle_in_overview && modifiers == Modifiers::SHIFT {
-                        if self.niri.layout.in_carousel_regime() {
+                        if self.niri.layout.is_overview_open()
+                            && self.niri.layout.carousel_configured()
+                            && self.niri.layout.carousel_ring().len() > 1
+                        {
                             if ticks > 0 {
                                 for _ in 0..ticks {
-                                    self.niri.layout.slide_carousel(1);
+                                    self.niri.layout.carousel_request_rotate(1);
                                 }
                             } else {
                                 for _ in ticks..0 {
-                                    self.niri.layout.slide_carousel(-1);
+                                    self.niri.layout.carousel_request_rotate(-1);
                                 }
                             }
                             self.niri.queue_redraw_all();
