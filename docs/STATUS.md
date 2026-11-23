@@ -180,7 +180,9 @@ picked up without re-auditing.
    close, with an app-id allowlist and persisted pairs).
    Phase C ecosystem adapters are in: optional `session.*`, `monitor.*`,
    `audio.*` and `wallpaper.*` namespaces storing explicit commands and event
-   hooks (execution only via explicit dispatch, disabled by default).
+   hooks (execution only via explicit dispatch, disabled by default). The first
+   companion app is in: `better-monitor/` snapshots output profiles and applies
+   them through niri IPC with `--dry-run`, `__previous` rollback and `restore`.
    Remaining: richer swallowing rules and the companion apps from
    `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
