@@ -181,8 +181,11 @@ picked up without re-auditing.
    Phase C ecosystem adapters are in: optional `session.*`, `monitor.*`,
    `audio.*` and `wallpaper.*` namespaces storing explicit commands and event
    hooks (execution only via explicit dispatch, disabled by default). The first
-   companion app is in: `better-monitor/` snapshots output profiles and applies
-   them through niri IPC with `--dry-run`, `__previous` rollback and `restore`.
+   companion apps are in: `better-monitor/` snapshots output profiles and
+   applies them through niri IPC with `--dry-run`, `__previous` rollback and
+   `restore`; `better-session/` saves workspaces/windows and restores them
+   (matches by app id/title, moves/floats windows, focuses named workspaces,
+   spawns configured missing apps, reports unmatched ones).
    Remaining: richer swallowing rules and the companion apps from
    `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
