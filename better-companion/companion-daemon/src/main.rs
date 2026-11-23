@@ -54,7 +54,11 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
     if track {
         if let Some(niri_socket) = companion_niri::socket_from_env() {
             let parking = parking.clone();
-            std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking));
+            let swallow = companion_niri::Swallow::from_state_dir(
+                parking.clone(),
+                companion_niri::Compositor::from_env(),
+            )?;
+            std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking, swallow));
         }
     }
     let registry = std::sync::Arc::new(registry);

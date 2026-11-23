@@ -174,8 +174,10 @@ picked up without re-auditing.
    `auto:windows` parking lots (activation, focus, close, minimize, urgency),
    and `parker.*` consumes them to park/restore a window or a whole workspace
    (minimize/unminimize through niri, snapshots persisted in the `parker` lot).
-   Phase B is started: `rules.*` (declarative match + explain/apply/run
-   through the registry) and `windows.run-or-raise`/`singleton`/`find`.
+   Phase B is in: `rules.*` (declarative match + explain/apply/run through the
+   registry), `windows.run-or-raise`/`singleton`/`find`, and opt-in terminal
+   `swallow.*` (minimize the terminal while a launched child lives, restore on
+   close, with an app-id allowlist and persisted pairs).
    Phase C ecosystem adapters are in: optional `session.*`, `monitor.*`,
    `audio.*` and `wallpaper.*` namespaces storing explicit commands and event
    hooks (execution only via explicit dispatch, disabled by default).
