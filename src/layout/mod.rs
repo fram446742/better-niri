@@ -6909,12 +6909,15 @@ impl<W: LayoutElement> Layout<W> {
             self.reset_carousel_center();
         }
 
-        // Reset zoom to config default when closing overview.
+        // Reset zoom and carousel centering when closing the overview. The centered output is
+        // only meaningful while the carousel is open; leaving it rotated would keep painting a
+        // remote output's lens over the host.
         if !self.overview_open {
             let default_zoom = self.options.overview.zoom;
             for monitor in self.monitors_mut() {
                 monitor.reset_overview_zoom(default_zoom);
             }
+            self.reset_carousel_center();
         }
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
@@ -6967,6 +6970,8 @@ impl<W: LayoutElement> Layout<W> {
         for monitor in self.monitors_mut() {
             monitor.reset_overview_zoom_preset_idx();
         }
+        // The carousel centering is meaningless once the overview is closed.
+        self.reset_carousel_center();
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
         self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
