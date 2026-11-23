@@ -87,15 +87,17 @@ Added on top of the elite base after the initial merge:
   participant selection, card geometry with host clamping, scale-normalized
   rotating sibling rendering with edge fades, arrow/shift-scroll rotation, and
   the reveal/lens zoom bands, damage-gated per-output panel sources, and the
-  cover-flow perspective panel stack. Post-stack rotation choreography, click
-  rotation and lens focus-jump remain.
+  cover-flow perspective panel stack, concave panels, pull-back choreography
+  cancelled by user input, rotation from any overview zoom, and click-to-rotate
+  side panels. The Enter lens focus-jump remains (deep input-interception
+  conflict with the elite hardcoded-bind path).
 
 Verified on this branch:
 
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 765 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 774 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
