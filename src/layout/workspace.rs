@@ -1608,9 +1608,14 @@ impl<W: LayoutElement> Workspace<W> {
             }
         }
 
-        self.update_grid_minimized_highlights();
-        self.update_grid_focus_rings(is_active);
-        self.update_grid_tab_indicators(is_active);
+        #[cfg(feature = "navigation")]
+        {
+            self.update_grid_minimized_highlights();
+            self.update_grid_focus_rings(is_active);
+            self.update_grid_tab_indicators(is_active);
+        }
+        #[cfg(not(feature = "navigation"))]
+        let _ = is_active;
 
         if layer.is_normal() {
             self.shadow.update_render_elements(
@@ -1649,6 +1654,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     /// Lays out the focus rings the grid draws around its cells.
+    #[cfg(feature = "navigation")]
     fn update_grid_focus_rings(&mut self, is_active: bool) {
         let scale = self.scale.fractional_scale();
         let view_size = self.view_size;
@@ -1722,6 +1728,7 @@ impl<W: LayoutElement> Workspace<W> {
     ///
     /// The grid gives every tab of a tabbed column its own cell. Each gets a copy of the column's
     /// tab indicator with its own tab lit, so that the tabs read as one column.
+    #[cfg(feature = "navigation")]
     fn update_grid_tab_indicators(&mut self, is_active: bool) {
         let scale = self.scale.fractional_scale();
         let view_size = self.view_size;
@@ -1857,6 +1864,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// Minimized windows are only ever on screen in the grid overview, where nothing else sets
     /// them apart from normal windows. The highlight is sized in screen space so it keeps the same
     /// thickness no matter how far the grid scales the cells down.
+    #[cfg(feature = "navigation")]
     fn update_grid_minimized_highlights(&mut self) {
         let config = self.options.grid_overview.minimized_highlight;
         let scale = self.scale.fractional_scale();
@@ -3556,6 +3564,19 @@ impl<W: LayoutElement> Workspace<W> {
         )
     }
 
+    #[cfg(not(feature = "navigation"))]
+    pub(super) fn render_grid_overview<R: NiriRenderer>(
+        &self,
+        _ctx: RenderCtx<R>,
+        _push: &mut dyn FnMut(WorkspaceRenderElement<R>),
+        _base_xray_pos: XrayPos,
+        _focus_ring: bool,
+        _is_active_workspace: bool,
+        _render_pass: GridRenderPass,
+    ) {
+    }
+
+    #[cfg(feature = "navigation")]
     pub(super) fn render_grid_overview<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,

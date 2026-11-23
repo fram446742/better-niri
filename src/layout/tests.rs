@@ -1750,15 +1750,24 @@ impl Op {
             Op::OverviewGestureEnd => {
                 layout.overview_gesture_end();
             }
+            #[cfg(feature = "navigation")]
             Op::GridGestureBegin => {
                 layout.grid_gesture_begin();
             }
+            #[cfg(not(feature = "navigation"))]
+            Op::GridGestureBegin => {}
+            #[cfg(feature = "navigation")]
             Op::GridGestureUpdate { delta, timestamp } => {
                 layout.grid_gesture_update(delta, timestamp);
             }
+            #[cfg(not(feature = "navigation"))]
+            Op::GridGestureUpdate { .. } => {}
+            #[cfg(feature = "navigation")]
             Op::GridGestureEnd => {
                 layout.grid_gesture_end();
             }
+            #[cfg(not(feature = "navigation"))]
+            Op::GridGestureEnd => {}
             Op::InteractiveMoveBegin {
                 window,
                 output_idx,
@@ -4659,6 +4668,7 @@ fn unmaximize_during_fullscreen_does_not_float() {
     assert!(scrolling.tiles().next().is_none());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_preserves_fullscreen() {
     let ops = [
@@ -4683,6 +4693,7 @@ fn grid_overview_preserves_fullscreen() {
     assert_eq!(win.pending_sizing_mode(), SizingMode::Fullscreen);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_fullscreen_preview_is_larger_than_normal_column() {
     let ops = [
@@ -4724,6 +4735,7 @@ fn grid_overview_fullscreen_preview_is_larger_than_normal_column() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_packs_visual_gap_with_fullscreen() {
     let ops = [
@@ -4767,6 +4779,7 @@ fn grid_overview_packs_visual_gap_with_fullscreen() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_fill_scale_makes_padding_visual() {
     let ops = vec![
@@ -4833,6 +4846,7 @@ fn grid_overview_fill_scale_makes_padding_visual() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_keeps_window_sizes_in_proportion() {
     let mut floating = TestWindowParams::new(2);
@@ -4880,6 +4894,7 @@ fn grid_overview_keeps_window_sizes_in_proportion() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_does_not_upscale_single_floating_window() {
     let mut floating = TestWindowParams::new(1);
@@ -4903,6 +4918,7 @@ fn grid_overview_does_not_upscale_single_floating_window() {
     approx::assert_abs_diff_eq!(info.target_scale, 1., epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_does_not_upscale_mixed_floating_window() {
     let mut floating = TestWindowParams::new(2);
@@ -4935,6 +4951,7 @@ fn grid_overview_does_not_upscale_mixed_floating_window() {
     assert!(info.target_scale <= 1.);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_preserves_maximized() {
     let ops = [
@@ -4959,6 +4976,7 @@ fn grid_overview_preserves_maximized() {
     assert_eq!(win.pending_sizing_mode(), SizingMode::Maximized);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_navigation_does_not_activate_window_until_confirmed() {
     let ops = [
@@ -5013,6 +5031,7 @@ fn grid_navigation_does_not_activate_window_until_confirmed() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_confirming_column_tile_updates_grid_tile_focus_before_close_finishes() {
     let mut layout = check_ops([
@@ -5049,6 +5068,7 @@ fn grid_confirming_column_tile_updates_grid_tile_focus_before_close_finishes() {
     assert_eq!(go.get_column_tile_focus(col_idx), tile_idx);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_expel_from_column_focuses_previous_tile_when_focused_tile_is_expelled() {
     let mut layout = check_ops([
@@ -5090,6 +5110,7 @@ fn grid_expel_from_column_focuses_previous_tile_when_focused_tile_is_expelled() 
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_stays_open_when_window_is_added() {
     let mut layout = check_ops([
@@ -5119,6 +5140,7 @@ fn grid_stays_open_when_window_is_added() {
         .any(|(item, _)| item.window_id() == &2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_activation_of_newly_added_window_keeps_grid_open() {
     let mut layout = check_ops([
@@ -5151,6 +5173,7 @@ fn grid_activation_of_newly_added_window_keeps_grid_open() {
     assert_eq!(layout.focus().map(|window| *window.id()), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_activation_of_existing_window_closes_grid() {
     let mut layout = three_column_grid_layout(1);
@@ -5166,6 +5189,7 @@ fn grid_activation_of_existing_window_closes_grid() {
     assert_eq!(layout.focus().map(|window| *window.id()), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_implicit_window_width_targets_grid_focus() {
     let mut layout = two_column_grid_focused_on_second();
@@ -5179,6 +5203,7 @@ fn grid_implicit_window_width_targets_grid_focus() {
     assert_eq!(win2.requested_size().unwrap().w, 333);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_implicit_window_height_targets_grid_focus() {
     let mut layout = two_column_grid_focused_on_second();
@@ -5192,6 +5217,7 @@ fn grid_implicit_window_height_targets_grid_focus() {
     assert_eq!(win2.requested_size().unwrap().h, 222);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_column_width_targets_grid_focus() {
     let mut layout = two_column_grid_focused_on_second();
@@ -5205,6 +5231,7 @@ fn grid_column_width_targets_grid_focus() {
     assert_eq!(win2.requested_size().unwrap().w, 444);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_full_width_targets_grid_focus() {
     let mut layout = two_column_grid_focused_on_second();
@@ -5217,6 +5244,7 @@ fn grid_full_width_targets_grid_focus() {
     assert!(win2.requested_size().unwrap().w > win1.requested_size().unwrap().w);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_fullscreen_and_maximize_target_grid_focus() {
     let mut fullscreen = two_column_grid_focused_on_second();
@@ -5260,6 +5288,7 @@ fn grid_fullscreen_and_maximize_target_grid_focus() {
     assert_eq!(win2.pending_sizing_mode(), SizingMode::Maximized);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_keeps_all_tabbed_items_visible() {
     let layout = check_ops([
@@ -5285,6 +5314,7 @@ fn grid_closing_keeps_all_tabbed_items_visible() {
     assert!(scrolling.grid_item_visible_when_closing(&inactive_item));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_renders_fullscreen_tiling_above_other_grid_items() {
     let mut floating = TestWindowParams::new(3);
@@ -5315,6 +5345,7 @@ fn grid_closing_renders_fullscreen_tiling_above_other_grid_items() {
     assert!(!ws.grid_item_renders_on_top_when_grid_closing_for_tests(&floating_item));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_ignores_floating_windows_with_rule() {
     let mut ignored_floating = TestWindowParams::new(2);
@@ -5358,6 +5389,7 @@ fn grid_ignores_floating_windows_with_rule() {
     assert_eq!(layout.focus().map(|win| win.id()), Some(&2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_includes_floating_windows_without_ignore_rule() {
     let mut included_floating = TestWindowParams::new(2);
@@ -5507,6 +5539,7 @@ fn floating_stays_above_focused_tiled_window_by_default() {
     assert_eq!(window_id_under(&layout, pos), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_focused_first_column_focuses_right() {
     let mut layout = three_column_grid_layout(1);
@@ -5519,6 +5552,7 @@ fn grid_closing_focused_first_column_focuses_right() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_whole_column_uses_entry_rearrange() {
     let mut layout = three_column_grid_layout(1);
@@ -5543,6 +5577,7 @@ fn grid_closing_whole_column_uses_entry_rearrange() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_focused_middle_column_focuses_right() {
     let mut layout = three_column_grid_layout(1);
@@ -5557,6 +5592,7 @@ fn grid_closing_focused_middle_column_focuses_right() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_focused_last_column_focuses_left() {
     let mut layout = three_column_grid_layout(1);
@@ -5573,6 +5609,7 @@ fn grid_closing_focused_last_column_focuses_left() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_last_window_keeps_empty_grid_open_for_close_animation() {
     let mut layout = check_ops([
@@ -5594,6 +5631,7 @@ fn grid_closing_last_window_keeps_empty_grid_open_for_close_animation() {
     assert_eq!(layout.grid_focused_window_id(), None);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_nonfocused_column_preserves_grid_focus() {
     let mut layout = three_column_grid_layout(1);
@@ -5610,6 +5648,7 @@ fn grid_closing_nonfocused_column_preserves_grid_focus() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_column_left_of_focus_keeps_grid_focus() {
     let mut ops = vec![Op::AddOutput(1)];
@@ -5635,6 +5674,7 @@ fn grid_closing_column_left_of_focus_keeps_grid_focus() {
     assert_eq!(item.window_id(), &2);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_column_tile_choice_follows_its_column() {
     let mut layout = check_ops([
@@ -5682,6 +5722,7 @@ fn grid_column_tile_choice_follows_its_column() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_focused_minimized_cell_moves_focus_without_restoring() {
     let mut layout = check_ops([
@@ -5724,6 +5765,7 @@ fn grid_closing_focused_minimized_cell_moves_focus_without_restoring() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_follows_its_window_when_the_grid_reflows() {
     let mut ops = vec![Op::AddOutput(1)];
@@ -5760,6 +5802,7 @@ fn grid_focus_follows_its_window_when_the_grid_reflows() {
     assert_eq!(layout.grid_focused_window_id(), Some(5));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_activating_a_window_moves_the_grid_focus() {
     let mut layout = three_column_grid_layout(1);
@@ -5783,6 +5826,7 @@ fn grid_activating_a_window_moves_the_grid_focus() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_confirming_on_another_workspace_switches_properly() {
     let ws_windows = |layout: &Layout<TestWindow>| {
@@ -5844,6 +5888,7 @@ fn grid_confirming_on_another_workspace_switches_properly() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn activating_minimized_window_without_raising_does_nothing() {
     let mut layout = check_ops([
@@ -5888,6 +5933,7 @@ fn grid_open_flags(layout: &Layout<TestWindow>) -> Vec<(bool, Vec<bool>)> {
         .collect()
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_extends_to_a_monitor_connected_while_open() {
     let mut layout = check_ops([
@@ -5917,6 +5963,7 @@ fn grid_extends_to_a_monitor_connected_while_open() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_state_survives_unplugging_the_monitor() {
     let mut layout = check_ops([
@@ -5936,6 +5983,7 @@ fn grid_state_survives_unplugging_the_monitor() {
     assert_eq!(grid_open_flags(&layout), vec![(true, vec![true])]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_workspace_moved_between_monitors_takes_their_grid_state() {
     let options = Options {
@@ -5969,6 +6017,7 @@ fn grid_workspace_moved_between_monitors_takes_their_grid_state() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_all_monitors_turned_on_while_open_opens_everywhere() {
     let options = Options {
@@ -6001,6 +6050,7 @@ fn grid_all_monitors_turned_on_while_open_opens_everywhere() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn window_restored_as_the_grid_closes_doesnt_fade_out() {
     let mut layout = check_ops([
@@ -6032,6 +6082,7 @@ fn window_restored_as_the_grid_closes_doesnt_fade_out() {
         .is_none_or(|alpha| alpha.anim.to() == 1.));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_to_workspace_that_goes_nowhere_keeps_minimized_cell() {
     let mut layout = check_ops([
@@ -6059,6 +6110,7 @@ fn grid_move_to_workspace_that_goes_nowhere_keeps_minimized_cell() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_unfocused_new_window_keeps_grid_selection() {
     let mut layout = three_column_grid_layout(1);
@@ -6083,6 +6135,7 @@ fn grid_unfocused_new_window_keeps_grid_selection() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_reopened_while_closing_starts_from_the_current_state() {
     let mut layout = three_column_grid_layout(1);
@@ -6121,6 +6174,7 @@ fn grid_reopened_while_closing_starts_from_the_current_state() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_shows_minimized_ignored_window_as_a_minimized_cell() {
     let mut ignored_floating = TestWindowParams::new(2);
@@ -6200,6 +6254,7 @@ fn grid_entry_render_scale(layout: &Layout<TestWindow>, window: usize) -> Option
     Some(ws.grid_item_render_visual_transform(go, item, info).1)
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_restoring_ignored_window_in_place_keeps_its_cell() {
     let mut layout = grid_with_minimized_ignored_floating();
@@ -6234,6 +6289,7 @@ fn grid_restoring_ignored_window_in_place_keeps_its_cell() {
     assert!(layout.window_is_in_open_grid_overview(&1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_activating_minimized_ignored_window_flies_it_back() {
     let mut layout = grid_with_minimized_ignored_floating();
@@ -6257,6 +6313,7 @@ fn grid_activating_minimized_ignored_window_flies_it_back() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_column_focus_actions_move_the_grid_focus() {
     let mut layout = check_ops([
@@ -6318,6 +6375,7 @@ fn grid_column_focus_actions_move_the_grid_focus() {
     layout.verify_invariants();
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_or_monitor_focus_actions_cross_to_the_other_monitor_at_the_edge() {
     let mut layout = check_ops([
@@ -6373,6 +6431,7 @@ fn grid_cell_ids(layout: &Layout<TestWindow>, output: &str) -> Vec<usize> {
         .unwrap_or_default()
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_window_moved_to_another_monitor_gets_a_cell_there() {
     let mut layout = check_ops([
@@ -6412,6 +6471,7 @@ fn grid_window_moved_to_another_monitor_gets_a_cell_there() {
     assert_eq!(grid_cell_ids(&layout, "output2"), vec![1, 3, 2]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_to_workspace_by_window_id_moves_it() {
     let mut layout = check_ops([
@@ -6444,6 +6504,7 @@ fn grid_move_to_workspace_by_window_id_moves_it() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_reflows_when_a_window_goes_fullscreen_out_of_its_column() {
     let mut layout = check_ops([
@@ -6481,6 +6542,7 @@ fn grid_reflows_when_a_window_goes_fullscreen_out_of_its_column() {
     assert_eq!(layout.grid_focused_window_id(), Some(4));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_with_a_gap_too_large_keeps_positive_sizes() {
     let options = Options {
@@ -6609,6 +6671,7 @@ fn assert_grid_layout_is_sound(
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_layout_keeps_strip_order_and_tabs_together() {
     use super::grid_overview::GridLayout;
@@ -6646,6 +6709,7 @@ fn grid_layout_keeps_strip_order_and_tabs_together() {
     assert_eq!(row_of(4), row_of(5));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_layout_is_sound_for_many_shapes() {
     use super::grid_overview::GridLayout;
@@ -6694,6 +6758,7 @@ fn grid_layout_is_sound_for_many_shapes() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_layout_puts_floating_windows_into_the_gap_of_a_short_row() {
     use super::grid_overview::GridLayout;
@@ -6730,6 +6795,7 @@ fn grid_layout_puts_floating_windows_into_the_gap_of_a_short_row() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_layout_keeps_its_scale_for_small_changes_while_open() {
     use super::grid_overview::GridLayout;
@@ -6772,6 +6838,7 @@ fn floating_centers(
         .collect()
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_layout_keeps_floating_windows_on_their_side_of_the_screen() {
     use super::grid_overview::GridLayout;
@@ -6817,6 +6884,7 @@ fn grid_layout_keeps_floating_windows_on_their_side_of_the_screen() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_up_from_a_centered_last_row_goes_to_the_cell_above_it() {
     use super::grid_overview::{GridDirection, GridItem, GridLayout, GridOverview, GridSource};
@@ -6849,6 +6917,7 @@ fn grid_up_from_a_centered_last_row_goes_to_the_cell_above_it() {
     assert_eq!(go.focus, 4);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_retarget_during_spring_overshoot_doesnt_jump() {
     use niri_config::animations::{Kind, SpringParams};
@@ -6913,6 +6982,7 @@ fn grid_retarget_during_spring_overshoot_doesnt_jump() {
     approx::assert_abs_diff_eq!(before.1, after.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_column_inserted_in_the_middle_doesnt_take_over_its_neighbours_cell() {
     use super::grid_overview::{GridItem, GridOverview, GridSource};
@@ -6957,6 +7027,7 @@ fn grid_column_inserted_in_the_middle_doesnt_take_over_its_neighbours_cell() {
     assert_ne!(start_of_4, old_cell_of_2);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_stays_open_on_workspace_switch() {
     let mut layout = three_column_grid_layout(1);
@@ -7081,6 +7152,7 @@ fn grid_focus_ring_windows(layout: &Layout<TestWindow>) -> Vec<usize> {
     ids
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_ring_grow_shrinks_the_old_ring() {
     let mut layout = grid_focus_ring_layout(niri_config::GridFocusRingTransition::Grow);
@@ -7097,6 +7169,7 @@ fn grid_focus_ring_grow_shrinks_the_old_ring() {
     assert_eq!(grid_focus_ring_windows(&layout), [2]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_ring_slide_and_none_keep_one_ring() {
     for transition in [
@@ -7119,6 +7192,7 @@ fn grid_focus_ring_slide_and_none_keep_one_ring() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_ring_follows_window_focus_ring_off() {
     let mut options = Options::default();
@@ -7199,6 +7273,7 @@ fn focus_ring_moves_to_floating_and_back() {
     assert_eq!(windows_with_visible_focus_ring(&layout), [1]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_tab_cells_get_tab_indicators() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7218,6 +7293,7 @@ fn grid_tab_cells_get_tab_indicators() {
     assert_eq!(go.tab_indicator_windows().count(), 0);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_tab_indicator_folds_away_when_tab_leaves() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7360,6 +7436,7 @@ fn grid_has_rearrange_anim(layout: &Layout<TestWindow>) -> bool {
         .is_some()
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_moves_tabbed_column_as_group() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7376,6 +7453,7 @@ fn grid_move_column_moves_tabbed_column_as_group() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_down_reorders_focused_tab_only() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7392,6 +7470,7 @@ fn grid_move_window_down_reorders_focused_tab_only() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_up_reorders_focused_column_tile() {
     let mut layout = check_ops([
@@ -7419,6 +7498,7 @@ fn grid_move_window_up_reorders_focused_column_tile() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_up_preserves_tile_move_animation() {
     let mut layout = check_ops([
@@ -7480,6 +7560,7 @@ fn grid_move_window_up_preserves_tile_move_animation() {
     approx::assert_abs_diff_eq!(after_origin.y, before_origin.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_within_column_does_not_rearrange_unchanged_entries() {
     let mut layout = check_ops([
@@ -7527,6 +7608,7 @@ fn grid_move_window_within_column_does_not_rearrange_unchanged_entries() {
     approx::assert_abs_diff_eq!(after_3.1, before_3.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_close_top_window_preserves_lower_tile_move_animation() {
     let mut layout = check_ops([
@@ -7557,6 +7639,7 @@ fn grid_close_top_window_preserves_lower_tile_move_animation() {
     approx::assert_abs_diff_eq!(after.loc.y, before.loc.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_window_down_or_output_navigates_focused_column_tile() {
     let mut layout = check_ops([
@@ -7615,6 +7698,7 @@ fn grid_focus_window_down_or_output_navigates_focused_column_tile() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_window_or_workspace_down_prefers_grid_then_workspace() {
     let mut layout = check_ops([
@@ -7642,6 +7726,7 @@ fn grid_focus_window_or_workspace_down_prefers_grid_then_workspace() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_toggle_column_tabbed_display_refreshes_grid_items() {
     let mut layout = check_ops([
@@ -7674,6 +7759,7 @@ fn grid_toggle_column_tabbed_display_refreshes_grid_items() {
     assert!(ws.grid_window_visual_transform(&2).is_some());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_column_to_tabs_starts_windows_from_previous_visual_positions() {
     let mut layout = check_ops([
@@ -7708,6 +7794,7 @@ fn grid_column_to_tabs_starts_windows_from_previous_visual_positions() {
     approx::assert_abs_diff_eq!(after_2.1, before_2.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_tabs_to_column_starts_windows_from_previous_visual_positions() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7748,6 +7835,7 @@ fn grid_tabs_to_column_starts_windows_from_previous_visual_positions() {
     approx::assert_abs_diff_eq!(after_2.1, before_2.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_merge_starts_windows_from_previous_visual_positions() {
     let mut layout = check_ops([
@@ -7798,6 +7886,7 @@ fn grid_merge_starts_windows_from_previous_visual_positions() {
     approx::assert_abs_diff_eq!(after_2.1, before_2.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_action_snapshots_visuals_before_activating_grid_focus() {
     let mut layout = check_ops([
@@ -7843,6 +7932,7 @@ fn grid_action_snapshots_visuals_before_activating_grid_focus() {
     approx::assert_abs_diff_eq!(after_2.0.y, before_2.0.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_set_column_display_normal_refreshes_grid_items() {
     let mut layout = tabbed_column_and_column_grid();
@@ -7869,6 +7959,7 @@ fn grid_set_column_display_normal_refreshes_grid_items() {
     assert!(ws.grid_window_visual_transform(&2).is_some());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_to_workspace_keeps_source_grid_open() {
     let mut layout = two_column_grid_focused_on_second();
@@ -7883,6 +7974,7 @@ fn grid_move_window_to_workspace_keeps_source_grid_open() {
     assert_eq!(source_ws.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_grab_minimized_window_restores_it() {
     let mut layout = check_ops([
@@ -7917,6 +8009,7 @@ fn grid_grab_minimized_window_restores_it() {
     assert!(!layout.is_window_minimized(&1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_to_workspace_flies_in_from_source_cells() {
     let mut layout = check_ops([
@@ -7984,6 +8077,7 @@ fn grid_move_column_to_workspace_flies_in_from_source_cells() {
     assert!(go.flying_in_windows.iter().any(|id| [1, 2].contains(id)));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_to_workspace_flies_in_from_source_cell() {
     let mut layout = check_ops([
@@ -8050,6 +8144,7 @@ fn grid_move_window_to_workspace_flies_in_from_source_cell() {
     assert!(!tile.is_moving_between_workspaces());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_minimized_window_flies_back_while_fading() {
     let mut layout = check_ops([
@@ -8123,6 +8218,7 @@ fn grid_closing_minimized_window_flies_back_while_fading() {
     assert!(alpha.anim.value() < 1.);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_reopen_mid_close_continues_from_current_visual() {
     let mut layout = check_ops([
@@ -8161,6 +8257,7 @@ fn grid_reopen_mid_close_continues_from_current_visual() {
     approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.01);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_click_minimized_window_does_not_jump_to_focused_scale() {
     let mut layout = check_ops([
@@ -8212,6 +8309,7 @@ fn grid_click_minimized_window_does_not_jump_to_focused_scale() {
     approx::assert_abs_diff_eq!(close_start_scale, pre_scale, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_cross_workspace_move_uses_workspace_switch_animation_for_fly_in() {
     use niri_config::animations::{Curve, EasingParams, Kind};
@@ -8260,6 +8358,7 @@ fn grid_cross_workspace_move_uses_workspace_switch_animation_for_fly_in() {
     assert!(value < 0.5, "value {value}");
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_reversed_midflight_keeps_visual_continuity() {
     let mut layout = check_ops([
@@ -8318,6 +8417,7 @@ fn grid_move_column_reversed_midflight_keeps_visual_continuity() {
     assert!(go.flying_in_windows.contains(&2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_reversed_midflight_keeps_visual_continuity() {
     let mut layout = check_ops([
@@ -8378,6 +8478,7 @@ fn grid_move_window_reversed_midflight_keeps_visual_continuity() {
     assert!(go.flying_in_windows.contains(&2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_triple_reversal_keeps_visual_continuity() {
     let mut layout = check_ops([
@@ -8433,6 +8534,7 @@ fn grid_move_column_triple_reversal_keeps_visual_continuity() {
     approx::assert_abs_diff_eq!(after_scale, before.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_moves_real_focus_during_close_animation() {
     let mut layout = check_ops([
@@ -8471,6 +8573,7 @@ fn grid_focus_moves_real_focus_during_close_animation() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_focus_navigation_works_during_close_animation() {
     let mut layout = check_ops([
@@ -8505,6 +8608,7 @@ fn grid_focus_navigation_works_during_close_animation() {
         .is_some_and(|go| !go.open));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_noop_action_preserves_ongoing_window_transitions() {
     let mut layout = check_ops([
@@ -8570,6 +8674,7 @@ fn grid_noop_action_preserves_ongoing_window_transitions() {
     approx::assert_abs_diff_eq!(after.1, before.1, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_at_edge_repeat_does_not_jump_midflight() {
     let mut layout = check_ops([
@@ -8627,6 +8732,7 @@ fn grid_move_column_at_edge_repeat_does_not_jump_midflight() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_at_edge_repeat_does_not_jump_midflight() {
     let mut layout = check_ops([
@@ -8673,6 +8779,7 @@ fn grid_move_window_at_edge_repeat_does_not_jump_midflight() {
     approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_reversed_midflight_keeps_visual_continuity_from_empty_source() {
     let mut layout = check_ops([
@@ -8713,6 +8820,7 @@ fn grid_move_window_reversed_midflight_keeps_visual_continuity_from_empty_source
     approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_window_down_twice_midflight_keeps_visual_continuity() {
     let mut layout = check_ops([
@@ -8820,6 +8928,7 @@ fn grid_layout_with_occupied_workspace_above() -> Layout<TestWindow> {
     layout
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_down_to_occupied_workspace_focuses_moved_window() {
     let mut layout = grid_layout_with_occupied_workspace_below();
@@ -8831,6 +8940,7 @@ fn grid_move_column_down_to_occupied_workspace_focuses_moved_window() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_up_to_occupied_workspace_focuses_moved_window() {
     let mut layout = grid_layout_with_occupied_workspace_above();
@@ -8842,6 +8952,7 @@ fn grid_move_column_up_to_occupied_workspace_focuses_moved_window() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_to_occupied_workspace_by_index_focuses_moved_window() {
     let mut layout = grid_layout_with_occupied_workspace_below();
@@ -8853,6 +8964,7 @@ fn grid_move_column_to_occupied_workspace_by_index_focuses_moved_window() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_to_occupied_output_focuses_moved_window() {
     let mut layout = check_ops([
@@ -8884,6 +8996,7 @@ fn grid_move_column_to_occupied_output_focuses_moved_window() {
     assert_eq!(layout.grid_focused_window_id(), Some(2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_window_scope_is_limited_to_open_grid_workspace() {
     let options = Options {
@@ -8917,6 +9030,7 @@ fn grid_window_scope_is_limited_to_open_grid_workspace() {
     assert!(layout.is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_drop_position_uses_visual_cell_edges() {
     let mut layout = tabbed_column_and_column_grid();
@@ -8960,6 +9074,7 @@ fn grid_drop_position_uses_visual_cell_edges() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_insert_hint_area_uses_grid_visual_coordinates() {
     let mut layout = tabbed_column_and_column_grid();
@@ -8997,6 +9112,7 @@ fn grid_insert_hint_area_uses_grid_visual_coordinates() {
     assert!(ws.grid_insert_position_and_hint_area(gap_point).is_some());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_drop_far_from_every_cell_goes_beside_the_nearest_one() {
     // Wide padding, to have room for points far from every cell.
@@ -9049,6 +9165,7 @@ fn grid_drop_far_from_every_cell_goes_beside_the_nearest_one() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_new_column_insert_hint_does_not_span_wrapped_rows() {
     let mut ops = vec![Op::AddOutput(1)];
@@ -9083,6 +9200,7 @@ fn grid_new_column_insert_hint_does_not_span_wrapped_rows() {
     assert!(area.loc.y + area.size.h <= source_rect.loc.y + source_rect.size.h);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_interactive_move_keeps_visual_scale_and_can_merge() {
     let mut layout = large_grid_layout();
@@ -9135,6 +9253,7 @@ fn grid_interactive_move_keeps_visual_scale_and_can_merge() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_width_actions_during_drag_do_nothing() {
     let mut layout = large_grid_layout();
@@ -9177,6 +9296,7 @@ fn minimized_ids(layout: &Layout<TestWindow>) -> Vec<usize> {
     ids
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_with_all_windows_minimized_restores_nothing() {
     let layout = check_ops([
@@ -9198,6 +9318,7 @@ fn grid_closing_with_all_windows_minimized_restores_nothing() {
     assert_eq!(minimized_ids(&layout), vec![1, 2]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_on_a_minimized_cell_restores_it() {
     let mut layout = check_ops([
@@ -9239,6 +9360,7 @@ fn grid_closing_on_a_minimized_cell_restores_it() {
     assert_eq!(minimized_ids(&layout), Vec::<usize>::new());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_closing_keeps_ignored_floating_window_active() {
     let mut ignored_floating = TestWindowParams::new(2);
@@ -9272,6 +9394,7 @@ fn grid_closing_keeps_ignored_floating_window_active() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_dragged_window_keeps_focus() {
     let mut layout = large_grid_layout();
@@ -9290,6 +9413,7 @@ fn grid_dragged_window_keeps_focus() {
     assert_eq!(layout.focus().map(|win| *win.id()), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_merge_insert_computes_final_targets_immediately() {
     let mut ops = vec![Op::AddOutput(1)];
@@ -9347,6 +9471,7 @@ fn grid_merge_insert_computes_final_targets_immediately() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_interactive_insert_preserves_pushed_tile_move_animation() {
     let mut layout = check_ops([
@@ -9386,6 +9511,7 @@ fn grid_interactive_insert_preserves_pushed_tile_move_animation() {
     assert!(pushed_offset.abs() > 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_toggle_applies_to_all_monitors_by_default() {
     let mut layout = check_ops([
@@ -9423,6 +9549,7 @@ fn grid_toggle_applies_to_all_monitors_by_default() {
     assert!(!monitors[1].is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_all_monitors_false_toggles_only_focused_monitor() {
     let options = Options {
@@ -9459,6 +9586,7 @@ fn grid_all_monitors_false_toggles_only_focused_monitor() {
     assert!(!monitors[1].is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_all_monitors_false_cross_output_move_uses_target_monitor_grid_state() {
     let options = Options {
@@ -9500,6 +9628,7 @@ fn grid_all_monitors_false_cross_output_move_uses_target_monitor_grid_state() {
     assert!(monitors[1].workspaces[1].is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_mode_applies_to_workspace_that_gets_first_window() {
     let mut layout = check_ops([
@@ -9522,6 +9651,7 @@ fn grid_mode_applies_to_workspace_that_gets_first_window() {
     assert!(monitor.workspaces[1].is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn overview_close_preserves_grid_mode() {
     let mut layout = check_ops([
@@ -9540,6 +9670,7 @@ fn overview_close_preserves_grid_mode() {
     assert!(layout.is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn overview_grid_confirm_closes_overview_and_grid() {
     let mut layout = check_ops([
@@ -9558,6 +9689,7 @@ fn overview_grid_confirm_closes_overview_and_grid() {
     assert!(!layout.is_grid_overview_open());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn overview_grid_close_commits_grid_focus_and_keeps_overview_open() {
     let mut layout = check_ops([
@@ -9598,6 +9730,7 @@ fn overview_grid_close_commits_grid_focus_and_keeps_overview_open() {
     assert_eq!(layout.focus().map(|window| *window.id()), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_close_after_moving_focused_window_to_workspace_refits_view() {
     let wide_params = |id| {
@@ -9887,6 +10020,7 @@ fn removing_rightmost_column_preserves_centering_mode() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_close_after_focused_window_removal_refits_view() {
     let mut options = Options::default();
@@ -9946,6 +10080,7 @@ fn grid_close_after_focused_window_removal_refits_view() {
     approx::assert_abs_diff_eq!(actual_2.y, expected_2.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_close_after_moving_focused_window_to_workspace_refits_render_positions() {
     let mut options = Options::default();
@@ -10007,6 +10142,7 @@ fn grid_close_after_moving_focused_window_to_workspace_refits_render_positions()
     approx::assert_abs_diff_eq!(actual_2.y, expected_2.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn overview_grid_close_after_moving_focused_window_to_workspace_refits_source_workspace() {
     let mut options = Options::default();
@@ -10069,6 +10205,7 @@ fn overview_grid_close_after_moving_focused_window_to_workspace_refits_source_wo
     approx::assert_abs_diff_eq!(actual_2.y, expected_2.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_interactive_move_starts_with_small_drag() {
     let mut layout = large_grid_layout();
@@ -10089,6 +10226,7 @@ fn grid_interactive_move_starts_with_small_drag() {
     ));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_recomputes_after_window_communicate_while_open() {
     let mut layout = check_ops([
@@ -10136,6 +10274,7 @@ fn grid_recomputes_after_window_communicate_while_open() {
     assert!(after_reopen.w >= after_communicate.w);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_passive_recompute_while_opening_preserves_visual_position() {
     let mut layout = large_grid_layout();
@@ -10174,6 +10313,7 @@ fn grid_passive_recompute_while_opening_preserves_visual_position() {
     approx::assert_abs_diff_eq!(after.y, before.y, epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_recompute_while_rearranging_does_not_restart_animation() {
     let mut layout = three_column_grid_layout(1);
@@ -10204,6 +10344,7 @@ fn grid_recompute_while_rearranging_does_not_restart_animation() {
     assert!(value_after >= value_before);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_passive_recompute_preserves_sources_for_unchanged_targets() {
     let mut layout = three_column_grid_layout(1);
@@ -10233,6 +10374,7 @@ fn grid_passive_recompute_preserves_sources_for_unchanged_targets() {
     assert_eq!(go.entry_scales, scales_before);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_passive_recompute_when_idle_does_not_start_rearrange_animation() {
     let mut layout = check_ops([
@@ -10259,6 +10401,7 @@ fn grid_passive_recompute_when_idle_does_not_start_rearrange_animation() {
     assert!(!grid_has_rearrange_anim(&layout));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_action_while_rearranging_restarts_animation() {
     let mut layout = three_column_grid_layout(1);
@@ -10281,6 +10424,7 @@ fn grid_action_while_rearranging_restarts_animation() {
     approx::assert_abs_diff_eq!(value_after, 0., epsilon = 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_confirm_matches_normal_focus_view_offset_at_edges() {
     let mut direct = three_column_grid_layout(1);
@@ -10878,6 +11022,7 @@ fn assert_window_order(layout: &Layout<TestWindow>, expected: [usize; 3]) {
     assert_eq!(ids, expected);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_left_steps_over_minimized_cell() {
     let mut layout = grid_with_minimized_middle(3);
@@ -10892,6 +11037,7 @@ fn grid_move_column_left_steps_over_minimized_cell() {
     assert_window_order(&layout, [3, 1, 2]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_right_steps_over_minimized_cell() {
     let mut layout = grid_with_minimized_middle(1);
@@ -10904,6 +11050,7 @@ fn grid_move_column_right_steps_over_minimized_cell() {
     assert_window_order(&layout, [2, 3, 1]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_move_column_to_first_and_index_count_minimized_cells() {
     let mut layout = check_ops([
@@ -10938,6 +11085,7 @@ fn grid_move_column_to_first_and_index_count_minimized_cells() {
     assert_window_order(&layout, [1, 2, 3]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn move_column_left_skips_minimized_outside_grid() {
     // Without the grid overview, minimized windows are invisible, so moves jump over them.
@@ -10960,6 +11108,7 @@ fn move_column_left_skips_minimized_outside_grid() {
     assert_window_order(&layout, [3, 1, 2]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_moving_minimized_cell_keeps_it_minimized() {
     let mut layout = grid_with_minimized_middle(2);
@@ -10994,6 +11143,7 @@ fn grid_moving_minimized_cell_keeps_it_minimized() {
     assert!(layout.is_window_minimized(&2));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_restore_does_not_leave_strip_move_animations() {
     // The grid reads the columns' render offsets to know where a cell flies back to, so the
@@ -11009,6 +11159,7 @@ fn grid_restore_does_not_leave_strip_move_animations() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_minimizing_leaves_the_grid_focus_alone() {
     let mut layout = check_ops([
@@ -11054,6 +11205,7 @@ fn grid_minimizing_leaves_the_grid_focus_alone() {
     assert_eq!(layout.grid_focused_window_id(), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_unminimize_in_place_keeps_the_grid_open_and_focused() {
     // Pressing minimize on an already-minimized cell restores it without activating, so the grid
@@ -11083,6 +11235,7 @@ fn grid_unminimize_in_place_keeps_the_grid_open_and_focused() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_overview_picks_up_config_reloads() {
     // The overview is created once and then lives as long as its workspace, so it used to keep
@@ -11117,6 +11270,7 @@ fn grid_overview_picks_up_config_reloads() {
     assert_eq!(go.layout.gap, 64., "a new gap must re-lay out the grid");
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_drop_onto_minimized_cell_never_merges_into_it() {
     // Merging a window into the placeholder column would leave the minimized tile inside a
@@ -11142,6 +11296,7 @@ fn grid_drop_onto_minimized_cell_never_merges_into_it() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_drop_onto_tabbed_minimized_cell_never_merges_into_it() {
     // Placeholder columns take default-column-display.
@@ -11489,6 +11644,7 @@ proptest! {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_moves_a_focused_ignored_window_like_without_the_grid() {
     let mut ignored_floating = TestWindowParams::new(2);
@@ -11567,6 +11723,7 @@ fn floating_focus_left_goes_to_the_window_alongside() {
     assert_eq!(layout.focus().map(|win| *win.id()), Some(3));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_opens_again_the_way_it_closed() {
     let mut floating = TestWindowParams::new(4);
@@ -11638,6 +11795,7 @@ fn grid_opens_again_the_way_it_closed() {
     assert_ne!(after, before);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn toggle_window_floating_switches_the_focused_cell_in_the_grid() {
     let mut layout = check_ops([
@@ -11692,6 +11850,7 @@ fn toggle_window_floating_switches_the_focused_cell_in_the_grid() {
     assert_eq!(layout.grid_focused_window_id(), Some(1));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_dropping_a_floating_window_moves_it_on_from_where_it_was_dropped() {
     let mut floating = TestWindowParams::new(3);
@@ -11836,6 +11995,7 @@ fn grid_scale(layout: &Layout<TestWindow>) -> f64 {
         .scale
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_wraps_windows_opened_while_it_was_closed() {
     let mut layout = grid_corner_floats_layout(2);
@@ -11870,6 +12030,7 @@ fn grid_wraps_windows_opened_while_it_was_closed() {
     assert!(grid_scale(&layout) >= grid_scale(&fresh) * 0.92 - 0.001);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_wraps_windows_opening_while_it_shows() {
     let mut layout = grid_corner_floats_layout(2);
@@ -12025,6 +12186,7 @@ fn grid_stacked_floats_layout(cascade: bool) -> Layout<TestWindow> {
     check_ops(ops)
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_spreads_floating_windows_that_opened_on_top_of_each_other() {
     for cascade in [false, true] {
@@ -12072,6 +12234,7 @@ fn gesture(layout: &mut Layout<TestWindow>, deltas: &[f64]) {
     check_ops_on_layout(layout, ops);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_gesture_opens_the_grid_as_far_as_the_fingers_go() {
     let mut layout = grid_gesture_layout();
@@ -12111,6 +12274,7 @@ fn grid_gesture_opens_the_grid_as_far_as_the_fingers_go() {
     assert_eq!(ws.active_window().map(|w| *w.id()), active);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_gesture_that_turns_back_leaves_the_grid_closed() {
     let mut layout = grid_gesture_layout();
@@ -12128,6 +12292,7 @@ fn grid_gesture_that_turns_back_leaves_the_grid_closed() {
     assert_eq!(ws.active_window().map(|w| *w.id()), active);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_gesture_closes_an_open_grid() {
     let mut layout = grid_gesture_layout();
@@ -12161,6 +12326,7 @@ fn grid_gesture_closes_an_open_grid() {
     assert!(ws.grid_overview().is_none());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_gesture_that_turns_back_keeps_the_grid_open() {
     let mut layout = grid_gesture_layout();
@@ -12192,6 +12358,7 @@ fn grid_gesture_that_turns_back_keeps_the_grid_open() {
     assert_eq!(cells, again);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn minimized_window_moved_away_while_the_grid_closes_shows_at_once() {
     let mut params = TestWindowParams::new(2);
@@ -12209,6 +12376,7 @@ fn minimized_window_moved_away_while_the_grid_closes_shows_at_once() {
     ]);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_gesture_stops_at_closed_and_at_open() {
     let mut layout = grid_gesture_layout();
@@ -12239,6 +12407,7 @@ fn grid_gesture_stops_at_closed_and_at_open() {
     assert!((shown.size.w - cell.w).abs() < 0.5, "{shown:?} vs {cell:?}");
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn grid_floating_only_windows_stay_in_their_rows() {
     use super::grid_overview::{GridItem, GridLayout, GridSource};
