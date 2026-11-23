@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "companion-core",
+    "companion-parking",
+    "companion-automation",
+    "companion-hooks",
+    "companion-system",
+    "companion-daemon",
+    "companionctl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+rust-version = "1.80"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+companion-core = { path = "companion-core" }
+companion-parking = { path = "companion-parking" }
+companion-automation = { path = "companion-automation" }
+companion-hooks = { path = "companion-hooks" }
+companion-system = { path = "companion-system" }

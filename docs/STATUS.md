@@ -163,10 +163,15 @@ picked up without re-auditing.
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker
    and output order.
-6. **Ecosystem** — `better-portal` (separate daemon), `better-companion`
-   (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
-   `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
-   Companion repos start only after Phase 1.
+6. **Ecosystem** — `better-companion` foundation is in `better-companion/`:
+   a separate Cargo workspace (excluded from niri's) with `companion-core`
+   (JSON-line UDS protocol + registry), `companion-parking`,
+   `companion-automation` (registry-dispatched sequences),
+   `companion-hooks`, `companion-system`, the `better-companion` daemon and
+   `companionctl`. Remaining: compositor-side parking/sticky integration,
+   Phase B/C rules and adapters, and the companion apps from
+   `ECOSYSTEM.md`. `better-portal` extraction from the compositor's existing
+   portal backend is still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
    `effects` and `navigation` are done. The vertical main axis is available
    globally, per output and per workspace; axis-aware wheel/gesture input

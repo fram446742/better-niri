@@ -376,6 +376,27 @@ iteration.
 system permissions, runs without companion, or grows its own UI/release cycle.
 Action names and config stay compatible if split later.
 
+## Implemented so far
+
+`better-companion/` (separate workspace inside this repository; excluded from
+niri's Cargo workspace):
+
+- `companion-core`: JSON-line protocol (`list`, `call`, `status`), merged
+  action registry with namespaces, UDS/state path helpers and atomic JSON
+  state.
+- `companion-parking`: named parking lots (`park`, `unpark`, `list`, `lots`,
+  `clear`) persisted under `$XDG_STATE_HOME/better-companion/parking.json`.
+- `companion-automation`: named sequences of `(namespace, action, params)`
+  steps; `automation.run` executes them through the registry.
+- `companion-hooks`: event → commands registration and resolution (`fire`
+  returns matches; the daemon does not execute commands implicitly).
+- `companion-system`: ping/status/paths.
+- `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
+- `companionctl`: list/status/call client.
+
+Not yet: compositor-side parking/sticky wiring, Phase B `rules`/`run_or_raise`
+and the optional adapters/companions.
+
 ## 9. Roadmap
 
 ### Phase A — foundation (first delivery)
