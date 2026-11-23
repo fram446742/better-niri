@@ -498,7 +498,14 @@ pub struct OverviewPart {
 
 impl MergeWith<OverviewPart> for Overview {
     fn merge_with(&mut self, part: &OverviewPart) {
-        merge!((self, part), zoom, workspace_shadow, min_zoom, max_zoom, zoom_step);
+        merge!(
+            (self, part),
+            zoom,
+            workspace_shadow,
+            min_zoom,
+            max_zoom,
+            zoom_step
+        );
         merge_clone!((self, part), backdrop_color);
         if let Some(presets) = &part.zoom_presets {
             self.zoom_presets = Some(presets.0.clone());
