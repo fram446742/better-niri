@@ -93,7 +93,7 @@ operate the desktop without the shell.
 | better-shot | Capture/recording/annotation | **started**: `better-shot/` UI/screen/window capture + copy/annotate |
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
 | better-audio | PipeWire routing | new, exploratory |
-| better-wallpaper | Scenes, per-workspace wallpapers | new, medium |
+| better-wallpaper | Scenes, per-workspace wallpapers | **started**: `better-wallpaper/` scenes + focus watcher |
 | better-settings | Unified GTK4 settings frontend | new, medium-high |
 | better-portal | XDG portal backend + external layer-shell picker daemon | committed, after Phase 1 |
 | better-noctalia-plugins | Shell integration | new, later |
