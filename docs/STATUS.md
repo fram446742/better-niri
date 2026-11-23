@@ -187,8 +187,10 @@ picked up without re-auditing.
    (matches by app id/title, moves/floats windows, focuses named workspaces,
    spawns configured missing apps, reports unmatched ones); `better-shot/`
    captures UI/output/window screenshots to generated paths with optional
-   `wl-copy` and `satty` post-processing. Remaining app: better-sidepanels,
-   better-audio, better-wallpaper, better-settings.
+   `wl-copy` and `satty` post-processing; `better-wallpaper/` maps named
+   workspace scenes to images and applies them once or by following niri's
+   event stream (`swaybg`/`swww` style command templates, one process per
+   output). Remaining apps: better-sidepanels, better-audio, better-settings.
    Remaining: richer swallowing rules and the companion apps from
    `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
