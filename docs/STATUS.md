@@ -176,8 +176,11 @@ picked up without re-auditing.
    (minimize/unminimize through niri, snapshots persisted in the `parker` lot).
    Phase B is started: `rules.*` (declarative match + explain/apply/run
    through the registry) and `windows.run-or-raise`/`singleton`/`find`.
-   Remaining: Phase B adapters, Phase C ecosystem adapters and the companion
-   apps from `ECOSYSTEM.md`.
+   Phase C ecosystem adapters are in: optional `session.*`, `monitor.*`,
+   `audio.*` and `wallpaper.*` namespaces storing explicit commands and event
+   hooks (execution only via explicit dispatch, disabled by default).
+   Remaining: richer swallowing rules and the companion apps from
+   `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
