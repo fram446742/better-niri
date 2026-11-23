@@ -86,8 +86,9 @@ Added on top of the elite base after the initial merge:
   config, focused-output overview scoping, centered-output state and rotation,
   participant selection, card geometry with host clamping, scale-normalized
   rotating sibling rendering with edge fades, arrow/shift-scroll rotation, and
-  the `reveal/expand` zoom bands. The lens/cover-flow panel stack (phase 3) is
-  still pending.
+  the reveal/lens zoom bands and the lens pass that fits the centered output's
+  overview into the host. The cover-flow panel-stack redesign (phase 3) is still
+  pending.
 
 Verified on this branch:
 
