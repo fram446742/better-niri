@@ -19,6 +19,7 @@ pub struct Shaders {
     pub texture_hdr: Option<GlesTexProgram>,
     pub texture_hdr_to_sdr: Option<GlesTexProgram>,
     pub border: Option<ShaderProgram>,
+    pub decorations: RefCell<HashMap<u64, ShaderProgram>>,
     pub shadow: Option<ShaderProgram>,
     pub clipped_surface: Option<GlesTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
@@ -36,9 +37,10 @@ pub struct Shaders {
     pub black_texture: GlesTexture,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramType {
     Border,
+    Decoration(u64),
     Shadow,
     Resize,
     Close,
@@ -81,31 +83,9 @@ impl Shaders {
             })
             .ok();
 
-        let border = ShaderProgram::compile(
-            renderer,
-            concat!(
-                include_str!("border.frag"),
-                include_str!("rounding_alpha.frag")
-            ),
-            &[
-                UniformName::new("colorspace", UniformType::_1f),
-                UniformName::new("hue_interpolation", UniformType::_1f),
-                UniformName::new("color_from", UniformType::_4f),
-                UniformName::new("color_to", UniformType::_4f),
-                UniformName::new("grad_offset", UniformType::_2f),
-                UniformName::new("grad_width", UniformType::_1f),
-                UniformName::new("grad_vec", UniformType::_2f),
-                UniformName::new("input_to_geo", UniformType::Matrix3x3),
-                UniformName::new("geo_size", UniformType::_2f),
-                UniformName::new("outer_radius", UniformType::_4f),
-                UniformName::new("border_width", UniformType::_1f),
-            ],
-            &[],
-        )
-        .map_err(|err| {
-            warn!("error compiling border shader: {err:?}");
-        })
-        .ok();
+        let border = compile_decoration_program(renderer, None)
+            .map_err(|err| warn!("error compiling border shader: {err:?}"))
+            .ok();
 
         let shadow = ShaderProgram::compile(
             renderer,
@@ -276,6 +256,7 @@ impl Shaders {
             texture_hdr,
             texture_hdr_to_sdr,
             border,
+            decorations: RefCell::new(HashMap::new()),
             shadow,
             clipped_surface,
             postprocess_and_clip,
@@ -329,6 +310,12 @@ impl Shaders {
     pub fn program(&self, program: ProgramType) -> Option<ShaderProgram> {
         match program {
             ProgramType::Border => self.border.clone(),
+            ProgramType::Decoration(key) => self
+                .decorations
+                .borrow()
+                .get(&key)
+                .cloned()
+                .or_else(|| self.border.clone()),
             ProgramType::Shadow => self.shadow.clone(),
             ProgramType::Resize => self
                 .custom_resize
@@ -704,4 +691,107 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
             transpose: false,
         },
     )
+}
+
+/// Custom and legacy rings share a coordinate contract and the same editable wax source.
+fn compile_decoration_program(
+    renderer: &mut GlesRenderer,
+    source: Option<&str>,
+) -> Result<ShaderProgram, GlesError> {
+    let mut program = if source.is_some() {
+        "#define CUSTOM_DECORATION\n".to_owned()
+    } else {
+        "#define WAX_STRENGTH rainbow_ripple.y\n#define WAX_BRIGHTNESS rainbow_ripple.z\n#define WAX_PHASE rainbow_ripple.x\n".to_owned()
+    };
+    program.push_str(include_str!("border.frag"));
+    program.push_str(include_str!("rounding_alpha.frag"));
+    program.push_str(source.unwrap_or(include_str!(
+        "../../../resources/shaders/focus-ring/rainbow-ripple.frag"
+    )));
+    ShaderProgram::compile(
+        renderer,
+        &program,
+        &[
+            UniformName::new("colorspace", UniformType::_1f),
+            UniformName::new("hue_interpolation", UniformType::_1f),
+            UniformName::new("color_from", UniformType::_4f),
+            UniformName::new("color_to", UniformType::_4f),
+            UniformName::new("grad_offset", UniformType::_2f),
+            UniformName::new("grad_width", UniformType::_1f),
+            UniformName::new("grad_vec", UniformType::_2f),
+            UniformName::new("input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("geo_size", UniformType::_2f),
+            UniformName::new("outer_radius", UniformType::_4f),
+            UniformName::new("border_width", UniformType::_1f),
+            UniformName::new("rainbow_ripple", UniformType::_4f),
+            UniformName::new("ring_width", UniformType::_1f),
+            UniformName::new("niri_time", UniformType::_1f),
+        ],
+        &[],
+    )
+}
+
+/// Compile content-addressed programs once on load. Drop stale GPU resources on reload.
+/// A bad program falls back to the normal border; other windows keep their own programs.
+pub fn set_decoration_programs(renderer: &mut GlesRenderer, config: &niri_config::Config) {
+    let layout_parts = config
+        .outputs
+        .0
+        .iter()
+        .filter_map(|o| o.layout.as_ref())
+        .chain(
+            config
+                .workspaces
+                .iter()
+                .filter_map(|w| w.layout.as_ref().map(|l| &l.0)),
+        );
+    let layout_shaders = layout_parts
+        .flat_map(|l| l.focus_ring.iter().chain(l.border.iter()))
+        .filter_map(|r| r.shader.as_ref());
+    let shaders = config
+        .layout
+        .focus_ring
+        .shader
+        .iter()
+        .chain(config.layout.border.shader.iter())
+        .chain(layout_shaders)
+        .chain(
+            config
+                .window_rules
+                .iter()
+                .flat_map(|r| r.focus_ring.shader.iter().chain(r.border.shader.iter())),
+        );
+    let wanted: HashMap<_, _> = shaders.filter_map(|s| Some((s.key()?, s))).collect();
+    let stale: Vec<_> = {
+        let mut cache = Shaders::get(renderer).decorations.borrow_mut();
+        let keys: Vec<_> = cache
+            .keys()
+            .copied()
+            .filter(|k| !wanted.contains_key(k))
+            .collect();
+        keys.into_iter().filter_map(|k| cache.remove(&k)).collect()
+    };
+    for program in stale {
+        let _ = program.destroy(renderer);
+    }
+    for (key, shader) in wanted {
+        if Shaders::get(renderer)
+            .decorations
+            .borrow()
+            .contains_key(&key)
+        {
+            continue;
+        }
+        match compile_decoration_program(renderer, shader.source()) {
+            Ok(program) => {
+                Shaders::get(renderer)
+                    .decorations
+                    .borrow_mut()
+                    .insert(key, program);
+            }
+            Err(err) => {
+                warn!(path = ?shader.path, "error compiling decoration shader; using configured colours: {err:?}")
+            }
+        }
+    }
 }

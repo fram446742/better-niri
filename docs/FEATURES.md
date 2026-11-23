@@ -83,8 +83,8 @@ This table is the integration contract, not a claim of completion.
 | Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Upstream | Do not reimplement tabbed columns; evaluate Naxdy's auto-group refinements later. |
 | Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Planned | Extend to arbitrary actions (`grid-overview`, etc.). |
 | Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Planned | Second seat over IPC; needs Smithay per-client seat filter. |
-| Focus-ring shaders | Absent | biri | biri | Planned | Per-window shader files, hot reload, light spill. |
-| Custom borders | Upstream (colours/width) | upstream + biri shaders | biri shader layer | Planned | Keep upstream border geometry. |
+| Focus-ring shaders | Absent | biri | biri | Partial | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload; light spill pending (depends on carousel). |
+| Custom borders | Upstream (colours/width) | upstream + biri shaders | biri shader layer | Partial | Border/focus-ring shader programs with watched files; keep upstream border geometry. |
 | SVG cursors | Absent | niri-elite (SHORiN) | niri-elite | Planned | `resvg`/`usvg` optional dependency. |
 | Shake-to-enlarge cursor | Absent | niri-elite (SHORiN) | niri-elite | Planned | Cursor config section. |
 | Carousel overview | Absent | biri | biri | Planned | Consolidated multi-monitor cover-flow. |

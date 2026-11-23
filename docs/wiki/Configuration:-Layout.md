@@ -345,6 +345,124 @@ You will see it if you have multiple monitors, though.
 
 There's also a *deprecated* syntax for setting colors with four numbers representing R, G, B and A: `active-color 127 200 255 255`.
 
+#### Custom focus-ring and border shaders
+
+Biri can load a separate GLSL file for each application's active focus ring or border. No rebuild is needed to add or edit shader effects once the compositor supports this feature.
+
+Copy the `resources/shaders/focus-ring/` directory from this repository to `~/.config/biri/focus-ring/`. This example uses the wax-like rainbow effect on Ghostty and a simpler cyan pulse on Firefox:
+
+```kdl
+window-rule {
+    match app-id=r#"^com\.mitchellh\.ghostty$"#
+    focus-ring {
+        on
+        width 6
+        shader {
+            path "~/.config/biri/focus-ring/rainbow-ripple.frag"
+            padding 14
+        }
+    }
+}
+window-rule {
+    match app-id=r#"^firefox$"#
+    focus-ring {
+        on
+        width 4
+        shader {
+            path "~/.config/biri/focus-ring/pulse.frag"
+            speed 0.5
+        }
+    }
+}
+```
+
+A `shader` block also works in the global layout, output/workspace layouts, and `border` blocks. A window rule replaces the entire inherited shader block; omitted settings take their defaults. Use `shader { enable false; }` to restore normal colours. An explicit `shader` block takes precedence over the legacy `rainbow-ripple` option, including when disabled or invalid.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `path` | unset | GLSL file; `~` expands to your home, relative paths resolve beside the config/include file containing the block. |
+| `source` | unset | Inline GLSL instead of a file. Use exactly one of `path` or `source` when enabled. |
+| `enable` | `true` | Disable an inherited shader with `false`. |
+| `animated` | `true` | Use `false` for a static shader: time stays zero and it requests no animation frames. |
+| `speed` | `1.0` | Time multiplier, 0–10; zero freezes at time zero. |
+| `padding` | `0` | Extra drawing space beyond the nominal ring width, 0–1024 logical pixels. Reserve enough for outward deformations; it does not affect window layout. |
+
+**Reloading:** shader files are watched along with the config (checked every 500 ms), including files referenced from includes. Saving a `.frag` file reloads it even if the KDL is unchanged. You can also force a reload with `niri msg action load-config-file`. Missing files and GLSL compilation errors are logged and fall back to configured colours; fixing the file restores the shader automatically. Other windows keep their own shaders.
+
+Effects apply to active decorations; inactive and urgent decorations retain their configured colours/gradients. Animation follows `shader-animation-max-fps` and stops when decorations are hidden or suppressed by fullscreen/maximized windows. `animations { off; }` freezes shader time. Continuous animation adds idle GPU work.
+
+##### Writing a shader
+
+Provide a GLES2 / GLSL ES 1.00 function returning **straight (not premultiplied) RGBA**:
+
+```glsl
+vec4 ring_color(vec2 coords) {
+    float distance = ring_distance(coords);
+    float half_px = 0.5 / niri_scale;
+    float coverage = smoothstep(-half_px, half_px, distance)
+        * (1.0 - smoothstep(ring_width - half_px, ring_width + half_px, distance));
+    vec3 colour = vec3(0.2, 0.8, 1.0) * (0.75 + 0.25 * sin(niri_time * 2.0));
+    return vec4(colour, coverage);
+}
+```
+
+Do not supply `#version` or `main()`: the compositor wraps your function, preserves the configured colour/gradient opacity, applies window opacity once, and prevents painting inside the client. Shape the outer silhouette and antialias its edges in your shader. Pixels outside the reserved `width + padding` envelope are clipped. All eight ring pieces share window coordinates, so effects can flow continuously around corners.
+
+| Symbol | Meaning |
+| --- | --- |
+| `coords` | Logical pixels from the client top-left, X right and Y down; negative coordinates are outside the client. |
+| `ring_size` | Client width and height in logical pixels. |
+| `ring_width` | Configured nominal ring width in logical pixels. |
+| `ring_padding` | Reserved extra drawing space (rounded to output pixels, including an antialias margin). |
+| `ring_radius` | Client corner radii: top-left, top-right, bottom-right, bottom-left. |
+| `ring_distance(coords)` | Signed distance from the rounded client edge; positive outside. |
+| `ring_base_color(coords)` | Configured colour/gradient as straight RGBA; its opacity is also applied by the wrapper. |
+| `niri_time` | Layout-clock seconds multiplied by `speed`; zero for static/frozen shaders. |
+| `niri_scale` | Output scale, for antialiasing logical-pixel distances. |
+
+These shaders shade decorations, with no window-content sampler. They use the normal decoration rendering/capture path and work on TTY, nested, and headless backends. The [global shader](./Configuration:-Global-Shader.md) contract and its capture restrictions do not apply here.
+
+#### Rainbow ripple
+
+This compatibility shorthand selects the bundled wax-like rainbow effect. To edit the effect itself or give applications different shader files, use the [file-based shader block](#custom-focus-ring-and-border-shaders) above.
+
+Biri can animate the active focus ring with flowing pastel rainbow colours, uneven wax-like edges and drifting highlights:
+
+```kdl
+layout {
+    focus-ring {
+        width 6
+        rainbow-ripple speed=1.0 strength=0.75 brightness=1.0
+    }
+}
+
+// Optional: cap idle shader animation, including the focus ring.
+shader-animation-max-fps 60
+```
+
+The effect is opt-in; omitting `rainbow-ripple` preserves the normal colours and gradients.
+A bare `rainbow-ripple` uses the defaults shown above.
+
+| Property | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `enable` | `true` | `true` / `false` | Enable the effect; `false` restores configured colours and gradients. |
+| `speed` | `1.0` | 0–10 | Multiple of the default four-second cycle; `0` freezes it. |
+| `strength` | `0.75` | 0–1 | Deformation of both edges and thickness; `0` keeps the outline steady. |
+| `brightness` | `1.0` | 0–2 | Colour brightness multiplier. |
+
+The effect replaces the active colour or gradient's RGB, preserving its opacity.
+Inactive and urgent decorations keep their configured colours or gradients.
+The animated ring has a hollow centre, including behind transparent windows, and outward waves do not change window sizes.
+Widths around 6–8 logical pixels make the ripples easier to see.
+
+The same option works in `border` and in window-rule `focus-ring` / `border` blocks.
+A rule's `rainbow-ripple` replaces the complete effect settings; omitted properties use the defaults.
+Use `rainbow-ripple enable=false` in a rule to disable an inherited effect.
+
+Animation runs only while an affected decoration is on screen, stops for fully maximized/fullscreen windows, and uses `shader-animation-max-fps` alongside other animated shaders.
+With `animations { off; }`, the rainbow is static.
+Continuous animation adds idle GPU work; the frame-rate cap limits how often an otherwise idle output redraws.
+
 #### Gradients
 
 Similarly to colors, you can set `active-gradient` and `inactive-gradient`, which will take precedence.

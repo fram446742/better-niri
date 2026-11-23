@@ -22,6 +22,8 @@ uniform mat3 input_to_geo;
 uniform vec2 geo_size;
 uniform vec4 outer_radius;
 uniform float border_width;
+// Phase, strength, brightness, nominal width. Width zero selects the static path.
+uniform vec4 rainbow_ripple;
 
 vec4 premul_rect(vec4 color) {
     color.rgb *= color.a;
@@ -211,22 +213,79 @@ vec4 gradient_color(vec2 coords) {
 float niri_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
 
 vec4 niri_blend(vec4 color);
+// Signed distance supports both the straight edges and individually rounded corners.
+float rounded_rect_distance(vec2 coords, vec2 size, vec4 radii) {
+    vec2 p = coords - size * 0.5;
+    float radius = p.y < 0.0
+        ? (p.x < 0.0 ? radii.x : radii.y)
+        : (p.x < 0.0 ? radii.w : radii.z);
+    radius = min(radius, min(size.x, size.y) * 0.5);
+    vec2 q = abs(p) - size * 0.5 + radius;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+// Shared contract for file-based decoration shaders. Coordinates are logical pixels
+// relative to the client top-left; negative coordinates are outside the client.
+uniform float ring_width;
+uniform float niri_time;
+#define ring_size (geo_size - vec2(border_width * 2.0))
+#define ring_radius max(outer_radius - vec4(border_width), vec4(0.0))
+#define ring_padding (border_width - ring_width)
+
+float ring_distance(vec2 coords) {
+    return rounded_rect_distance(coords, ring_size, ring_radius);
+}
+
+vec4 ring_base_color(vec2 coords) {
+    return unpremul_rect(gradient_color(coords + vec2(border_width)));
+}
+
+vec4 ring_color(vec2 coords);
+
+vec4 custom_ring_color(vec2 coords) {
+    vec4 color = ring_color(coords);
+    color.a = clamp(color.a, 0.0, 1.0) * ring_base_color(coords).a;
+    // Custom code can shape the outer silhouette but cannot paint over the client.
+    if (all(greaterThanEqual(coords, vec2(0.0))) && all(lessThanEqual(coords, ring_size))) {
+        color.a *= 1.0 - niri_rounding_alpha(coords, ring_size, ring_radius);
+    }
+    return premul_rect(color);
+}
 
 void main() {
     vec3 coords_geo = input_to_geo * vec3(niri_v_coords, 1.0);
-    vec4 color = gradient_color(coords_geo.xy);
-    color = color * niri_rounding_alpha(coords_geo.xy, geo_size, outer_radius);
+    vec4 color;
+#ifdef CUSTOM_DECORATION
+    color = custom_ring_color(coords_geo.xy - vec2(border_width));
+#else
+    if (rainbow_ripple.w > 0.0) {
+        color = custom_ring_color(coords_geo.xy - vec2(border_width));
+    } else if (ring_width > 0.0) {
+        // Missing/invalid custom program: retain a normal ring at its nominal width,
+        // even though the draw geometry includes the custom shader's padding.
+        float distance = ring_distance(coords_geo.xy - vec2(border_width));
+        float half_px = 0.5 / niri_scale;
+        float coverage = smoothstep(-half_px, half_px, distance)
+            * (1.0 - smoothstep(ring_width - half_px, ring_width + half_px, distance));
+        color = gradient_color(coords_geo.xy) * coverage;
+    } else {
+        color = gradient_color(coords_geo.xy);
+        color = color * niri_rounding_alpha(coords_geo.xy, geo_size, outer_radius);
 
-    if (border_width > 0.0) {
-        coords_geo -= vec3(border_width);
-        vec2 inner_geo_size = geo_size - vec2(border_width * 2.0);
-        if (0.0 <= coords_geo.x && coords_geo.x <= inner_geo_size.x
-                && 0.0 <= coords_geo.y && coords_geo.y <= inner_geo_size.y)
-        {
-            vec4 inner_radius = max(outer_radius - vec4(border_width), 0.0);
-            color = color * (1.0 - niri_rounding_alpha(coords_geo.xy, inner_geo_size, inner_radius));
+        if (border_width > 0.0) {
+            coords_geo -= vec3(border_width);
+            vec2 inner_geo_size = geo_size - vec2(border_width * 2.0);
+            if (0.0 <= coords_geo.x && coords_geo.x <= inner_geo_size.x
+                    && 0.0 <= coords_geo.y && coords_geo.y <= inner_geo_size.y)
+            {
+                vec4 inner_radius = max(outer_radius - vec4(border_width), 0.0);
+                color = color * (1.0 - niri_rounding_alpha(coords_geo.xy, inner_geo_size, inner_radius));
+            }
         }
+
     }
+
+#endif
 
     color = color * niri_alpha;
 

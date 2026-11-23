@@ -153,6 +153,8 @@ fn make_layout(
                 active_gradient: None,
                 inactive_gradient: None,
                 urgent_gradient: None,
+                rainbow_ripple: None,
+                shader: None,
             },
             ..Default::default()
         },

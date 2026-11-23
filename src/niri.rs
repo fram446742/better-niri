@@ -2307,6 +2307,19 @@ impl State {
             shaders_of(&config) != shaders_of(&old_config)
         };
 
+        // Sources are read by config parsing (also triggered by watched .frag edits).
+        // Resolved source changes are visible even when the KDL itself is unchanged.
+        if config.layout != old_config.layout
+            || config.window_rules != old_config.window_rules
+            || config.outputs != old_config.outputs
+            || config.workspaces != old_config.workspaces
+        {
+            self.backend.with_primary_renderer(|renderer| {
+                shaders::set_decoration_programs(renderer, &config);
+            });
+            shaders_changed = true;
+        }
+
         if config.region_shaders != old_config.region_shaders
             || config.window_rules != old_config.window_rules
             || config.window_shaders != old_config.window_shaders
@@ -7989,6 +8002,10 @@ impl Niri {
                     .any(shader_animates)
             };
 
+            let decoration_animate = !self.is_locked()
+                && !self.screenshot_ui.is_open()
+                && self.layout.decorations_are_animating(output);
+
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
@@ -8031,7 +8048,8 @@ impl Niri {
             let shader_animate = global_shader_animate
                 || region_shader_animate
                 || output_shader_animate
-                || window_shader_animate;
+                || window_shader_animate
+                || decoration_animate;
             let cap_fps = self.config.borrow().shader_animation_max_fps;
             let now = std::time::Instant::now();
 

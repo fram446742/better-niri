@@ -12296,3 +12296,108 @@ fn grid_floating_only_windows_stay_in_their_rows() {
     let left: Vec<usize> = (1..=9).filter(|&id| id != 5).collect();
     assert_eq!(same_row(&closed, &left), same_row(&opened, &left));
 }
+
+#[test]
+fn rainbow_ripple_redraw_visibility() {
+    decoration_redraw_visibility(false);
+}
+
+#[test]
+fn custom_decoration_redraw_visibility() {
+    decoration_redraw_visibility(true);
+}
+
+fn decoration_redraw_visibility(custom: bool) {
+    let mut options = Options::default();
+    if custom {
+        options.layout.focus_ring.shader = niri_config::Config::parse_mem(
+            r#"layout { focus-ring { shader { source "vec4 ring_color(vec2 p) { return vec4(1.); }"; }; }; }"#,
+        ).unwrap().layout.focus_ring.shader;
+    } else {
+        options.layout.focus_ring.rainbow_ripple = Some(Default::default());
+    }
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::CompleteAnimations,
+        ],
+    );
+    let output = layout.outputs().next().unwrap().clone();
+    layout.update_render_elements(Some(&output));
+    assert!(layout.decorations_are_animating(&output));
+
+    layout.clock.set_complete_instantly(true);
+    assert!(!layout.decorations_are_animating(&output));
+    layout.clock.set_complete_instantly(false);
+    layout.clock.set_rate(0.);
+    assert!(!layout.decorations_are_animating(&output));
+    layout.clock.set_rate(1.);
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::FocusWorkspaceDown, Op::CompleteAnimations],
+    );
+    layout.update_render_elements(Some(&output));
+    assert!(
+        !layout.decorations_are_animating(&output),
+        "a ring on a hidden workspace must not redraw"
+    );
+
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceUp, Op::CompleteAnimations]);
+    layout.update_render_elements(Some(&output));
+    assert!(layout.decorations_are_animating(&output));
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::SetFullscreenWindow {
+                window: 1,
+                is_fullscreen: true,
+            },
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    layout.update_render_elements(Some(&output));
+    assert!(
+        !layout.decorations_are_animating(&output),
+        "fullscreen hides the ring"
+    );
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::SetFullscreenWindow {
+                window: 1,
+                is_fullscreen: false,
+            },
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    layout.update_render_elements(Some(&output));
+    assert!(layout.decorations_are_animating(&output));
+
+    let mut options = (*layout.options).clone();
+    if custom {
+        options.layout.focus_ring.shader.as_mut().unwrap().speed.0 = 0.;
+    } else {
+        options
+            .layout
+            .focus_ring
+            .rainbow_ripple
+            .as_mut()
+            .unwrap()
+            .speed
+            .0 = 0.;
+    }
+    layout.update_options(options);
+    layout.update_render_elements(Some(&output));
+    assert!(
+        !layout.decorations_are_animating(&output),
+        "a frozen rainbow needs no redraws"
+    );
+}

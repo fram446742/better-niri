@@ -867,7 +867,7 @@ impl<W: LayoutElement> GridOverview<W> {
                         radius.expanded_by(config.padding as f32)
                     }),
             };
-            let mut ring_config = *highlight.ring.config();
+            let mut ring_config = highlight.ring.config().clone();
             ring_config.active_color = config.color;
             ring_config.urgent_color = config.urgent_color;
             highlight.ring.update_config(ring_config);
@@ -1072,7 +1072,7 @@ impl<W: LayoutElement> GridOverview<W> {
                 None => (target.rect, target.radius),
             };
 
-            let mut config = target.config;
+            let mut config = target.config.clone();
             config.off = false;
             config.width = width;
             ring.ring.update_config(config);
@@ -1216,7 +1216,7 @@ impl<W: LayoutElement> GridOverview<W> {
             // ring's colors, doesn't run into it.
             tab.slot_loc = None;
             if let Some(bounds) = tab.indicator.bounds() {
-                let mut slot_config = *tab.slot.config();
+                let mut slot_config = tab.slot.config().clone();
                 slot_config.active_color = target.slot_color;
                 tab.slot.update_config(slot_config);
                 let size = bounds.size + Size::from((2., 2.));

@@ -1649,7 +1649,7 @@ impl<W: LayoutElement> Workspace<W> {
                     let Some(tile) = self.tiles().find(|tile| tile.window().id() == id) else {
                         continue;
                     };
-                    let config = *tile.focus_ring().config();
+                    let config = tile.focus_ring().config().clone();
                     if config.off {
                         continue;
                     }
@@ -2477,7 +2477,12 @@ impl<W: LayoutElement> Workspace<W> {
 
                 // Add border width since ColumnWidth includes borders.
                 let rules = window.rules();
-                let border = self.options.layout.border.merged_with(&rules.border);
+                let border = self
+                    .options
+                    .layout
+                    .border
+                    .clone()
+                    .merged_with(&rules.border);
                 if !border.off {
                     fixed += border.width * 2.;
                 }

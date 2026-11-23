@@ -228,7 +228,32 @@ impl CornerRadius {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A flowing rainbow with waves and travelling highlights around a decoration.
+#[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
+pub struct RainbowRipple {
+    #[knuffel(property, default = true)]
+    pub enable: bool,
+    /// Multiples of the default four-second cycle. Zero freezes the effect.
+    #[knuffel(property, default = FloatOrInt(1.))]
+    pub speed: FloatOrInt<0, 10>,
+    #[knuffel(property, default = FloatOrInt(0.75))]
+    pub strength: FloatOrInt<0, 1>,
+    #[knuffel(property, default = FloatOrInt(1.))]
+    pub brightness: FloatOrInt<0, 2>,
+}
+
+impl Default for RainbowRipple {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            speed: FloatOrInt(1.),
+            strength: FloatOrInt(0.75),
+            brightness: FloatOrInt(1.),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FocusRing {
     pub off: bool,
     pub width: f64,
@@ -238,6 +263,8 @@ pub struct FocusRing {
     pub active_gradient: Option<Gradient>,
     pub inactive_gradient: Option<Gradient>,
     pub urgent_gradient: Option<Gradient>,
+    pub rainbow_ripple: Option<RainbowRipple>,
+    pub shader: Option<crate::decoration_shader::DecorationShader>,
 }
 
 impl Default for FocusRing {
@@ -251,11 +278,13 @@ impl Default for FocusRing {
             active_gradient: None,
             inactive_gradient: None,
             urgent_gradient: None,
+            rainbow_ripple: None,
+            shader: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Border {
     pub off: bool,
     pub width: f64,
@@ -265,6 +294,8 @@ pub struct Border {
     pub active_gradient: Option<Gradient>,
     pub inactive_gradient: Option<Gradient>,
     pub urgent_gradient: Option<Gradient>,
+    pub rainbow_ripple: Option<RainbowRipple>,
+    pub shader: Option<crate::decoration_shader::DecorationShader>,
 }
 
 impl Default for Border {
@@ -278,6 +309,8 @@ impl Default for Border {
             active_gradient: None,
             inactive_gradient: None,
             urgent_gradient: None,
+            rainbow_ripple: None,
+            shader: None,
         }
     }
 }
@@ -293,6 +326,8 @@ impl From<Border> for FocusRing {
             active_gradient: value.active_gradient,
             inactive_gradient: value.inactive_gradient,
             urgent_gradient: value.urgent_gradient,
+            rainbow_ripple: value.rainbow_ripple,
+            shader: value.shader,
         }
     }
 }
@@ -308,6 +343,8 @@ impl From<FocusRing> for Border {
             active_gradient: value.active_gradient,
             inactive_gradient: value.inactive_gradient,
             urgent_gradient: value.urgent_gradient,
+            rainbow_ripple: value.rainbow_ripple,
+            shader: value.shader,
         }
     }
 }
@@ -320,6 +357,7 @@ impl MergeWith<BorderRule> for Border {
         }
 
         merge!((self, part), width);
+        merge_clone_opt!((self, part), rainbow_ripple, shader);
 
         merge_color_gradient!(
             (self, part),
@@ -332,7 +370,7 @@ impl MergeWith<BorderRule> for Border {
 
 impl MergeWith<BorderRule> for FocusRing {
     fn merge_with(&mut self, part: &BorderRule) {
-        let mut x = Border::from(*self);
+        let mut x = Border::from(self.clone());
         x.merge_with(part);
         *self = FocusRing::from(x);
     }
@@ -637,7 +675,7 @@ pub enum BlockOutKind {
     Hide,
 }
 
-#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+#[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct BorderRule {
     #[knuffel(child)]
     pub off: bool,
@@ -657,6 +695,10 @@ pub struct BorderRule {
     pub inactive_gradient: Option<Gradient>,
     #[knuffel(child)]
     pub urgent_gradient: Option<Gradient>,
+    #[knuffel(child)]
+    pub rainbow_ripple: Option<RainbowRipple>,
+    #[knuffel(child)]
+    pub shader: Option<crate::decoration_shader::DecorationShader>,
 }
 
 #[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
@@ -699,7 +741,7 @@ impl MergeWith<Self> for BorderRule {
     fn merge_with(&mut self, part: &Self) {
         merge_on_off!((self, part));
 
-        merge_clone_opt!((self, part), width);
+        merge_clone_opt!((self, part), width, rainbow_ripple, shader);
 
         merge_color_gradient_opt!(
             (self, part),
@@ -1285,6 +1327,57 @@ mod tests {
 
     use super::*;
     use crate::Config;
+
+    #[test]
+    fn rainbow_ripple_config_and_rules() {
+        let config = crate::Config::parse_mem(
+            r#"
+            layout {
+                focus-ring { rainbow-ripple speed=1.5 strength=0.75 brightness=0.8; }
+            }
+            window-rule { focus-ring { width 7; }; }
+            window-rule { focus-ring { rainbow-ripple enable=false; }; }
+        "#,
+        )
+        .unwrap();
+        let effect = config.layout.focus_ring.rainbow_ripple.unwrap();
+        assert_eq!(effect.speed.0, 1.5);
+        assert_eq!(effect.strength.0, 0.75);
+        assert_eq!(effect.brightness.0, 0.8);
+        let mut ring = config.layout.focus_ring;
+        ring.merge_with(&config.window_rules[0].focus_ring);
+        assert_eq!(ring.width, 7.);
+        assert_eq!(
+            ring.rainbow_ripple,
+            Some(effect),
+            "unrelated rules preserve the effect"
+        );
+        ring.merge_with(&config.window_rules[1].focus_ring);
+        assert!(!ring.rainbow_ripple.unwrap().enable);
+
+        let config =
+            crate::Config::parse_mem("layout { focus-ring { rainbow-ripple; }; }").unwrap();
+        assert_eq!(
+            config.layout.focus_ring.rainbow_ripple,
+            Some(RainbowRipple::default())
+        );
+        assert_eq!(
+            crate::Config::default().layout.focus_ring.rainbow_ripple,
+            None
+        );
+        for property in [
+            "speed=-1",
+            "speed=11",
+            "strength=-0.1",
+            "strength=1.1",
+            "brightness=3",
+        ] {
+            assert!(crate::Config::parse_mem(&format!(
+                "layout {{ focus-ring {{ rainbow-ripple {property}; }}; }}"
+            ))
+            .is_err());
+        }
+    }
 
     #[test]
     fn parse_gradient_interpolation() {

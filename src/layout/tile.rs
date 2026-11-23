@@ -1,5 +1,6 @@
 use core::f64;
 use std::rc::Rc;
+use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
@@ -219,8 +220,12 @@ impl<W: LayoutElement> Tile<W> {
         options: Rc<Options>,
     ) -> Self {
         let rules = window.rules();
-        let border_config = options.layout.border.merged_with(&rules.border);
-        let focus_ring_config = options.layout.focus_ring.merged_with(&rules.focus_ring);
+        let border_config = options.layout.border.clone().merged_with(&rules.border);
+        let focus_ring_config = options
+            .layout
+            .focus_ring
+            .clone()
+            .merged_with(&rules.focus_ring);
         let shadow_config = options.layout.shadow.merged_with(&rules.shadow);
         let sizing_mode = window.sizing_mode();
         let fullscreen_backdrop_color = options.layout.fullscreen_backdrop_color;
@@ -282,7 +287,12 @@ impl<W: LayoutElement> Tile<W> {
 
         let rules = self.window.rules();
 
-        let mut border_config = self.options.layout.border.merged_with(&rules.border);
+        let mut border_config = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
         border_config.width = round_max1(border_config.width);
         self.border.update_config(border_config.into());
 
@@ -290,6 +300,7 @@ impl<W: LayoutElement> Tile<W> {
             .options
             .layout
             .focus_ring
+            .clone()
             .merged_with(&rules.focus_ring);
         focus_ring_config.width = round_max1(focus_ring_config.width);
         self.focus_ring.update_config(focus_ring_config);
@@ -432,7 +443,12 @@ impl<W: LayoutElement> Tile<W> {
         let round_max1 = |logical| round_logical_in_physical_max1(self.scale, logical);
 
         let rules = self.window.rules();
-        let mut border_config = self.options.layout.border.merged_with(&rules.border);
+        let mut border_config = self
+            .options
+            .layout
+            .border
+            .clone()
+            .merged_with(&rules.border);
         border_config.width = round_max1(border_config.width);
         self.border.update_config(border_config.into());
 
@@ -440,6 +456,7 @@ impl<W: LayoutElement> Tile<W> {
             .options
             .layout
             .focus_ring
+            .clone()
             .merged_with(&rules.focus_ring);
         focus_ring_config.width = round_max1(focus_ring_config.width);
         self.focus_ring.update_config(focus_ring_config);
@@ -573,6 +590,13 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn update_render_elements(&mut self, is_active: bool, view_rect: Rectangle<f64, Logical>) {
+        let time = if self.clock.should_complete_instantly() {
+            Duration::ZERO
+        } else {
+            self.clock.now()
+        };
+        self.focus_ring.set_animation_time(time);
+        self.border.set_animation_time(time);
         let rules = self.window.rules();
         let animated_tile_size = self.animated_tile_size();
         let expanded_progress = self.expanded_progress();
@@ -1801,6 +1825,16 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn take_unmap_snapshot(&mut self) -> Option<TileRenderSnapshot> {
         self.unmap_snapshot.take()
+    }
+
+    /// Whether a visible decoration needs another shader frame, separate from transitions
+    /// so the shader frame-rate cap also applies on an otherwise idle desktop.
+    pub fn decorations_are_animating(&self, focus_ring: bool) -> bool {
+        !self.clock.should_complete_instantly()
+            && self.clock.rate() > 0.
+            && self.expanded_progress() < 1.
+            && ((focus_ring && self.focus_ring.is_animating())
+                || (self.visual_border_width().is_some() && self.border.is_animating()))
     }
 
     pub fn border(&self) -> &FocusRing {
