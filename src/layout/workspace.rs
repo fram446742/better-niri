@@ -21,6 +21,7 @@ use tracing::debug;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::focus_ring::FocusRingRenderElement;
+#[cfg(feature = "navigation")]
 use super::grid_overview::{
     GridDirection, GridEntryInfo, GridItem, GridLayout, GridOverview, GridRingTarget, GridSource,
     GridTabTarget, MinimizedHighlightEntry,
@@ -32,6 +33,8 @@ use super::scrolling::{
 use super::shadow::Shadow;
 use super::tab_indicator::{TabIndicator, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+#[cfg(not(feature = "navigation"))]
+use super::GridDirection;
 use super::{
     ActivateWindow, HitType, InsertPosition, InteractiveResizeData, LayoutElement, Options,
     RemovedTile, SizeFrac, StickyRestoreInfo, StickyRestorePosition,
@@ -133,8 +136,10 @@ pub struct Workspace<W: LayoutElement> {
     layout_config: Option<niri_config::LayoutPart>,
 
     /// Grid overview state for this workspace.
+    #[cfg(feature = "navigation")]
     pub(super) grid_overview: Option<GridOverview<W>>,
     /// What the grid overview showed when it last closed, for the next one to pick up from.
+    #[cfg(feature = "navigation")]
     last_grid_layout: Option<GridLayout<W>>,
 
     /// Unique ID of this workspace.
@@ -150,6 +155,7 @@ pub struct Workspace<W: LayoutElement> {
     pub needs_hidden: bool,
 }
 
+#[cfg(feature = "navigation")]
 pub(super) struct GridWindowVisual<W: LayoutElement> {
     window_id: W::Id,
     item: GridItem<W>,
@@ -157,6 +163,9 @@ pub(super) struct GridWindowVisual<W: LayoutElement> {
     pos: Point<f64, Logical>,
     scale: f64,
 }
+
+#[cfg(not(feature = "navigation"))]
+pub(super) struct GridWindowVisual<W: LayoutElement>(std::marker::PhantomData<W>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputId(String);
@@ -328,7 +337,9 @@ impl<W: LayoutElement> Workspace<W> {
             needs_hidden: false,
             name: config.map(|c| c.name.0),
             layout_config,
+            #[cfg(feature = "navigation")]
             grid_overview: None,
+            #[cfg(feature = "navigation")]
             last_grid_layout: None,
             id: WorkspaceId::next(),
         }
@@ -399,7 +410,9 @@ impl<W: LayoutElement> Workspace<W> {
             needs_hidden: false,
             name: config.map(|c| c.name.0),
             layout_config,
+            #[cfg(feature = "navigation")]
             grid_overview: None,
+            #[cfg(feature = "navigation")]
             last_grid_layout: None,
             id: WorkspaceId::next(),
         }
@@ -445,22 +458,26 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn is_grid_overview_open(&self) -> bool {
         self.grid_overview.as_ref().map_or(false, |g| g.open)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_overview_progress(&self) -> Option<f64> {
         self.grid_overview
             .as_ref()
             .and_then(|g| g.progress.as_ref().map(|p| p.value()))
     }
 
+    #[cfg(feature = "navigation")]
     pub fn is_grid_overview_animation(&self) -> bool {
         self.grid_overview
             .as_ref()
             .map_or(false, |g| g.is_animation())
     }
 
+    #[cfg(feature = "navigation")]
     pub fn toggle_grid_overview(&mut self) {
         let was_open = self.is_grid_overview_open();
         if !was_open {
@@ -630,6 +647,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn close_grid_overview(&mut self) -> bool {
         if !self.is_grid_overview_open() {
             return false;
@@ -638,6 +656,7 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    #[cfg(feature = "navigation")]
     pub fn open_grid_overview(&mut self) -> bool {
         if self.is_grid_overview_open() {
             return false;
@@ -646,6 +665,7 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_navigate(&mut self, dir: GridDirection) -> bool {
         let previous = self.grid_focused_window_id();
         let tile_changed = self
@@ -677,6 +697,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Moves the grid focus to the cell of the scrolling column at `col_idx`, on the tile that
     /// cell remembers.
+    #[cfg(feature = "navigation")]
     pub fn grid_focus_column(&mut self, col_idx: usize) -> bool {
         let Some(col) = self.scrolling.columns().nth(col_idx) else {
             return false;
@@ -698,6 +719,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Moves the grid focus within the column of the grid-focused window, to the tile that `pick`
     /// returns given the column's tile count and the focused tile index.
+    #[cfg(feature = "navigation")]
     pub fn grid_focus_tile_in_column(&mut self, pick: impl FnOnce(usize, usize) -> usize) -> bool {
         let Some(id) = self.grid_action_window() else {
             return false;
@@ -721,6 +743,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     /// Moves the grid focus to the first or last cell.
+    #[cfg(feature = "navigation")]
     pub fn grid_focus_edge_cell(&mut self, last: bool) -> bool {
         let Some(go) = &self.grid_overview else {
             return false;
@@ -740,12 +763,14 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn set_grid_grabbed_window(&mut self, id: Option<W::Id>) {
         if let Some(go) = &mut self.grid_overview {
             go.set_grabbed_window(id);
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_focused_window_id(&self) -> Option<W::Id> {
         let go = self.grid_overview.as_ref()?;
 
@@ -767,6 +792,7 @@ impl<W: LayoutElement> Workspace<W> {
     ///
     /// Only meaningful while the grid layout matches the scrolling layout, i.e. not between a
     /// layout change and the following grid recompute.
+    #[cfg(feature = "navigation")]
     fn grid_window_at_focus(&self) -> Option<W::Id> {
         let go = self.grid_overview.as_ref()?;
         let item = go.focused_item()?;
@@ -787,6 +813,7 @@ impl<W: LayoutElement> Workspace<W> {
         Some(item.window_id().clone())
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_expel_from_column_preferred_focus(&self) -> Option<W::Id> {
         let id = self.grid_focused_window_id()?;
         let item = self.grid_item_for_window(&id)?;
@@ -808,11 +835,13 @@ impl<W: LayoutElement> Workspace<W> {
         Some(id)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn activate_grid_focused_window(&mut self) -> Option<W::Id> {
         let id = self.grid_focused_window_id()?;
         self.activate_window_from_grid(&id).then_some(id)
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn activate_grid_focused_window_before_close(&mut self) -> bool {
         if self
             .grid_overview
@@ -836,6 +865,7 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_window_visual_snapshots(&self) -> Vec<GridWindowVisual<W>> {
         if !self.is_grid_overview_open() {
             return Vec::new();
@@ -858,6 +888,7 @@ impl<W: LayoutElement> Workspace<W> {
             .collect()
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_window_visual_snapshots_for_closing_window(
         &self,
         window: &W::Id,
@@ -885,6 +916,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// window, activating it first lets the scrolling layout pick the neighbour as it does when an
     /// active window closes. A minimized window can't be activated without restoring it, so its
     /// grid successor is returned instead, for the caller to focus after the removal.
+    #[cfg(feature = "navigation")]
     pub(super) fn prepare_grid_focus_for_removal(&mut self, window: &W::Id) -> Option<W::Id> {
         if !self.is_grid_overview_open() || self.grid_focused_window_id().as_ref() != Some(window) {
             return None;
@@ -901,6 +933,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// The window whose cell should take the grid focus when the focused `window` goes away.
     ///
     /// This is the next cell in grid order, or the previous one for the last cell.
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_focus_successor(&self, window: &W::Id) -> Option<W::Id> {
         let go = self.grid_overview.as_ref()?;
         let item = self.grid_item_for_window(window)?;
@@ -912,6 +945,7 @@ impl<W: LayoutElement> Workspace<W> {
         successor.map(|(item, _)| item.window_id().clone())
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_window_close_preserves_move_animations(&self, window: &W::Id) -> bool {
         if !self.is_grid_overview_open() {
             return false;
@@ -925,6 +959,7 @@ impl<W: LayoutElement> Workspace<W> {
             .is_some_and(|count| count > 1)
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_column_tile_count(&self, item: &GridItem<W>) -> Option<usize> {
         match item {
             GridItem::Column { col_idx, .. } | GridItem::Tab { col_idx, .. } => {
@@ -934,6 +969,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn set_grid_window_transition_starts(
         &mut self,
         snapshots: Vec<GridWindowVisual<W>>,
@@ -988,6 +1024,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// Gives a window that was just moved into this workspace's grid overview a transition start,
     /// so that the grid renders it flying from `pos` (workspace-local coordinates) at `scale` into
     /// its new grid cell. Mirrors the drag-into-grid animation.
+    #[cfg(feature = "navigation")]
     pub(super) fn set_grid_window_transition_start(
         &mut self,
         window: &W::Id,
@@ -1041,12 +1078,14 @@ impl<W: LayoutElement> Workspace<W> {
     /// Whether any window is currently flying into this workspace's grid overview from another
     /// workspace's grid cell. Such grids render above the other grids so the flying windows stay
     /// visible above the source grid they are crossing.
+    #[cfg(feature = "navigation")]
     pub(super) fn has_flying_in_windows(&self) -> bool {
         self.grid_overview
             .as_ref()
             .is_some_and(|go| go.open && !go.flying_in_windows.is_empty())
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn refresh_grid_overview_after_action(
         &mut self,
         preferred_focus: Option<&W::Id>,
@@ -1072,6 +1111,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Refreshes the open grid for a layout change that keeps the grid focus, like a window
     /// going fullscreen out of a multi-window column into a column of its own.
+    #[cfg(feature = "navigation")]
     pub(super) fn refresh_grid_overview_layout(&mut self, snapshots: Vec<GridWindowVisual<W>>) {
         if !self.is_grid_overview_open() {
             return;
@@ -1080,6 +1120,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.set_grid_window_transition_starts(snapshots, rearrange_restarted);
     }
 
+    #[cfg(feature = "navigation")]
     pub fn refresh_grid_entry_positions(&mut self) {
         let positions: Vec<_> = {
             let go = match &self.grid_overview {
@@ -1102,6 +1143,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn snapshot_grid_close_start_visuals(&mut self) {
         let visuals: Vec<_> = {
             let go = match &self.grid_overview {
@@ -1127,6 +1169,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn on_window_closed_in_grid(
         &mut self,
         window_visual_snapshots: Vec<GridWindowVisual<W>>,
@@ -1165,6 +1208,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.on_window_added_in_grid_impl(id, false);
     }
 
+    #[cfg(feature = "navigation")]
     fn on_window_added_in_grid_impl(&mut self, id: &W::Id, stop_move_animations: bool) {
         if let Some(go) = &mut self.grid_overview {
             if go.open {
@@ -1187,6 +1231,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// Makes the cell of `window`, which is about to join the open grid, start out at `pos` and
     /// `scale`, like where it was dropped, rather than right in its spot. A window that joins a
     /// cell the grid shows already moves along with that cell instead.
+    #[cfg(feature = "navigation")]
     pub(super) fn start_grid_cell_at(
         &mut self,
         window: &W::Id,
@@ -1215,12 +1260,14 @@ impl<W: LayoutElement> Workspace<W> {
         go.entry_scales.push((item, scale));
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_window_was_added_while_open(&self, id: &W::Id) -> bool {
         self.grid_overview
             .as_ref()
             .is_some_and(|go| go.open && go.window_was_added_while_open(id))
     }
 
+    #[cfg(feature = "navigation")]
     fn recompute_grid_overview_layout(&mut self, restart_rearrange: bool) -> bool {
         let items = self.grid_overview_items();
         let working_area = self.working_area;
@@ -1310,6 +1357,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn advance_grid_overview_animations(&mut self) {
         let mut go = match self.grid_overview.take() {
             Some(go) => go,
@@ -1325,12 +1373,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.grid_overview = Some(go);
     }
 
+    #[cfg(feature = "navigation")]
     pub fn are_grid_overview_animations_ongoing(&self) -> bool {
         self.grid_overview
             .as_ref()
             .map_or(false, |g| g.are_animations_ongoing())
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_overview_items(&self) -> Vec<(GridItem<W>, GridSource)> {
         let mut items: Vec<_> = self
             .scrolling
@@ -1356,6 +1406,7 @@ impl<W: LayoutElement> Workspace<W> {
         items
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_for_window(&self, id: &W::Id) -> Option<GridItem<W>> {
         if let Some(tile) = self.floating.tiles().find(|tile| tile.window().id() == id) {
             if self.tile_ignores_grid_overview(tile) {
@@ -1370,10 +1421,12 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.grid_item_for_window(id)
     }
 
+    #[cfg(feature = "navigation")]
     pub fn window_is_in_grid_overview(&self, id: &W::Id) -> bool {
         self.is_grid_overview_open() && self.grid_item_for_window(id).is_some()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn active_ignored_floating_window_in_grid(&self) -> Option<&W> {
         if !self.is_grid_overview_open() {
             return None;
@@ -1384,6 +1437,7 @@ impl<W: LayoutElement> Workspace<W> {
             .then_some(active)
     }
 
+    #[cfg(feature = "navigation")]
     fn tile_ignores_grid_overview(&self, tile: &Tile<W>) -> bool {
         // A minimized window has nowhere else to be seen and restored than the grid, so it gets
         // a cell like any other minimized window, and keeps it once restored from there until
@@ -1397,6 +1451,7 @@ impl<W: LayoutElement> Workspace<W> {
                 .is_some_and(|go| go.window_was_restored(win.id()))
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_normal_render_pos(
         &self,
         item: &GridItem<W>,
@@ -1418,12 +1473,14 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_visible_when_closing(&self, _item: &GridItem<W>) -> bool {
         // Minimized windows fly back to their positions like everything else, and only become
         // invisible once the grid has fully closed.
         true
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_renders_on_top_when_grid_closing(&self, item: &GridItem<W>) -> bool {
         match item {
             GridItem::Column { col_idx, .. } => self
@@ -1451,10 +1508,12 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "navigation")]
     pub fn grid_item_renders_on_top_when_grid_closing_for_tests(&self, item: &GridItem<W>) -> bool {
         self.grid_item_renders_on_top_when_grid_closing(item)
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_item_visual_transform(
         &self,
         go: &GridOverview<W>,
@@ -1473,6 +1532,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// position is always taken at the current view position. Minimized windows use this path
     /// too: when the grid closes they fly back to their place while their alpha animation
     /// fades them out.
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_item_render_visual_transform(
         &self,
         go: &GridOverview<W>,
@@ -1485,6 +1545,7 @@ impl<W: LayoutElement> Workspace<W> {
         go.entry_visual_transform(item, info, fallback_pos)
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_window_visual_transform(
         &self,
         window: &W::Id,
@@ -1494,6 +1555,7 @@ impl<W: LayoutElement> Workspace<W> {
         Some(go.window_visual_transform(window, target_pos, target_scale))
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_window_target_visual_transform(
         &self,
         window: &W::Id,
@@ -1521,6 +1583,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn set_grid_focus_for_window(&mut self, id: &W::Id) -> bool {
         let Some(item) = self.grid_item_for_window(id) else {
             return false;
@@ -1556,6 +1619,7 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn sync_grid_focus_to_active_window(&mut self) {
         let Some(id) = self.active_window().map(|w| w.id().clone()) else {
             return;
@@ -1578,7 +1642,9 @@ impl<W: LayoutElement> Workspace<W> {
             layer,
         );
 
+        #[cfg(feature = "navigation")]
         let grid_focused_window_id = self.grid_focused_window_id();
+        #[cfg(feature = "navigation")]
         if let Some(ref go) = self.grid_overview {
             if go.open || go.progress.is_some() {
                 let is_closing = !go.open;
@@ -1634,10 +1700,13 @@ impl<W: LayoutElement> Workspace<W> {
     /// shows, though: it draws its own rings, and a tile ring caught mid-way would pop when the
     /// grid hands back to it.
     fn update_focus_rings_shown(&mut self) {
+        #[cfg(feature = "navigation")]
         let animate = self
             .grid_overview
             .as_ref()
             .is_none_or(|go| !go.open && go.progress.is_none());
+        #[cfg(not(feature = "navigation"))]
+        let animate = true;
         let floating_is_active = self.floating_is_active.get();
 
         let active = self.scrolling.active_window().map(|win| win.id().clone());
@@ -1822,6 +1891,7 @@ impl<W: LayoutElement> Workspace<W> {
     /// Where a window's tile is drawn in the grid right now, and at what scale.
     ///
     /// This matches the positions in render_grid_overview().
+    #[cfg(feature = "navigation")]
     fn grid_tile_visual_rect(
         &self,
         go: &GridOverview<W>,
@@ -1938,6 +2008,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.background_buffer
             .set_color(options.layout.background_color);
 
+        #[cfg(feature = "navigation")]
         if let Some(go) = &mut self.grid_overview {
             go.update_config(options.clone());
         }
@@ -2252,6 +2323,7 @@ impl<W: LayoutElement> Workspace<W> {
                         self.activate_floating_space();
                     }
                 } else {
+                    #[cfg(feature = "navigation")]
                     let grid_col_idx = self.grid_overview.as_ref().and_then(|go| {
                         if !go.open {
                             return None;
@@ -2263,6 +2335,9 @@ impl<W: LayoutElement> Workspace<W> {
                             GridItem::Floating { .. } => None,
                         }
                     });
+
+                    #[cfg(not(feature = "navigation"))]
+                    let grid_col_idx: Option<usize> = None;
 
                     self.scrolling.add_tile(
                         grid_col_idx.map(|c| c + 1),
@@ -3430,6 +3505,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
+        #[cfg(feature = "navigation")]
         if let Some(go) = &self.grid_overview {
             if go.is_fully_open() {
                 if let Some(info) = go.focused_info() {
@@ -4132,6 +4208,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn fullscreen_window_above_top_layer(&self) -> Option<&W> {
+        #[cfg(feature = "navigation")]
         if self
             .grid_overview
             .as_ref()
@@ -4192,6 +4269,7 @@ impl<W: LayoutElement> Workspace<W> {
         window: &W::Id,
         blocker: TransactionBlocker,
     ) {
+        #[cfg(feature = "navigation")]
         let grid_target = {
             let go = self.grid_overview.as_ref().filter(|go| go.open);
             go.and_then(|go| {
@@ -4223,6 +4301,9 @@ impl<W: LayoutElement> Workspace<W> {
                 Some((false, tile_size, tile_pos))
             })
         };
+
+        #[cfg(not(feature = "navigation"))]
+        let grid_target = None;
 
         if let Some((is_floating, tile_size, tile_pos)) = grid_target {
             if is_floating {
@@ -4263,48 +4344,59 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn grid_window_at(&self, pos: Point<f64, Logical>) -> Option<W::Id> {
-        let go = self.grid_overview.as_ref()?;
-        if !go.open {
+        #[cfg(not(feature = "navigation"))]
+        {
+            let _ = pos;
             return None;
         }
+        #[cfg(feature = "navigation")]
+        {
+            let go = self.grid_overview.as_ref()?;
+            if !go.open {
+                return None;
+            }
 
-        // The focused cell first: it draws on top while cells animate over each other.
-        for pass in 0..2 {
-            for (idx, (item, info)) in go.layout.entries.iter().enumerate() {
-                if (idx == go.focus) != (pass == 0) {
-                    continue;
-                }
+            // The focused cell first: it draws on top while cells animate over each other.
+            for pass in 0..2 {
+                for (idx, (item, info)) in go.layout.entries.iter().enumerate() {
+                    if (idx == go.focus) != (pass == 0) {
+                        continue;
+                    }
 
-                let (visual_pos, visual_scale) = self.grid_item_visual_transform(go, item, info);
-                let source_size = info.target_size.downscale(info.target_scale.max(0.0001));
-                let visual_size = source_size.upscale(visual_scale);
-                let rect = Rectangle::new(visual_pos, visual_size);
+                    let (visual_pos, visual_scale) =
+                        self.grid_item_visual_transform(go, item, info);
+                    let source_size = info.target_size.downscale(info.target_scale.max(0.0001));
+                    let visual_size = source_size.upscale(visual_scale);
+                    let rect = Rectangle::new(visual_pos, visual_size);
 
-                if rect.contains(pos) {
-                    match item {
-                        GridItem::Column { .. } | GridItem::Tab { .. } => {
-                            if let Some(preview) =
-                                self.scrolling.grid_preview_with_stable_origin(item)
-                            {
-                                let rel = (pos - visual_pos).downscale(visual_scale.max(0.0001));
-                                // Match the render order: lower tiles draw on top of upper ones.
-                                for preview_tile in preview.tiles.into_iter().rev() {
-                                    let tile_size = preview_tile.tile.animated_tile_size();
-                                    let tile_rect = Rectangle::new(preview_tile.pos, tile_size);
-                                    if tile_rect.contains(rel) {
-                                        return Some(preview_tile.tile.window().id().clone());
+                    if rect.contains(pos) {
+                        match item {
+                            GridItem::Column { .. } | GridItem::Tab { .. } => {
+                                if let Some(preview) =
+                                    self.scrolling.grid_preview_with_stable_origin(item)
+                                {
+                                    let rel =
+                                        (pos - visual_pos).downscale(visual_scale.max(0.0001));
+                                    // Match the render order: lower tiles draw on top of upper
+                                    // ones.
+                                    for preview_tile in preview.tiles.into_iter().rev() {
+                                        let tile_size = preview_tile.tile.animated_tile_size();
+                                        let tile_rect = Rectangle::new(preview_tile.pos, tile_size);
+                                        if tile_rect.contains(rel) {
+                                            return Some(preview_tile.tile.window().id().clone());
+                                        }
                                     }
                                 }
                             }
+                            GridItem::Floating { .. } => (),
                         }
-                        GridItem::Floating { .. } => (),
-                    }
 
-                    return Some(item.window_id().clone());
+                        return Some(item.window_id().clone());
+                    }
                 }
             }
+            None
         }
-        None
     }
 
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
@@ -4461,6 +4553,7 @@ impl<W: LayoutElement> Workspace<W> {
             self.floating_is_active = FloatingActive::No;
         }
 
+        #[cfg(feature = "navigation")]
         if self.is_grid_overview_open() {
             if !minimize {
                 if let Some(go) = &mut self.grid_overview {
@@ -4512,6 +4605,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn activate_window_from_grid(&mut self, window: &W::Id) -> bool {
         // Selecting a minimized window in the grid restores it, then activates it as usual.
         if self.has_minimized_window(window) {
@@ -4586,6 +4680,7 @@ impl<W: LayoutElement> Workspace<W> {
             .map(|(position, _)| position)
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_insert_position_and_hint_area(
         &self,
         pos: Point<f64, Logical>,
@@ -4704,6 +4799,7 @@ impl<W: LayoutElement> Workspace<W> {
         Some((position, hint_area))
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_insert_position_for_item(
         &self,
         item: &GridItem<W>,
@@ -4772,6 +4868,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_insert_hint_area_for_item(
         &self,
         go: &GridOverview<W>,
@@ -4816,6 +4913,7 @@ impl<W: LayoutElement> Workspace<W> {
         ))
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_new_column_insert_hint_area(
         &self,
         go: &GridOverview<W>,
@@ -4879,6 +4977,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_column_group_edge_rect(
         &self,
         go: &GridOverview<W>,
@@ -4909,6 +5008,7 @@ impl<W: LayoutElement> Workspace<W> {
         best.map(|(_, rect)| rect)
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_insert_hint_source_y(
         &self,
         item: &GridItem<W>,
@@ -4929,6 +5029,7 @@ impl<W: LayoutElement> Workspace<W> {
         Some((last_bottom - hint_height).max(0.))
     }
 
+    #[cfg(feature = "navigation")]
     fn grid_in_column_tile_insert_idx(&self, item: &GridItem<W>, y: f64) -> usize {
         let Some(preview) = self.scrolling.grid_preview_with_stable_origin(item) else {
             return 0;
@@ -5125,10 +5226,12 @@ impl<W: LayoutElement> Workspace<W> {
         self.layout_config.as_ref()
     }
 
+    #[cfg(feature = "navigation")]
     pub fn grid_overview(&self) -> Option<&GridOverview<W>> {
         self.grid_overview.as_ref()
     }
 
+    #[cfg(feature = "navigation")]
     pub(super) fn grid_overview_mut(&mut self) -> Option<&mut GridOverview<W>> {
         self.grid_overview.as_mut()
     }
@@ -5256,4 +5359,155 @@ fn compute_workspace_shadow_config(
     config.offset.y.0 *= norm;
 
     config
+}
+
+#[cfg(not(feature = "navigation"))]
+impl<W: LayoutElement> Workspace<W> {
+    pub fn is_grid_overview_open(&self) -> bool {
+        false
+    }
+    pub fn grid_overview_progress(&self) -> Option<f64> {
+        None
+    }
+    pub fn is_grid_overview_animation(&self) -> bool {
+        false
+    }
+    pub fn toggle_grid_overview(&mut self) {}
+    pub fn close_grid_overview(&mut self) -> bool {
+        false
+    }
+    pub fn open_grid_overview(&mut self) -> bool {
+        false
+    }
+    pub fn grid_navigate(&mut self, _dir: GridDirection) -> bool {
+        false
+    }
+    pub fn grid_focus_column(&mut self, _col_idx: usize) -> bool {
+        false
+    }
+    pub fn grid_focus_tile_in_column(&mut self, _pick: impl FnOnce(usize, usize) -> usize) -> bool {
+        false
+    }
+    pub fn grid_focus_edge_cell(&mut self, _last: bool) -> bool {
+        false
+    }
+    pub fn set_grid_grabbed_window(&mut self, _id: Option<W::Id>) {}
+    pub fn grid_focused_window_id(&self) -> Option<W::Id> {
+        None
+    }
+    fn grid_window_at_focus(&self) -> Option<W::Id> {
+        None
+    }
+    pub fn activate_grid_focused_window(&mut self) -> Option<W::Id> {
+        None
+    }
+    pub(super) fn activate_grid_focused_window_before_close(&mut self) -> bool {
+        false
+    }
+    pub(super) fn prepare_grid_focus_for_removal(&mut self, _window: &W::Id) -> Option<W::Id> {
+        None
+    }
+    pub(super) fn grid_focus_successor(&self, _window: &W::Id) -> Option<W::Id> {
+        None
+    }
+    pub(super) fn grid_window_close_preserves_move_animations(&self, _window: &W::Id) -> bool {
+        false
+    }
+    pub(super) fn set_grid_window_transition_start(
+        &mut self,
+        _window: &W::Id,
+        _pos: Point<f64, Logical>,
+        _scale: f64,
+        _config: niri_config::Animation,
+    ) {
+    }
+    pub fn refresh_grid_entry_positions(&mut self) {}
+    fn snapshot_grid_close_start_visuals(&mut self) {}
+    fn on_window_added_in_grid_impl(&mut self, _id: &W::Id, _stop_move_animations: bool) {}
+    pub(super) fn start_grid_cell_at(
+        &mut self,
+        _window: &W::Id,
+        _pos: Point<f64, Logical>,
+        _scale: f64,
+    ) {
+    }
+    pub fn grid_window_was_added_while_open(&self, _id: &W::Id) -> bool {
+        false
+    }
+    fn recompute_grid_overview_layout(&mut self, _restart_rearrange: bool) -> bool {
+        false
+    }
+    pub fn advance_grid_overview_animations(&mut self) {}
+    pub fn are_grid_overview_animations_ongoing(&self) -> bool {
+        false
+    }
+    pub fn window_is_in_grid_overview(&self, _id: &W::Id) -> bool {
+        false
+    }
+    pub fn active_ignored_floating_window_in_grid(&self) -> Option<&W> {
+        None
+    }
+    fn tile_ignores_grid_overview(&self, _tile: &Tile<W>) -> bool {
+        false
+    }
+    pub(super) fn grid_window_visual_transform(
+        &self,
+        _window: &W::Id,
+    ) -> Option<(Point<f64, Logical>, f64)> {
+        None
+    }
+    fn grid_window_target_visual_transform(
+        &self,
+        _window: &W::Id,
+    ) -> Option<(Point<f64, Logical>, f64)> {
+        None
+    }
+    pub fn set_grid_focus_for_window(&mut self, _id: &W::Id) -> bool {
+        false
+    }
+    pub(super) fn sync_grid_focus_to_active_window(&mut self) {}
+    pub fn activate_window_from_grid(&mut self, _window: &W::Id) -> bool {
+        false
+    }
+    pub(super) fn has_flying_in_windows(&self) -> bool {
+        false
+    }
+    pub(super) fn grid_expel_from_column_preferred_focus(&self) -> Option<W::Id> {
+        None
+    }
+    pub(super) fn grid_insert_position_and_hint_area(
+        &self,
+        _pos: Point<f64, Logical>,
+    ) -> Option<(InsertPosition, Rectangle<f64, Logical>)> {
+        None
+    }
+    pub(super) fn grid_window_visual_snapshots(&self) -> Vec<GridWindowVisual<W>> {
+        Vec::new()
+    }
+    pub(super) fn grid_window_visual_snapshots_for_closing_window(
+        &self,
+        _window: &W::Id,
+    ) -> Vec<GridWindowVisual<W>> {
+        Vec::new()
+    }
+    pub(super) fn refresh_grid_overview_after_action(
+        &mut self,
+        _preferred_focus: Option<&W::Id>,
+        _stop_move_animations: bool,
+        _window_visual_snapshots: Vec<GridWindowVisual<W>>,
+    ) {
+    }
+    pub(super) fn refresh_grid_overview_layout(&mut self, _snapshots: Vec<GridWindowVisual<W>>) {}
+    pub(super) fn set_grid_window_transition_starts(
+        &mut self,
+        _snapshots: Vec<GridWindowVisual<W>>,
+        _rearrange_restarted: bool,
+    ) {
+    }
+    pub(super) fn on_window_closed_in_grid(
+        &mut self,
+        _window_visual_snapshots: Vec<GridWindowVisual<W>>,
+        _stop_move_animations: bool,
+    ) {
+    }
 }
