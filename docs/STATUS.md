@@ -44,6 +44,11 @@ Added on top of the elite base:
 - per-keyboard configuration (core input): named `keyboard "device" { ... }`
   blocks, inheritance from the unnamed block, keymap/repeat/Num Lock/locale1/IPC
   updates on device switches, with headless tests.
+- virtual outputs (core outputs): TTY/headless create/remove over IPC/CLI,
+  declarative `create-virtual`, per-output mode/refresh handling.
+- isolated outputs (core outputs): compositor chrome is kept off them, the
+  overview is suppressed, and `power-off-monitors skip-isolated=true` keeps them
+  lit while the rest sleep.
 
 Reconciled with upstream `02ee0585`:
 
@@ -57,7 +62,7 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 661 tests |
+| `cargo test --workspace` | pass, 666 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |

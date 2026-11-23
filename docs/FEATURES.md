@@ -54,14 +54,15 @@ This table is the integration contract, not a claim of completion.
 | Software EGL | Absent | niri-elite | niri-elite | Planned | Upstream explicitly skips llvmpipe/softpipe. |
 | DPMS frame callbacks | Upstream | upstream | do not port | Upstream | Fixed by `78b7adfe`, `bb38b7e1`. |
 | DPMS VRAM/GTT cleanup | Partial | demoji PR #4750 (open) | investigate | Deferred | Reproduce and profile first; no timer mitigation without evidence. |
+| DPMS isolated-output policy | Absent | biri | biri | Integrated (core) | `skip-isolated` keeps isolated outputs on while the rest sleep. |
 | Suspend/resume, hotplug resource cleanup | Partial | upstream + niri-spicy | integration work | Planned | Covered by hardware tests. |
 
 ## Outputs and workspaces
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Virtual outputs | Absent | biri (niri PR #3800, open) | biri | Planned | TTY + headless; IPC create/remove; config `create-virtual`. |
-| Isolated outputs | Absent | biri | biri | Planned | Keeps overview/switcher/notifications off a screen. |
+| Virtual outputs | Absent | biri (niri PR #3800, open) | biri | Integrated (core) | TTY + headless; IPC/CLI create/remove; config `create-virtual`; virtual-output frame-callback path. |
+| Isolated outputs | Absent | biri | biri | Integrated (core) | Overview/Alt-Tab/hotkey overlay/config notification hidden; `power-off-monitors skip-isolated=true` keeps them lit. |
 | Hidden workspaces | Absent | biri (niri PR #2997, open) | biri | Planned | Config + IPC actions; keep out of overview/carousel. |
 | Portrait / vertical main axis | Absent | biri | biri | Planned | Per-output/workspace; directional input stays physical. |
 | Per-output behaviour | Upstream | upstream | upstream | Upstream | Output config and layout rules. |
