@@ -76,13 +76,19 @@ Added on top of the elite base after the initial merge:
   focus/IPC/unhide rules) and sticky windows (`open-sticky`,
   `toggle-window-sticky`, monitor-level sticky space), plus
   `float-above-fullscreen`.
+- Overview preset-based zoom cycling with `overview-zoom-cycle/in/out` and
+  automatic overview open/close, plus the `overview-zoom` animation.
+- Decoration light spill from focus-ring/border shaders.
+- `kde` Cargo feature (default on) gating all KDE interop.
+- Headless/virtual outputs compile configured global and scoped shaders at
+  startup.
 
 Verified on this branch:
 
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 739 tests |
+| `cargo test --workspace` | pass, 742 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |

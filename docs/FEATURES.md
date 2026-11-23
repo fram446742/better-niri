@@ -30,7 +30,7 @@ This table is the integration contract, not a claim of completion.
 | GPU format probing | Partial | niri-spicy, niri-elite | niri-spicy | Planned | niri already has a 10-bit scanout format list; HDR needs per-plane colour probing. |
 | 10-bit output | Partial | niri-spicy | niri-spicy | Planned | Upstream lists `Abgr2101010`; no HDR colour pipeline. |
 | Direct scanout | Upstream | upstream | upstream | Upstream | Must survive effects-disabled paths. |
-| Shader pipeline (GLSL) | Absent | biri | biri | Partial | Global + `region-shader` + per-window-rule scoped chains, multipass, feedback; per-output presets and focus-ring shaders pending. |
+| Shader pipeline (GLSL) | Absent | biri | biri | Integrated | Global, `region-shader`, per-window, per-output and focus-ring chains; multipass, feedback, presets, watched-file reload. |
 | Multipass + frame history | Absent | biri | biri | Integrated | `niri_prev`, `niri_buffer`, `niri_screen`, `niri_source`, per-pass chains, black-seeded feedback. |
 | Blur | Upstream | upstream | upstream | Upstream | `passes`, `offset`, `noise`, `saturation`, `xray`; `ext-background-effect-v1`. |
 | KDE blur protocol | Absent | kde-niri | kde-niri | Planned | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
@@ -83,8 +83,8 @@ This table is the integration contract, not a claim of completion.
 | Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Upstream | Do not reimplement tabbed columns; evaluate Naxdy's auto-group refinements later. |
 | Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Planned | Extend to arbitrary actions (`grid-overview`, etc.). |
 | Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Planned | Second seat over IPC; needs Smithay per-client seat filter. |
-| Focus-ring shaders | Absent | biri | biri | Partial | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload; light spill pending (depends on carousel). |
-| Custom borders | Upstream (colours/width) | upstream + biri shaders | biri shader layer | Partial | Border/focus-ring shader programs with watched files; keep upstream border geometry. |
+| Focus-ring shaders | Absent | biri | biri | Integrated | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload, and decoration light spill. |
+| Custom borders | Upstream (colours/width) | upstream + biri shaders | biri shader layer | Integrated | Border/focus-ring shader programs with watched files and light spill; upstream border geometry retained. |
 | SVG cursors | Absent | niri-elite (SHORiN) | niri-elite | Planned | `resvg`/`usvg` optional dependency. |
 | Shake-to-enlarge cursor | Absent | niri-elite (SHORiN) | niri-elite | Planned | Cursor config section. |
 | Carousel overview | Absent | biri | biri | Planned | Consolidated multi-monitor cover-flow. |
