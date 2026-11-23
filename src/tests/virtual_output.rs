@@ -157,6 +157,7 @@ fn touch_input_targets_virtual_output_when_focused() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
 
+    // Create a virtual output and focus it.
     let name = {
         let state = f.niri_state();
         state
@@ -175,8 +176,8 @@ fn touch_input_targets_virtual_output_when_focused() {
 
     f.niri().layout.focus_output(&virt);
 
-    // With no explicit `input.touch.map-to-output` configured,
-    // touch should follow the active output (which may be virtual).
+    // With no explicit `input.touch.map-to-output` configured, touch should follow the active
+    // output (which may be virtual).
     let touch_output = f.niri().output_for_touch().unwrap().clone();
     assert_eq!(touch_output, virt);
 }
