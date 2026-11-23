@@ -19,8 +19,8 @@ use niri_config::input::XkbFile;
 use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
-    Bind, Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
-    WorkspaceReference, Xkb,
+    Bind, Config, CornerRadius, FloatOrInt, GradientInterpolation, Key, Modifiers, OutputName,
+    TrackLayout, WarpMouseToFocusMode, WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{InputTime, Keycode};
@@ -189,6 +189,7 @@ use crate::render_helpers::blend::{
     set_sdr_capture_blend, BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE,
 };
 use crate::render_helpers::blur::BlurOptions;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
@@ -7677,6 +7678,12 @@ impl Niri {
             }};
         }
 
+        // Whether this output is currently rendering the consolidated carousel: while
+        // active, the host's own full overview is suppressed here and instead drawn as
+        // the centered card in the carousel block below.
+        let carousel_active =
+            self.layout.in_carousel_regime() && self.layout.active_output() == Some(output);
+
         // The overlay layer elements go next.
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
@@ -7721,56 +7728,111 @@ impl Niri {
                 }};
             }
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
-                let ns = Some(ws.id().get() as usize);
-                let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
-            }
+            // Suppressed while the carousel is active on this output: the host's own
+            // workspace strip (and its per-workspace background/bottom layer-shell
+            // elements) is instead drawn as the centered card in the carousel block
+            // below. Overlay/top popups above and the backdrop/cursor elsewhere are
+            // unaffected.
+            if !carousel_active {
+                for (ws, geo) in mon.workspaces_with_render_geo() {
+                    let ns = Some(ws.id().get() as usize);
+                    let xray_pos = XrayPos::new(geo.loc, zoom);
+                    push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
+                    push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+                }
 
-            mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
+                mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
-                // The render element namespace. This will be set to the workspace index for
-                // elements duplicated across workspaces (i.e. background and bottom layers) in
-                // order to have their non-xray framebuffer effects separated from each other.
-                //
-                // This doesn't have to correspond exactly to workspace id or idx, the only
-                // requirement is that there's only one framebuffer effect element with a given id +
-                // namespace on the frame at once. Id + namespace is used as the cache key in the
-                // damage tracker.
-                let ns = Some(ws.id().get() as usize);
-                let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+                for (ws, geo) in mon.workspaces_with_render_geo() {
+                    // The render element namespace. This will be set to the workspace index for
+                    // elements duplicated across workspaces (i.e. background and bottom layers) in
+                    // order to have their non-xray framebuffer effects separated from each other.
+                    //
+                    // This doesn't have to correspond exactly to workspace id or idx, the only
+                    // requirement is that there's only one framebuffer effect element with a given
+                    // id + namespace on the frame at once. Id + namespace is used as the cache key
+                    // in the damage tracker.
+                    let ns = Some(ws.id().get() as usize);
+                    let xray_pos = XrayPos::new(geo.loc, zoom);
+                    push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
+                    push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
 
-                process!(geo)(ws.render_background());
+                    process!(geo)(ws.render_background());
+                }
             }
         }
 
-        // ===== Consolidated carousel: sibling cards on the focused output =====
-        if self.layout.in_carousel_regime() && self.layout.active_output() == Some(output) {
+        // ===== Consolidated carousel: rotating carousel (centered + tucks) =====
+        if carousel_active {
             let host_scale = output.current_scale().fractional_scale();
-            let participants = self.layout.carousel_participants(output);
-            let placements =
-                crate::layout::carousel::carousel_card_layout(mon.view_size(), participants.len());
-            for (sibling, place) in participants.iter().zip(placements) {
-                // Scale-normalize so mixed-DPI siblings render at a consistent size.
-                let sibling_scale = sibling.scale().fractional_scale();
-                let norm = (sibling_scale / host_scale) as f64;
-                let effective_zoom = place.card_scale * norm;
-                sibling.render_active_workspace_at_zoom(
-                    ctx.r(),
-                    1.0, // render sibling content at native zoom; card_scale shrinks it below
-                    focus_ring,
-                    &mut |elem| {
-                        if let Some(wrapped) =
-                            scale_relocate_crop(elem, output_scale, effective_zoom, place.card_rect)
-                        {
-                            push(OutputRenderElements::CarouselCard(wrapped));
-                        }
-                    },
+            let outputs = self.layout.carousel_outputs();
+            let centered = self
+                .layout
+                .carousel_centered_output_idx()
+                .min(outputs.len().saturating_sub(1));
+            let placements = crate::layout::carousel::carousel_centered_layout(
+                mon.view_size(),
+                outputs.len(),
+                centered,
+            );
+            // niri renders EARLIER-pushed elements IN FRONT, so push the centered card's
+            // group FIRST (front), then the tucks in index order.
+            let mut order = vec![centered];
+            order.extend((0..outputs.len()).filter(|&j| j != centered));
+            for &i in &order {
+                let m = outputs[i];
+                let place = placements[i];
+                // fade strips FIRST (in front of this card), then the card -- per 2a fade fix.
+                let backdrop = self.config.borrow().overview.backdrop_color;
+                let opaque = {
+                    let mut c = backdrop;
+                    c.a = 1.;
+                    c
+                };
+                let transparent = {
+                    let mut c = backdrop;
+                    c.a = 0.;
+                    c
+                };
+                let fade_w = place.card_rect.size.w * 0.10;
+                let left = Rectangle::new(
+                    place.card_rect.loc,
+                    Size::from((fade_w, place.card_rect.size.h)),
                 );
+                let right = Rectangle::new(
+                    Point::from((
+                        place.card_rect.loc.x + place.card_rect.size.w - fade_w,
+                        place.card_rect.loc.y,
+                    )),
+                    Size::from((fade_w, place.card_rect.size.h)),
+                );
+                for (rect, from, to) in [(left, opaque, transparent), (right, transparent, opaque)]
+                {
+                    let strip = BorderRenderElement::new(
+                        rect.size,
+                        Rectangle::from_size(rect.size),
+                        GradientInterpolation::default(),
+                        from,
+                        to,
+                        0.,
+                        Rectangle::from_size(rect.size),
+                        f32::MAX,
+                        CornerRadius::default(),
+                        host_scale as f32,
+                        1.0,
+                    )
+                    .with_location(rect.loc);
+                    push(OutputRenderElements::CarouselFade(strip));
+                }
+                let sibling_scale = m.scale().fractional_scale();
+                let effective_zoom = place.card_scale * (host_scale / sibling_scale);
+                m.render_active_workspace_at_zoom(ctx.r(), 1.0, focus_ring, &mut |elem| {
+                    if let Some(wrapped) =
+                        scale_relocate_crop(elem, output_scale, effective_zoom, place.card_rect)
+                    {
+                        push(OutputRenderElements::CarouselCard(wrapped));
+                    }
+                });
             }
         }
         // ===== END carousel =====
@@ -11490,6 +11552,8 @@ niri_render_elements! {
         CarouselCard = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
             MonitorRenderElement<R>
         >>>,
+        // Consolidated carousel: gradient strip fading a card's horizontal edge.
+        CarouselFade = BorderRenderElement,
     }
 }
 

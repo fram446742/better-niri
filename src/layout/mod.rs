@@ -420,9 +420,6 @@ pub struct Layout<W: LayoutElement> {
     /// Which output the consolidated carousel is centered on. Initialized to 0;
     /// Phase 2 sets it to the centered output when entering the carousel regime.
     /// Meaningful only while in the carousel regime.
-    ///
-    /// Not yet read anywhere; consumed by carousel rendering in a follow-up task.
-    #[allow(dead_code)]
     carousel_centered_output_idx: usize,
     /// Configurable properties of the layout.
     options: Rc<Options>,
@@ -2242,6 +2239,50 @@ impl<W: LayoutElement> Layout<W> {
             .filter(|m| !m.is_isolated())
             .filter(|m| m.has_windows())
             .collect()
+    }
+
+    /// Every monitor eligible for the carousel — not isolated, non-empty — in layout
+    /// order. The HOST is included (this is the full carousel set, unlike
+    /// `carousel_participants` which excludes the host).
+    pub fn carousel_outputs(&self) -> Vec<&Monitor<W>> {
+        self.monitors()
+            .filter(|m| !m.is_isolated())
+            .filter(|m| m.has_windows())
+            .collect()
+    }
+
+    /// Returns the index of the output the consolidated carousel is currently
+    /// centered on.
+    pub fn carousel_centered_output_idx(&self) -> usize {
+        self.carousel_centered_output_idx
+    }
+
+    /// Set the centered index to the active output's position in
+    /// `carousel_outputs()`. Called when the carousel/overview opens so the
+    /// carousel starts centered on the output the user is looking at. No-op if
+    /// the active output isn't in the set.
+    pub fn reset_carousel_center(&mut self) {
+        let Some(active) = self.active_output().cloned() else {
+            return;
+        };
+        if let Some(idx) = self
+            .carousel_outputs()
+            .iter()
+            .position(|m| m.output() == &active)
+        {
+            self.carousel_centered_output_idx = idx;
+        }
+    }
+
+    /// Rotates the carousel's centered output by `delta` positions, wrapping
+    /// over `carousel_outputs()`. No-op if fewer than 2 outputs are eligible.
+    pub fn slide_carousel(&mut self, delta: isize) {
+        let len = self.carousel_outputs().len();
+        if len < 2 {
+            return;
+        }
+        let idx = self.carousel_centered_output_idx as isize;
+        self.carousel_centered_output_idx = (idx + delta).rem_euclid(len as isize) as usize;
     }
 
     pub fn monitors_mut(&mut self) -> impl Iterator<Item = &mut Monitor<W>> + '_ {
@@ -6850,6 +6891,10 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn toggle_overview(&mut self) {
         self.overview_open = !self.overview_open;
+
+        if self.overview_open {
+            self.reset_carousel_center();
+        }
 
         // Reset zoom to config default when closing overview.
         if !self.overview_open {
