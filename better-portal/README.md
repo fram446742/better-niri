@@ -52,14 +52,19 @@ cargo build
 ./target/debug/better-portal-picker   # prints {"x","y","width","height"} or exits 2
 ```
 
-ScreenCast source selection now uses **`better-portal-picker --screencast`**:
-click an output to select it. The picker prints `{"output":"eDP-1"}` and
-better-portal stores it through niri's
-`org.better.portal.ScreenCastSelection.SetSelection` before forwarding `Start`;
-the compositor then streams that output without its own picker. If the
-selection API is unavailable, it falls back to the compositor's picker. Window
-sources are supported by the API (`type 2` + window id) but the picker currently
-selects outputs.
+ScreenCast source selection uses the external picker before forwarding
+`Start`:
+
+- `types` requesting only windows → `better-portal-picker
+  --screencast-window`, which triggers niri's window pick crosshair over IPC and
+  prints `{"window":42}`.
+- otherwise → `better-portal-picker --screencast`, click an output, prints
+  `{"output":"eDP-1"}`.
+
+better-portal stores the result through niri's
+`org.better.portal.ScreenCastSelection.SetSelection` (`type 2`/window,
+`type 1`/output), and the compositor streams it without its own picker. If the
+selection API is unavailable, it falls back to the compositor's picker.
 
 ScreenCast delegates to the compositor's existing
 `org.freedesktop.impl.portal.desktop.niri` backend; it does not own capture or

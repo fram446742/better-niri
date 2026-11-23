@@ -51,6 +51,7 @@ impl SelectionRect {
 }
 
 const SOURCE_TYPE_MONITOR: u32 = 1;
+const SOURCE_TYPE_WINDOW: u32 = 2;
 
 pub const RESPONSE_SUCCESS: u32 = 0;
 pub const RESPONSE_CANCELLED: u32 = 1;
@@ -161,8 +162,16 @@ async fn fullscreen_screenshot() -> Result<String, Failure> {
 pub enum PickerOutcome {
     Selected(SelectionRect),
     SelectedOutput(String),
+    SelectedWindow(u64),
     Cancelled,
     Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerMode {
+    Region,
+    Output,
+    Window,
 }
 
 /// Resolves `better-portal-picker`: `$BETTER_PORTAL_PICKER`, then a sibling of
@@ -186,35 +195,55 @@ pub fn picker_program() -> Option<std::path::PathBuf> {
 }
 
 fn run_picker(program: &std::path::Path) -> Result<PickerOutcome, String> {
-    run_picker_mode(program, false)
+    run_picker_mode(program, PickerMode::Region)
 }
 
-fn run_picker_mode(program: &std::path::Path, screencast: bool) -> Result<PickerOutcome, String> {
+fn run_picker_mode(program: &std::path::Path, mode: PickerMode) -> Result<PickerOutcome, String> {
     use std::process::Command;
 
     let mut command = Command::new(program);
-    if screencast {
-        command.arg("--screencast");
-    }
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PickerOutcome::Unavailable)
+    match mode {
+        PickerMode::Region => {}
+        PickerMode::Output => {
+            command.arg("--screencast");
         }
-        Err(err) => return Err(format!("cannot run {}: {err}", program.display())),
+        PickerMode::Window => {
+            command.arg("--screencast-window");
+        }
+    }
+    // A fork racing with a file being written can transiently fail exec with
+    // ETXTBSY; retry briefly instead of treating the picker as broken.
+    let mut attempts = 0;
+    let output = loop {
+        match command.output() {
+            Ok(output) => break output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PickerOutcome::Unavailable)
+            }
+            Err(err) if err.raw_os_error() == Some(26) && attempts < 3 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(err) => return Err(format!("cannot run {}: {err}", program.display())),
+        }
     };
     if !output.status.success() {
         return Ok(PickerOutcome::Cancelled);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if screencast {
+    if mode != PickerMode::Region {
         #[derive(serde::Deserialize)]
-        struct Output {
-            output: String,
+        struct Source {
+            output: Option<String>,
+            window: Option<u64>,
         }
-        let output: Output = serde_json::from_str(stdout.trim())
+        let source: Source = serde_json::from_str(stdout.trim())
             .map_err(|err| format!("invalid screencast picker output: {err}"))?;
-        return Ok(PickerOutcome::SelectedOutput(output.output));
+        return match (source.output, source.window) {
+            (Some(output), _) => Ok(PickerOutcome::SelectedOutput(output)),
+            (_, Some(window)) => Ok(PickerOutcome::SelectedWindow(window)),
+            _ => Err("picker returned neither output nor window".to_owned()),
+        };
     }
     let rect: SelectionRect = serde_json::from_str(stdout.trim())
         .map_err(|err| format!("invalid picker output: {err}"))?;
@@ -223,7 +252,7 @@ fn run_picker_mode(program: &std::path::Path, screencast: bool) -> Result<Picker
 
 async fn set_screen_cast_selection(
     session_handle: &OwnedObjectPath,
-    output: &str,
+    sources: Vec<(u32, String)>,
 ) -> Result<(), String> {
     let connection = zbus::Connection::session()
         .await
@@ -237,17 +266,26 @@ async fn set_screen_cast_selection(
     .await
     .map_err(|err| format!("niri selection proxy: {err}"))?;
     let _: () = proxy
-        .call(
-            "SetSelection",
-            &(
-                session_handle.clone(),
-                vec![(SOURCE_TYPE_MONITOR, output.to_owned())],
-                0u32,
-            ),
-        )
+        .call("SetSelection", &(session_handle.clone(), sources, 0u32))
         .await
         .map_err(|err| format!("niri SetSelection: {err}"))?;
     Ok(())
+}
+
+/// Asks niri's IPC to pick a window (crosshair) and returns its id.
+pub fn pick_window_via_niri(path: &std::path::Path) -> Result<Option<u64>, String> {
+    use niri_ipc::socket::Socket;
+    use niri_ipc::{Request, Response};
+
+    let mut socket =
+        Socket::connect_to(path).map_err(|err| format!("cannot connect to niri IPC: {err}"))?;
+    let reply = socket
+        .send(Request::PickWindow)
+        .map_err(|err| format!("niri PickWindow: {err}"))?;
+    match reply.map_err(|err| format!("niri returned an error: {err}"))? {
+        Response::PickedWindow(window) => Ok(window.map(|window| window.id)),
+        other => Err(format!("unexpected niri response: {other:?}")),
+    }
 }
 
 async fn area_screenshot(rect: SelectionRect) -> Result<String, Failure> {
@@ -283,7 +321,10 @@ async fn interactive_screenshot(cancelled: Arc<AtomicBool>) -> Result<String, Fa
         match run_picker(&program) {
             Ok(PickerOutcome::Selected(rect)) => return area_screenshot(rect).await,
             Ok(PickerOutcome::Cancelled) => return Err(Failure::Cancelled),
-            Ok(PickerOutcome::Unavailable) | Ok(PickerOutcome::SelectedOutput(_)) | Err(_) => (),
+            Ok(PickerOutcome::Unavailable)
+            | Ok(PickerOutcome::SelectedOutput(_))
+            | Ok(PickerOutcome::SelectedWindow(_))
+            | Err(_) => (),
         }
     }
 
@@ -451,7 +492,7 @@ mod tests {
 
     #[test]
     fn screencast_version_is_exposed() {
-        assert_eq!(ScreenCastBackend.version(), 4);
+        assert_eq!(ScreenCastBackend::default().version(), 4);
     }
 
     #[test]
@@ -525,9 +566,68 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
-            run_picker_mode(&script, true).unwrap(),
+            run_picker_mode(&script, PickerMode::Output).unwrap(),
             PickerOutcome::SelectedOutput("eDP-1".to_owned())
         );
+
+        let window_script = dir.join("window-picker");
+        std::fs::write(&window_script, "#!/bin/sh\nprintf '{\"window\":42}'\n").unwrap();
+        std::fs::set_permissions(&window_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            run_picker_mode(&window_script, PickerMode::Window).unwrap(),
+            PickerOutcome::SelectedWindow(42)
+        );
+    }
+
+    #[test]
+    fn picks_a_window_through_niri_ipc() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let dir =
+            std::env::temp_dir().join(format!("better-portal-pick-window-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("niri.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request: niri_ipc::Request = serde_json::from_str(line.trim()).unwrap();
+            assert!(matches!(request, niri_ipc::Request::PickWindow));
+            let window = serde_json::json!({
+                "id": 42,
+                "title": "picked",
+                "app_id": "app",
+                "pid": 1,
+                "workspace_id": 1,
+                "is_focused": true,
+                "is_floating": false,
+                "is_sticky": false,
+                "is_urgent": false,
+                "is_minimized": false,
+                "layout": {
+                    "pos_in_scrolling_layout": [1, 1],
+                    "tile_size": [100.0, 100.0],
+                    "window_size": [100, 100],
+                    "tile_pos_in_workspace_view": [0.0, 0.0],
+                    "window_offset_in_tile": [0.0, 0.0]
+                },
+                "focus_timestamp": null
+            });
+            let response = serde_json::json!({ "Ok": { "PickedWindow": window } });
+            let mut stream = stream;
+            stream
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .unwrap();
+            stream.write_all(b"\n").unwrap();
+            stream.flush().unwrap();
+        });
+
+        assert_eq!(pick_window_via_niri(&path).unwrap(), Some(42));
+        server.join().unwrap();
     }
 
     #[test]
@@ -548,7 +648,11 @@ mod tests {
 /// session and request objects on its own bus name so the portal frontend can
 /// close them. The PipeWire node ids in Start's results stay valid because the
 /// frontend connects to the same PipeWire daemon.
-pub struct ScreenCastBackend;
+#[derive(Default)]
+pub struct ScreenCastBackend {
+    /// Source types requested per session by SelectSources.
+    types: std::sync::Mutex<HashMap<OwnedObjectPath, u32>>,
+}
 
 async fn portal_proxy(interface: &'static str) -> Result<Proxy<'static>, String> {
     let connection = zbus::Connection::session()
@@ -678,6 +782,13 @@ impl ScreenCastBackend {
         options: HashMap<String, OwnedValue>,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         export_request(server, handle.clone()).await;
+        let types = options
+            .get("types")
+            .and_then(|value| value.downcast_ref::<u32>().ok())
+            .unwrap_or(SOURCE_TYPE_MONITOR);
+        if let Ok(mut types_map) = self.types.lock() {
+            types_map.insert(session_handle.clone(), types);
+        }
         let result = async {
             let proxy = portal_proxy("org.freedesktop.impl.portal.ScreenCast")
                 .await
@@ -709,9 +820,37 @@ impl ScreenCastBackend {
         // Prefer the external picker when available. If the compositor does not
         // implement the selection API, fall back to its own picker.
         if let Some(program) = picker_program() {
-            match run_picker_mode(&program, true) {
+            let requested = self
+                .types
+                .lock()
+                .ok()
+                .and_then(|mut types| types.remove(&session_handle))
+                .unwrap_or(SOURCE_TYPE_MONITOR);
+            let want_window =
+                requested & SOURCE_TYPE_WINDOW != 0 && requested & SOURCE_TYPE_MONITOR == 0;
+            let mode = if want_window {
+                PickerMode::Window
+            } else {
+                PickerMode::Output
+            };
+            match run_picker_mode(&program, mode) {
                 Ok(PickerOutcome::SelectedOutput(output)) => {
-                    if let Err(err) = set_screen_cast_selection(&session_handle, &output).await {
+                    if let Err(err) = set_screen_cast_selection(
+                        &session_handle,
+                        vec![(SOURCE_TYPE_MONITOR, output)],
+                    )
+                    .await
+                    {
+                        eprintln!("better-portal: external ScreenCast selection failed: {err}");
+                    }
+                }
+                Ok(PickerOutcome::SelectedWindow(window)) => {
+                    if let Err(err) = set_screen_cast_selection(
+                        &session_handle,
+                        vec![(SOURCE_TYPE_WINDOW, window.to_string())],
+                    )
+                    .await
+                    {
                         eprintln!("better-portal: external ScreenCast selection failed: {err}");
                     }
                 }

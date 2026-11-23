@@ -157,6 +157,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-io",
+ "niri-ipc",
  "serde",
  "serde_json",
  "smithay-client-toolkit",
@@ -490,6 +491,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "niri-ipc"
+version = "26.4.0-elite"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
