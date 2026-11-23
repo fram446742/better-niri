@@ -2,7 +2,6 @@ use std::cell::{Cell, Ref, RefCell};
 use std::time::Duration;
 
 use niri_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::space::SpaceElement as _;
@@ -29,6 +28,7 @@ use crate::layout::{
 };
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
+use crate::render_helpers::blend::BlendSurfaceRenderElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
 use crate::render_helpers::renderer::NiriRenderer;
@@ -38,7 +38,9 @@ use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx};
+use crate::render_helpers::{
+    background_effect, BakedBuffer, RenderCtx, RenderIntent, RenderTarget,
+};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
@@ -88,6 +90,12 @@ pub struct Mapped {
     /// Whether this has an urgent indicator.
     is_urgent: bool,
 
+    /// Whether this window is minimized.
+    is_minimized: bool,
+
+    /// Whether we're currently sending the suspended state to this window.
+    is_suspended: bool,
+
     /// Whether this window has the keyboard focus.
     is_focused: bool,
 
@@ -99,6 +107,10 @@ pub struct Mapped {
 
     /// Whether this window is a target of a window cast.
     is_window_cast_target: bool,
+
+    /// The agent's cursor, while the agent acts on this window.
+    #[cfg(feature = "agent")]
+    pub agent_cursor: Option<crate::agent::cursor::AgentCursor>,
 
     /// Whether this window should ignore opacity set through window rules.
     ignore_opacity_window_rule: bool,
@@ -290,10 +302,14 @@ impl Mapped {
             needs_frame_callback: false,
             offscreen_data: RefCell::new(None),
             is_urgent: false,
+            is_minimized: false,
+            is_suspended: false,
             is_focused: false,
             is_active_in_column: true,
             is_floating: false,
             is_window_cast_target: false,
+            #[cfg(feature = "agent")]
+            agent_cursor: None,
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
             blur_config: config.blur,
@@ -547,9 +563,14 @@ impl Mapped {
             WindowCastRenderElements::from(elem)
         };
 
-        self.render(ctx, location, scale, 1., XrayPos::default(), &mut |elem| {
-            push(use_border(elem))
-        });
+        self.render(
+            ctx,
+            location,
+            scale,
+            1.,
+            XrayPos::default(),
+            &mut |elem| push(use_border(elem)),
+        );
     }
 
     pub fn get_focus_timestamp(&self) -> Option<Duration> {
@@ -611,6 +632,14 @@ impl Mapped {
     pub fn capture_bbox(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         self.window.bbox_with_popups().to_physical_precise_up(scale)
     }
+
+    pub fn is_minimized(&self) -> bool {
+        self.is_minimized
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.is_suspended
+    }
 }
 
 impl Drop for Mapped {
@@ -664,7 +693,7 @@ impl LayoutElement for Mapped {
         } else {
             let buf_pos = location - self.window.geometry().loc.to_f64();
             let surface = self.toplevel().wl_surface();
-            let mut push = |elem: WaylandSurfaceRenderElement<R>| push(elem.into());
+            let mut push = |elem: BlendSurfaceRenderElement<R>| push(elem.into());
             push_elements_from_surface_tree(
                 ctx.renderer,
                 surface,
@@ -688,6 +717,14 @@ impl LayoutElement for Mapped {
     ) {
         if ctx.target.should_block_out(self.rules.block_out_from) {
             return;
+        }
+
+        // On top of everything, popups included.
+        #[cfg(feature = "agent")]
+        if let Some(cursor) = &self.agent_cursor {
+            cursor.render(ctx.renderer, location, scale, alpha, &mut |elem| {
+                push(elem.into())
+            });
         }
 
         let surface = self.toplevel().wl_surface();
@@ -984,6 +1021,31 @@ impl LayoutElement for Mapped {
 
     fn is_urgent(&self) -> bool {
         self.is_urgent
+    }
+
+    fn is_minimized(&self) -> bool {
+        self.is_minimized
+    }
+
+    fn set_minimized(&mut self, minimized: bool) {
+        let changed = self.is_minimized != minimized;
+        self.is_minimized = minimized;
+        self.need_to_recompute_rules |= changed;
+    }
+
+    fn set_suspended(&mut self, suspended: bool) {
+        if self.is_suspended == suspended {
+            return;
+        }
+        self.is_suspended = suspended;
+
+        self.toplevel().with_pending_state(|state| {
+            if suspended {
+                state.states.set(xdg_toplevel::State::Suspended)
+            } else {
+                state.states.unset(xdg_toplevel::State::Suspended)
+            }
+        });
     }
 
     fn set_activated(&mut self, active: bool) {

@@ -11,11 +11,45 @@ repository.workspace = true
 adw = { version = "0.8.1", package = "libadwaita", features = ["v1_4"] }
 anyhow.workspace = true
 gtk = { version = "0.10.3", package = "gtk4", features = ["v4_12"] }
-niri = { version = "26.4.0", path = ".." }
-niri-config = { version = "26.4.0", path = "../niri-config" }
+niri = { version = "26.4.0-elite", path = ".." }
+niri-config = { version = "26.4.0-elite", path = "../niri-config" }
+niri-ipc = { version = "26.4.0-elite", path = "../niri-ipc" }
+png = "0.18.1"
 smithay.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "grid-move-headless"
+path = "src/bin/grid_move_headless.rs"
+
+[[bin]]
+name = "grid-issues-headless"
+path = "src/bin/grid_issues_headless.rs"
+
+[[bin]]
+name = "floating-raise-headless"
+path = "src/bin/floating_raise_headless.rs"
+
+[[bin]]
+name = "grid-focus-ring-headless"
+path = "src/bin/grid_focus_ring_headless.rs"
+
+[[bin]]
+name = "grid-timing-headless"
+path = "src/bin/grid_timing_headless.rs"
+
+[[bin]]
+name = "grid-tabs-headless"
+path = "src/bin/grid_tabs_headless.rs"
+
+[[bin]]
+name = "grid-layout-headless"
+path = "src/bin/grid_layout_headless.rs"
+
+[[bin]]
+name = "grid-minimized-headless"
+path = "src/bin/grid_minimized_headless.rs"

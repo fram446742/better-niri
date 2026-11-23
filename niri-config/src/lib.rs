@@ -40,6 +40,7 @@ pub mod layout;
 pub mod misc;
 pub mod output;
 pub mod recent_windows;
+pub mod screen_cast_picker;
 pub mod utils;
 pub mod window_rule;
 pub mod workspace;
@@ -57,10 +58,12 @@ pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
+pub use crate::screen_cast_picker::ScreenCastPicker;
 pub use crate::utils::FloatOrInt;
 use crate::utils::{expand_home_path, Flag, MergeWith as _};
 pub use crate::window_rule::{
-    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, WindowRule,
+    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules,
+    TearingContentType, WindowRule,
 };
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
 
@@ -83,8 +86,11 @@ pub struct Config {
     pub blur: Blur,
     pub gestures: Gestures,
     pub overview: Overview,
+    pub grid_overview: GridOverview,
+    pub magnifier: Magnifier,
     pub environment: Environment,
     pub xwayland_satellite: XwaylandSatellite,
+    pub agent: Agent,
     pub window_rules: Vec<WindowRule>,
     pub layer_rules: Vec<LayerRule>,
     pub binds: Binds,
@@ -92,6 +98,7 @@ pub struct Config {
     pub debug: Debug,
     pub workspaces: Vec<Workspace>,
     pub recent_windows: RecentWindows,
+    pub screen_cast_picker: ScreenCastPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +211,11 @@ where
                 "blur" => m_merge!(blur),
                 "gestures" => m_merge!(gestures),
                 "overview" => m_merge!(overview),
+                "grid-overview" => m_merge!(grid_overview),
+                "magnifier" => m_merge!(magnifier),
+                "screen-cast-picker" => m_merge!(screen_cast_picker),
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
+                "agent" => m_merge!(agent),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
 
@@ -644,6 +655,319 @@ mod tests {
         let config = Config::parse_mem("").unwrap();
         assert_eq!(config.input.keyboard.repeat_delay, 600);
         assert_eq!(config.input.keyboard.repeat_rate, 25);
+    }
+
+    #[test]
+    fn grid_overview_padding_parses_uniform_value() {
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                padding 42
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.grid_overview.padding.left, 42.);
+        assert_eq!(config.grid_overview.padding.right, 42.);
+        assert_eq!(config.grid_overview.padding.top, 42.);
+        assert_eq!(config.grid_overview.padding.bottom, 42.);
+    }
+
+    #[test]
+    fn grid_overview_padding_parses_per_edge_values() {
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                padding {
+                    left 1
+                    right 2
+                    top 3
+                    bottom 4
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.grid_overview.padding.left, 1.);
+        assert_eq!(config.grid_overview.padding.right, 2.);
+        assert_eq!(config.grid_overview.padding.top, 3.);
+        assert_eq!(config.grid_overview.padding.bottom, 4.);
+    }
+
+    #[test]
+    fn grid_overview_focus_settings_parse() {
+        let config = Config::parse_mem("").unwrap();
+        assert_eq!(config.grid_overview.focus_ring_width, None);
+        assert_eq!(config.grid_overview.focus_follows_mouse, None);
+
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                focus-ring-width 6
+                focus-follows-mouse
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.grid_overview.focus_ring_width, Some(6.));
+        let ffm = config.grid_overview.focus_follows_mouse.unwrap();
+        assert_eq!(ffm.min_distance(), 8.);
+
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                focus-follows-mouse min-distance=20
+            }
+            "#,
+        )
+        .unwrap();
+        let ffm = config.grid_overview.focus_follows_mouse.unwrap();
+        assert_eq!(ffm.min_distance(), 20.);
+    }
+
+    #[test]
+    fn grid_overview_focus_ring_transition_parses() {
+        let config = Config::parse_mem("").unwrap();
+        assert_eq!(
+            config.grid_overview.focus_ring_transition,
+            GridFocusRingTransition::Grow
+        );
+
+        for (name, expected) in [
+            ("none", GridFocusRingTransition::None),
+            ("grow", GridFocusRingTransition::Grow),
+            ("slide", GridFocusRingTransition::Slide),
+        ] {
+            let config = Config::parse_mem(&format!(
+                "grid-overview {{ focus-ring-transition \"{name}\"; }}"
+            ))
+            .unwrap();
+            assert_eq!(config.grid_overview.focus_ring_transition, expected);
+        }
+
+        let config = Config::parse_mem(
+            r#"
+            animations {
+                focus-ring {
+                    duration-ms 100
+                    curve "linear"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.animations.focus_ring.0.kind,
+            animations::Kind::Easing(animations::EasingParams {
+                duration_ms: 100,
+                curve: animations::Curve::Linear,
+            })
+        );
+    }
+
+    #[test]
+    fn grid_overview_minimized_highlight_parses() {
+        let config = Config::parse_mem(
+            r##"
+            grid-overview {
+                minimized-highlight {
+                    color "#ff0000"
+                    urgent-color "#00ff00"
+                    padding 12
+                    corner-radius 4
+                    dim 0.6
+                }
+            }
+            "##,
+        )
+        .unwrap();
+
+        let highlight = config.grid_overview.minimized_highlight;
+        assert!(!highlight.off);
+        assert_eq!(highlight.dim, 0.6);
+        assert_eq!(highlight.color, Color::from_rgba8_unpremul(255, 0, 0, 255));
+        assert_eq!(
+            highlight.urgent_color,
+            Color::from_rgba8_unpremul(0, 255, 0, 255)
+        );
+        assert_eq!(highlight.padding, 12.);
+        assert_eq!(highlight.corner_radius, Some(4.));
+
+        let config = Config::parse_mem("").unwrap();
+        assert_eq!(config.grid_overview.minimized_highlight.dim, 0.4);
+        assert_eq!(config.grid_overview.minimized_highlight.corner_radius, None);
+    }
+
+    #[test]
+    fn grid_overview_minimized_highlight_off_parses() {
+        let config = Config::parse_mem(
+            r##"
+            grid-overview {
+                minimized-highlight {
+                    off
+                }
+            }
+            "##,
+        )
+        .unwrap();
+
+        assert!(config.grid_overview.minimized_highlight.off);
+    }
+
+    #[test]
+    fn grid_overview_minimized_highlight_on_overrides_earlier_off() {
+        // Like an included file turning it off, then a later one turning it back on.
+        let off = Config::parse_mem("grid-overview { minimized-highlight { off; }; }").unwrap();
+        let on = GridMinimizedHighlightPart {
+            on: true,
+            ..Default::default()
+        };
+
+        let mut highlight = off.grid_overview.minimized_highlight;
+        assert!(highlight.off);
+        highlight.merge_with(&on);
+        assert!(!highlight.off);
+    }
+
+    #[test]
+    fn grid_overview_grid_all_monitors_parses() {
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                grid-all-monitors false
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.grid_overview.grid_all_monitors);
+    }
+
+    #[test]
+    fn magnifier_move_step_parses() {
+        let config = Config::parse_mem("magnifier { move-step 0.1; }").unwrap();
+        assert_eq!(config.magnifier.move_step, 0.1);
+
+        assert!(Config::parse_mem("magnifier { move-step 1.5; }").is_err());
+        assert!(Config::parse_mem("magnifier { move-step -0.1; }").is_err());
+    }
+
+    #[test]
+    fn magnifier_binds_parse() {
+        let config = Config::parse_mem(
+            r#"
+            magnifier {
+                binds {
+                    Mod+H { move-magnifier-left; }
+                    Mod+J allow-inhibiting=false { move-magnifier-down; }
+                    Mod+K repeat=false { move-magnifier-up; }
+                    Escape { toggle-magnifier; }
+                    Mod+Escape repeat=false { toggle-magnifier; }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let binds = &config.magnifier.binds;
+        let actions: Vec<_> = binds
+            .iter()
+            .map(|bind| bind.press_action().unwrap())
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                &Action::MoveMagnifierLeft,
+                &Action::MoveMagnifierDown,
+                &Action::MoveMagnifierUp,
+                &Action::ToggleMagnifier,
+                &Action::ToggleMagnifier,
+            ]
+        );
+        assert!(binds[0].repeat);
+        assert!(!binds[1].allow_inhibiting);
+        assert!(!binds[2].repeat);
+        // Repeating a toggle would turn the magnifier back on, so it doesn't repeat by default.
+        assert!(!binds[3].repeat);
+        assert!(!binds[4].repeat);
+    }
+
+    #[test]
+    fn magnifier_binds_reject_other_actions_and_keys() {
+        let valid = "magnifier { binds { Mod+H { move-magnifier-left; }; }; }";
+        assert!(Config::parse_mem(valid).is_ok());
+
+        for text in [
+            "magnifier { binds { Mod+H { focus-column-left; }; }; }",
+            "magnifier { binds { Mod+WheelScrollUp { move-magnifier-up; }; }; }",
+            "magnifier { binds { Mod+H { move-magnifier-left; }; Mod+H { toggle-magnifier; }; }; }",
+            "magnifier { binds { Mod+H cooldown-ms=100 { move-magnifier-left; }; }; }",
+        ] {
+            assert!(Config::parse_mem(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn screen_cast_picker_animation_parses() {
+        let config = Config::parse_mem(
+            r#"
+            animations {
+                screen-cast-picker-open-close {
+                    duration-ms 175
+                    curve "linear"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.animations.screen_cast_picker_open_close.0,
+            Animation {
+                off: false,
+                kind: animations::Kind::Easing(animations::EasingParams {
+                    duration_ms: 175,
+                    curve: animations::Curve::Linear,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn screen_cast_picker_colors_parse() {
+        let config = Config::parse_mem(
+            r##"
+            screen-cast-picker {
+                background-color "#01020380"
+                accent-color "red"
+                text-color "#102030"
+                accent-text-color "white"
+                corner-radius 8
+            }
+            "##,
+        )
+        .unwrap();
+        let picker = config.screen_cast_picker;
+
+        assert_eq!(
+            picker.background_color,
+            Color::from_rgba8_unpremul(1, 2, 3, 128)
+        );
+        assert_eq!(
+            picker.accent_color,
+            Color::from_rgba8_unpremul(255, 0, 0, 255)
+        );
+        assert_eq!(
+            picker.text_color,
+            Color::from_rgba8_unpremul(16, 32, 48, 255)
+        );
+        assert_eq!(
+            picker.accent_text_color,
+            Color::from_rgba8_unpremul(255, 255, 255, 255)
+        );
+        assert_eq!(picker.corner_radius, 8.);
     }
 
     #[track_caller]
@@ -1224,6 +1548,7 @@ mod tests {
 
                 warp-mouse-to-focus
                 focus-follows-mouse
+                confine-mouse-to-fullscreen
                 workspace-auto-back-and-forth
 
                 mod-key "Mod5"
@@ -1237,6 +1562,9 @@ mod tests {
                 position x=10 y=20
                 mode "1920x1080@144"
                 max-bpc 10
+                hdr mode="on" {
+                    reference-luminance 203
+                }
                 variable-refresh-rate on-demand=true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
@@ -1326,6 +1654,10 @@ mod tests {
 
             screenshot-path "~/Screenshots/screenshot.png"
 
+            agent {
+                hide-seat-from "foo" "bar"
+            }
+
             clipboard {
                 disable-primary
             }
@@ -1350,6 +1682,11 @@ mod tests {
 
                 window-close {
                     curve "cubic-bezier" 0.05 0.7 0.1 1
+                }
+
+                screen-cast-picker-open-close {
+                    duration-ms 175
+                    curve "linear"
                 }
 
                 recent-windows-close {
@@ -1379,6 +1716,7 @@ mod tests {
                 open-fullscreen false
                 open-floating false
                 open-focused true
+                ignore-grid-overview true
                 default-window-height { fixed 500; }
                 default-column-display "tabbed"
                 default-floating-position x=100 y=-200 relative-to="bottom-left"
@@ -1644,6 +1982,7 @@ mod tests {
                         max_scroll_amount: None,
                     },
                 ),
+                confine_mouse_to_fullscreen: true,
                 workspace_auto_back_and_forth: true,
                 mod_key: Some(
                     IsoLevel3Shift,
@@ -1673,6 +2012,16 @@ mod tests {
                             MaxBpc(
                                 _10,
                             ),
+                        ),
+                        hdr: Some(
+                            Hdr {
+                                mode: On,
+                                reference_luminance: Some(
+                                    FloatOrInt(
+                                        203.0,
+                                    ),
+                                ),
+                            },
                         ),
                         mode: Some(
                             Mode {
@@ -1706,10 +2055,18 @@ mod tests {
                         hot_corners: Some(
                             HotCorners {
                                 off: true,
-                                top_left: true,
-                                top_right: true,
-                                bottom_left: true,
-                                bottom_right: true,
+                                top_left: Some(
+                                    Overview,
+                                ),
+                                top_right: Some(
+                                    Overview,
+                                ),
+                                bottom_left: Some(
+                                    Overview,
+                                ),
+                                bottom_right: Some(
+                                    Overview,
+                                ),
                             },
                         ),
                         layout: None,
@@ -1721,6 +2078,7 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        hdr: None,
                         mode: Some(
                             Mode {
                                 custom: true,
@@ -1749,6 +2107,7 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        hdr: None,
                         mode: None,
                         modeline: Some(
                             Modeline {
@@ -1970,6 +2329,7 @@ mod tests {
                 center_focused_column: OnOverflow,
                 always_center_single_column: false,
                 empty_workspace_above_first: false,
+                focused_window_above_floating: false,
                 default_column_display: Tabbed,
                 gaps: 8.0,
                 struts: Struts {
@@ -2006,6 +2366,16 @@ mod tests {
                 hide_when_typing: true,
                 hide_after_inactive_ms: Some(
                     3000,
+                ),
+                shake_to_enlarge: Some(
+                    ShakeToEnlarge {
+                        off: false,
+                        zoom_factor: 5.0,
+                        hold_duration_ms: 1500,
+                        threshold: 2000.0,
+                        grow: false,
+                        grow_speed: 0.01,
+                    },
                 ),
             },
             screenshot_path: ScreenshotPath(
@@ -2138,7 +2508,53 @@ mod tests {
                         ),
                     },
                 ),
+                screen_cast_picker_open_close: ScreenCastPickerOpenCloseAnim(
+                    Animation {
+                        off: false,
+                        kind: Easing(
+                            EasingParams {
+                                duration_ms: 175,
+                                curve: Linear,
+                            },
+                        ),
+                    },
+                ),
                 overview_open_close: OverviewOpenCloseAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
+                grid_overview_open_close: GridOverviewOpenCloseAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
+                focus_ring: FocusRingAnim(
+                    Animation {
+                        off: false,
+                        kind: Easing(
+                            EasingParams {
+                                duration_ms: 300,
+                                curve: EaseOutCubic,
+                            },
+                        ),
+                    },
+                ),
+                magnifier: MagnifierAnim(
                     Animation {
                         off: false,
                         kind: Spring(
@@ -2158,6 +2574,18 @@ mod tests {
                                 damping_ratio: 1.0,
                                 stiffness: 800,
                                 epsilon: 0.001,
+                            },
+                        ),
+                    },
+                ),
+                cursor_enlarge: CursorEnlargeAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 0.82,
+                                stiffness: 400,
+                                epsilon: 0.0001,
                             },
                         ),
                     },
@@ -2183,10 +2611,10 @@ mod tests {
                 },
                 hot_corners: HotCorners {
                     off: false,
-                    top_left: false,
-                    top_right: false,
-                    bottom_left: false,
-                    bottom_right: false,
+                    top_left: None,
+                    top_right: None,
+                    bottom_left: None,
+                    bottom_right: None,
                 },
             },
             overview: Overview {
@@ -2217,6 +2645,47 @@ mod tests {
                     },
                 },
             },
+            grid_overview: GridOverview {
+                gap: 16.0,
+                padding: GridOverviewPadding {
+                    left: 80.0,
+                    right: 80.0,
+                    top: 80.0,
+                    bottom: 80.0,
+                },
+                min_scale: 0.08,
+                focus_ring_width: None,
+                focus_ring_transition: Grow,
+                focus_follows_mouse: None,
+                grid_all_monitors: true,
+                default_mod_action: true,
+                minimized_highlight: GridMinimizedHighlight {
+                    off: false,
+                    color: Color {
+                        r: 0.6,
+                        g: 0.6,
+                        b: 0.6,
+                        a: 0.7019608,
+                    },
+                    urgent_color: Color {
+                        r: 1.0,
+                        g: 0.6,
+                        b: 0.6,
+                        a: 1.0,
+                    },
+                    padding: 6.0,
+                    corner_radius: None,
+                    dim: 0.4,
+                },
+            },
+            magnifier: Magnifier {
+                off: false,
+                zoom_factor: 2.0,
+                track_cursor: true,
+                scale_cursor: true,
+                move_step: 0.05,
+                binds: [],
+            },
             environment: Environment(
                 [
                     EnvironmentVariable {
@@ -2235,6 +2704,13 @@ mod tests {
                 off: false,
                 path: "xwayland-satellite",
             },
+            agent: Agent {
+                off: false,
+                hide_seat_from: [
+                    "foo",
+                    "bar",
+                ],
+            },
             window_rules: [
                 WindowRule {
                     matches: [
@@ -2252,6 +2728,7 @@ mod tests {
                             is_active_in_column: None,
                             is_floating: None,
                             is_window_cast_target: None,
+                            is_agent: None,
                             is_urgent: None,
                             at_startup: None,
                         },
@@ -2271,6 +2748,7 @@ mod tests {
                             is_active_in_column: None,
                             is_floating: None,
                             is_window_cast_target: None,
+                            is_agent: None,
                             is_urgent: None,
                             at_startup: None,
                         },
@@ -2286,6 +2764,7 @@ mod tests {
                             is_active_in_column: None,
                             is_floating: None,
                             is_window_cast_target: None,
+                            is_agent: None,
                             is_urgent: None,
                             at_startup: None,
                         },
@@ -2314,6 +2793,7 @@ mod tests {
                     open_floating: Some(
                         false,
                     ),
+                    open_minimized: None,
                     open_focused: Some(
                         true,
                     ),
@@ -2385,6 +2865,8 @@ mod tests {
                     clip_to_geometry: None,
                     baba_is_float: None,
                     block_out_from: None,
+                    allow_tearing: None,
+                    allow_tearing_content_type: None,
                     variable_refresh_rate: Some(
                         FullscreenOnly,
                     ),
@@ -2409,11 +2891,15 @@ mod tests {
                         ),
                     ),
                     tiled_state: None,
+                    ignore_grid_overview: Some(
+                        true,
+                    ),
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,
                         noise: None,
                         saturation: None,
+                        liquid_glass: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -2423,6 +2909,7 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            liquid_glass: None,
                         },
                     },
                 },
@@ -2469,6 +2956,7 @@ mod tests {
                         blur: None,
                         noise: None,
                         saturation: None,
+                        liquid_glass: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -2478,6 +2966,7 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            liquid_glass: None,
                         },
                     },
                 },
@@ -2884,6 +3373,7 @@ mod tests {
                 skip_cursor_only_updates_during_vrr: false,
                 disable_10bit_output: false,
                 nested_show_host_cursor: false,
+                force_tearing: false,
             },
             workspaces: [
                 Workspace {
@@ -3015,6 +3505,33 @@ mod tests {
                     },
                 ],
             },
+            screen_cast_picker: ScreenCastPicker {
+                background_color: Color {
+                    r: 0.1,
+                    g: 0.1,
+                    b: 0.1,
+                    a: 1.0,
+                },
+                accent_color: Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                text_color: Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                accent_text_color: Color {
+                    r: 0.1,
+                    g: 0.1,
+                    b: 0.1,
+                    a: 1.0,
+                },
+                corner_radius: 16.0,
+            },
         }
         "#);
     }
@@ -3064,6 +3581,7 @@ mod tests {
         // will not have any binds. Clear them out so they don't spam the diff.
         default_config.window_rules.clear();
         default_config.binds.0.clear();
+        default_config.magnifier.binds.clear();
 
         assert_snapshot!(
             diff_lines(
@@ -3094,6 +3612,14 @@ mod tests {
 
         -                0.6666666666666666,
         +                0.66667,
+
+        -        focus_ring_width: None,
+        +        focus_ring_width: Some(
+        +            8.0,
+        +        ),
+
+        -        track_cursor: true,
+        +        track_cursor: false,
         "#,
         );
     }

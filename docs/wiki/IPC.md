@@ -4,6 +4,30 @@ Check `niri msg --help` for available commands.
 The `--json` flag prints the response in JSON, rather than formatted.
 For example, `niri msg --json outputs`.
 
+### Screenshots To Stdout
+
+The screenshot actions can write the captured PNG to stdout with `--stdout`.
+This is intended for piping screenshots into other tools:
+
+```sh
+niri msg action screenshot --stdout | satty -f -
+niri msg action screenshot-screen --stdout --write-to-disk=false | satty -f -
+niri msg action screenshot-window --stdout --write-to-disk=false | satty -f -
+```
+
+Without `--stdout`, screenshot actions keep their usual behavior and don't print image data.
+With `--stdout`, screenshots are still copied to the clipboard, and `screenshot-screen` and `screenshot-window` still respect `--write-to-disk`.
+
+For the interactive `screenshot` action, `niri msg` waits until you confirm or cancel the selection.
+If you cancel the selection, the IPC request returns an error.
+
+When talking to the IPC socket directly, set `stdout` to `true` on the screenshot action.
+Niri returns a `Screenshot` response with base64-encoded PNG data:
+
+```json
+{"Ok":{"Screenshot":{"png_base64":"..."}}}
+```
+
 > [!TIP]
 > If you're getting parsing errors from `niri msg` after upgrading niri, make sure that you've restarted niri itself.
 > You might be trying to run a newer `niri msg` against an older `niri` compositor.
@@ -27,6 +51,25 @@ Though, this is more of a debug function than anything.
 You can get raw events from `niri msg --json event-stream`, or by connecting to the niri socket and requesting an event stream manually.
 
 You can find the full list of events along with documentation [here](https://niri-wm.github.io/niri/niri_ipc/enum.Event.html).
+
+### Tearing and content type
+
+<sup>Since: fork-only</sup>
+
+`Window` objects carry two extra fields that describe screen tearing:
+
+- `content_type` — what the client declared with `wp_content_type_v1`, one of `"photo"`, `"video"`
+  or `"game"`. The protocol also has a `none` value, which is just its "nothing declared" default and
+  not a content category; it is reported as `null` here, together with clients that never bound the
+  protocol at all (every XWayland window, since X11 clients cannot use Wayland protocols).
+- `tearing_allowed` — whether this window's rules and declarations allow tearing. It does not
+  account for whether the window is currently the tearing candidate on its output (exactly one
+  window has to be visible and directly scannable for a torn frame to actually be presented).
+
+```sh
+$ niri msg --json windows | jq '.[] | {app_id, content_type, tearing_allowed}'
+{"app_id":"mpv","content_type":"video","tearing_allowed":true}
+```
 
 ### Programmatic Access
 

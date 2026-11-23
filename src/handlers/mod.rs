@@ -5,6 +5,7 @@ mod layer_shell;
 pub mod virtual_keyboard;
 mod xdg_shell;
 
+
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
@@ -24,6 +25,7 @@ use smithay::output::Output;
 use smithay::reexports::rustix::fs::{fcntl_setfl, OFlags};
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_pointer::WlPointer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, Serial};
@@ -32,6 +34,7 @@ use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportN
 use smithay::wayland::drm_lease::{
     DrmLease, DrmLeaseBuilder, DrmLeaseHandler, DrmLeaseRequest, DrmLeaseState, LeaseRejected,
 };
+use smithay::wayland::drm_syncobj::{DrmSyncobjHandler, DrmSyncobjState};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
@@ -41,8 +44,9 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{
-    with_pointer_constraint, ConstraintRemove, PointerConstraintsHandler,
+    with_pointer_constraint, ConstraintRemove, PointerConstraint, PointerConstraintsHandler,
 };
+use smithay::wayland::pointer_warp::PointerWarpHandler;
 use smithay::wayland::security_context::{
     SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
 };
@@ -77,11 +81,18 @@ use crate::protocols::ext_workspace::{self, ExtWorkspaceHandler, ExtWorkspaceMan
 use crate::protocols::foreign_toplevel::{
     self, ForeignToplevelHandler, ForeignToplevelManagerState,
 };
+use smithay::reexports::wayland_protocols::wp::color_management::v1::server::wp_image_description_info_v1::WpImageDescriptionInfoV1;
+use smithay::wayland::color::management::{
+    send_image_description_info, ColorManagementHandler, ColorManagementState, ImageDescription,
+};
+
 use crate::protocols::gamma_control::{GammaControlHandler, GammaControlManagerState};
 use crate::protocols::mutter_x11_interop::MutterX11InteropHandler;
 use crate::protocols::output_management::{OutputManagementHandler, OutputManagementManagerState};
 use crate::protocols::screencopy::{Screencopy, ScreencopyHandler, ScreencopyManagerState};
-use crate::utils::{output_size, send_scale_transform};
+use crate::utils::{
+    get_surface_size, get_surface_toplevel_coords, output_size, send_scale_transform,
+};
 
 pub const XDG_ACTIVATION_TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -94,7 +105,12 @@ impl SeatHandler for State {
         &mut self.niri.seat_state
     }
 
-    fn cursor_image(&mut self, _seat: &Seat<Self>, mut image: CursorImageStatus) {
+    fn cursor_image(&mut self, seat: &Seat<Self>, mut image: CursorImageStatus) {
+        // Only the user's seat has a visible cursor.
+        if seat != &self.niri.seat {
+            return;
+        }
+
         // FIXME: this hack should be removable once the screenshot UI is tracked with a
         // PointerFocus properly.
         if self.niri.screenshot_ui.is_open() {
@@ -223,6 +239,99 @@ impl PointerConstraintsHandler for State {
     }
 }
 
+impl PointerWarpHandler for State {
+    fn warp_pointer(
+        &mut self,
+        surface: WlSurface,
+        _pointer: WlPointer,
+        pos: Point<f64, Logical>,
+        serial: Serial,
+    ) {
+        let Some(seat_pointer) = &self.niri.seat.get_pointer() else {
+            return;
+        };
+
+        let Some(last_serial) = seat_pointer.last_enter() else {
+            return;
+        };
+
+        if serial != last_serial {
+            return;
+        }
+
+        let surface_size = get_surface_size(&surface).to_f64();
+        if pos.x < 0. || pos.y < 0. || pos.x > surface_size.w || pos.y > surface_size.h {
+            return;
+        }
+
+        // Check the warp against an active pointer constraint. Constraints live on the
+        // pointer's focus surface, which may legitimately differ from the warp target
+        // (the enter serial is valid for any surface of the client).
+        let mut allow = true;
+        if let Some((focus_surface, origin)) = self.niri.pointer_contents.surface.clone() {
+            let pos_within_focus = seat_pointer.current_location() - origin;
+            with_pointer_constraint(&focus_surface, seat_pointer, |constraint| {
+                let Some(constraint) = constraint else { return };
+                if !constraint.is_active() {
+                    return;
+                }
+
+                // Constraint does not apply if the pointer is not within region.
+                if let Some(region) = constraint.region() {
+                    if !region.contains(pos_within_focus.to_i32_round()) {
+                        return;
+                    }
+                }
+
+                match &*constraint {
+                    // Deliberately honor warps while locked. The spec leaves this
+                    // implementation-defined, and the client holding the lock is the one
+                    // requesting the warp.
+                    PointerConstraint::Locked(_) => (),
+                    // A confined pointer must stay within the confine region.
+                    PointerConstraint::Confined(confine) => {
+                        if focus_surface != surface {
+                            allow = false;
+                        } else if let Some(region) = confine.region() {
+                            allow = region.contains(pos.to_i32_round());
+                        }
+                    }
+                }
+            });
+        }
+        if !allow {
+            return;
+        }
+
+        let Some((mapped, output)) = self.niri.layout.find_window_and_output(&surface) else {
+            return;
+        };
+
+        let Some(output) = output else {
+            return;
+        };
+
+        let Some(output_geo) = self.niri.global_space.output_geometry(output) else {
+            return;
+        };
+
+        let Some(monitor) = self.niri.layout.monitor_for_output(output) else {
+            return;
+        };
+
+        let Some(rect) = monitor.window_visual_rectangle(&mapped.window) else {
+            return;
+        };
+
+        let mut coords = pos;
+        coords += rect.loc;
+        coords += get_surface_toplevel_coords(&surface).to_f64();
+        coords += output_geo.loc.to_f64();
+
+        self.move_cursor(coords);
+    }
+}
+
 impl InputMethodHandler for State {
     fn new_popup(&mut self, surface: PopupSurface) {
         let popup = PopupKind::InputMethod(surface);
@@ -325,10 +434,14 @@ impl WaylandDndGrabHandler for State {
         serial: Serial,
         type_: dnd::GrabType,
     ) {
-        self.niri.dnd_icon = icon.map(|surface| DndIcon {
-            surface,
-            offset: Point::new(0, 0),
-        });
+        // Drags from other seats (the agent seat) neither show an icon at the user's cursor nor
+        // affect the user's focus when they end.
+        if seat == self.niri.seat {
+            self.niri.dnd_icon = icon.map(|surface| DndIcon {
+                surface,
+                offset: Point::new(0, 0),
+            });
+        }
 
         match type_ {
             dnd::GrabType::Pointer => {
@@ -356,11 +469,15 @@ impl DndGrabHandler for State {
         &mut self,
         target: Option<DndTarget<'_, Self>>,
         validated: bool,
-        _seat: Seat<Self>,
+        seat: Seat<Self>,
         location: Point<f64, Logical>,
     ) {
         let target: Option<&WlSurface> = target.map(DndTarget::into_inner);
         trace!("dnd dropped, target: {target:?}, validated: {validated}");
+
+        if seat != self.niri.seat {
+            return;
+        }
 
         // End DnD before activating a specific window below so that it takes precedence.
         self.niri.on_maybe_dnd_ended();
@@ -387,8 +504,12 @@ impl DndGrabHandler for State {
         }
     }
 
-    fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
+    fn cancelled(&mut self, seat: Seat<Self>, _location: Point<f64, Logical>) {
         trace!("dnd cancelled");
+
+        if seat != self.niri.seat {
+            return;
+        }
 
         self.niri.on_maybe_dnd_ended();
     }
@@ -527,7 +648,17 @@ impl ForeignToplevelHandler for State {
     fn activate(&mut self, wl_surface: WlSurface) {
         if let Some((mapped, _)) = self.niri.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
-            self.niri.layout.activate_window(&window);
+            // In the grid overview, activating a window picks its cell: the grid closes and the
+            // window is activated, restored first if it was minimized.
+            if self.niri.layout.confirm_grid_selection_for_window(&window) {
+                self.maybe_warp_cursor_to_focus();
+            // Activating a minimized window restores it first. This makes taskbars that only know
+            // how to send activate work with minimized windows.
+            } else if self.niri.layout.is_window_minimized(&window) {
+                self.unminimize_window(&window, true);
+            } else {
+                self.niri.layout.activate_window(&window);
+            }
             self.niri.layer_shell_on_demand_focus = None;
             self.niri.queue_redraw_all();
         }
@@ -579,6 +710,20 @@ impl ForeignToplevelHandler for State {
         if let Some((mapped, _)) = self.niri.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
             self.niri.layout.set_maximized(&window, false);
+        }
+    }
+
+    fn set_minimized(&mut self, wl_surface: WlSurface) {
+        if let Some((mapped, _)) = self.niri.layout.find_window_and_output(&wl_surface) {
+            let window = mapped.window.clone();
+            self.minimize_window(&window);
+        }
+    }
+
+    fn unset_minimized(&mut self, wl_surface: WlSurface) {
+        if let Some((mapped, _)) = self.niri.layout.find_window_and_output(&wl_surface) {
+            let window = mapped.window.clone();
+            self.unminimize_window(&window, true);
         }
     }
 }
@@ -699,6 +844,12 @@ impl DrmLeaseHandler for State {
     }
 }
 
+impl DrmSyncobjHandler for State {
+    fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
+        self.niri.syncobj_state.as_mut()
+    }
+}
+
 impl GammaControlHandler for State {
     fn gamma_control_manager_state(&mut self) -> &mut GammaControlManagerState {
         &mut self.niri.gamma_control_manager_state
@@ -726,6 +877,37 @@ impl GammaControlHandler for State {
                 None
             }
         }
+    }
+}
+
+impl ColorManagementHandler for State {
+    fn color_management_state(&mut self) -> &mut ColorManagementState {
+        &mut self.niri.color_management_state
+    }
+
+    fn image_description_changed(&mut self, _surface: &WlSurface) {
+        // The stored description is picked up by the TTY render loop on the next frame, which
+        // reconciles HDR signalling. A redraw is already scheduled by the surface commit.
+    }
+
+    fn description_for_output(&mut self, output: &Output) -> ImageDescription {
+        self.niri.output_blend_description(output)
+    }
+
+    fn preferred_description_for_surface(&mut self, surface: &WlSurface) -> ImageDescription {
+        self.niri.preferred_surface_description(surface)
+    }
+
+    fn schedule_image_description_info(
+        &mut self,
+        info: WpImageDescriptionInfoV1,
+        desc: ImageDescription,
+    ) {
+        // Deferred to an idle so the destructor `done` event is sent after the creating request
+        // dispatch returns (see the trait method docs).
+        self.niri.event_loop.insert_idle(move |_state| {
+            send_image_description_info(&info, &desc);
+        });
     }
 }
 
@@ -788,9 +970,18 @@ impl XdgActivationHandler for State {
         token_data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
+        // Agent apps never take the user's focus.
+        #[cfg(feature = "agent")]
+        if crate::agent::is_agent_surface(&surface) {
+            return;
+        }
+
         if token_data.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT {
             if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&surface) {
                 let window = mapped.window.clone();
+                // Upstream's on-xdg-activate rule, with the fork's activation path: a
+                // minimized window is restored first (without activating, the activation below
+                // has its own semantics), and activation goes through the grid-aware helper.
                 match mapped.rules().on_xdg_activate {
                     Some(niri_config::OnXdgActivate::Ignore) => {}
                     Some(niri_config::OnXdgActivate::SetUrgent) => {
@@ -798,7 +989,10 @@ impl XdgActivationHandler for State {
                         self.niri.queue_redraw_all();
                     }
                     Some(niri_config::OnXdgActivate::Focus) => {
-                        self.niri.layout.activate_window(&window);
+                        if self.niri.layout.is_window_minimized(&window) {
+                            self.niri.layout.unminimize_window(&window, false);
+                        }
+                        self.niri.layout.activate_window_from_activation(&window);
                         self.niri.layer_shell_on_demand_focus = None;
                         self.niri.queue_redraw_all();
                     }
@@ -807,7 +1001,10 @@ impl XdgActivationHandler for State {
                             mapped.set_urgent(true);
                             self.niri.queue_redraw_all();
                         } else {
-                            self.niri.layout.activate_window(&window);
+                            if self.niri.layout.is_window_minimized(&window) {
+                                self.niri.layout.unminimize_window(&window, false);
+                            }
+                            self.niri.layout.activate_window_from_activation(&window);
                             self.niri.layer_shell_on_demand_focus = None;
                             self.niri.queue_redraw_all();
                         }

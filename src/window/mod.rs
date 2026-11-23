@@ -70,6 +70,9 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open floating.
     pub open_floating: Option<bool>,
 
+    /// Whether the window should open minimized.
+    pub open_minimized: Option<bool>,
+
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
 
@@ -114,6 +117,13 @@ pub struct ResolvedWindowRules {
     /// Whether to block out this window from certain render targets.
     pub block_out_from: Option<BlockOutFrom>,
 
+    /// Whether to enable screen tearing on this window's primary output.
+    pub allow_tearing: Option<bool>,
+
+    /// Content types that may tear on this window's primary output, independently of
+    /// `allow_tearing`.
+    pub allow_tearing_content_type: Option<Vec<niri_config::TearingContentType>>,
+
     /// Whether to enable VRR on this window's primary output if it is on-demand.
     pub variable_refresh_rate: Option<VrrRule>,
 
@@ -125,6 +135,9 @@ pub struct ResolvedWindowRules {
 
     /// Override whether to set the Tiled xdg-toplevel state on the window.
     pub tiled_state: Option<bool>,
+
+    /// Whether to keep floating windows out of the grid overview.
+    pub ignore_grid_overview: Option<bool>,
 
     /// Background effect configuration.
     pub background_effect: BackgroundEffect,
@@ -182,6 +195,13 @@ impl<'a> WindowRef<'a> {
             WindowRef::Unmapped(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_window_cast_target(),
         }
+    }
+
+    pub fn is_agent(self) -> bool {
+        #[cfg(feature = "agent")]
+        return crate::agent::is_agent_surface(self.toplevel().wl_surface());
+        #[cfg(not(feature = "agent"))]
+        false
     }
 }
 
@@ -259,6 +279,10 @@ impl ResolvedWindowRules {
                     resolved.open_floating = Some(x);
                 }
 
+                if let Some(x) = rule.open_minimized {
+                    resolved.open_minimized = Some(x);
+                }
+
                 if let Some(x) = rule.open_focused {
                     resolved.open_focused = Some(x);
                 }
@@ -303,6 +327,12 @@ impl ResolvedWindowRules {
                 if let Some(x) = rule.block_out_from {
                     resolved.block_out_from = Some(x);
                 }
+                if let Some(x) = rule.allow_tearing {
+                    resolved.allow_tearing = Some(x);
+                }
+                if let Some(x) = &rule.allow_tearing_content_type {
+                    resolved.allow_tearing_content_type = Some(x.clone());
+                }
                 if let Some(x) = rule.variable_refresh_rate {
                     resolved.variable_refresh_rate = Some(x);
                 }
@@ -314,6 +344,9 @@ impl ResolvedWindowRules {
                 }
                 if let Some(x) = rule.tiled_state {
                     resolved.tiled_state = Some(x);
+                }
+                if let Some(x) = rule.ignore_grid_overview {
+                    resolved.ignore_grid_overview = Some(x);
                 }
 
                 resolved
@@ -454,6 +487,12 @@ fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m:
 
     if let Some(is_window_cast_target) = m.is_window_cast_target {
         if window.is_window_cast_target() != is_window_cast_target {
+            return false;
+        }
+    }
+
+    if let Some(is_agent) = m.is_agent {
+        if window.is_agent() != is_agent {
             return false;
         }
     }

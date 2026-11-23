@@ -23,12 +23,15 @@ use solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
 use self::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use self::texture::{TextureBuffer, TextureRenderElement};
+use crate::render_helpers::blend::{set_sdr_capture_blend, DEFAULT_REFERENCE_LUMINANCE};
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::xray::Xray;
 
 pub mod background_effect;
+pub mod blend;
 pub mod blur;
 pub mod border;
+pub mod liquid_glass;
 pub mod clipped_surface;
 pub mod damage;
 pub mod debug;
@@ -37,6 +40,7 @@ pub mod framebuffer_effect;
 pub mod gradient_fade_texture;
 pub mod memory;
 pub mod offscreen;
+pub mod overview_rescale;
 pub mod primary_gpu_texture;
 pub mod render_elements;
 pub mod renderer;
@@ -48,6 +52,7 @@ pub mod shadow;
 pub mod snapshot;
 pub mod solid_color;
 pub mod surface;
+pub mod svg;
 pub mod texture;
 pub mod xray;
 
@@ -57,6 +62,7 @@ pub mod xray;
 pub struct RenderCtx<'a, R> {
     pub renderer: &'a mut R,
     pub target: RenderTarget,
+    pub intent: RenderIntent,
     pub xray: Option<&'a Xray>,
 }
 
@@ -67,6 +73,7 @@ impl<'a, R> RenderCtx<'a, R> {
         RenderCtx {
             renderer: self.renderer,
             target: self.target,
+            intent: self.intent,
             xray: self.xray,
         }
     }
@@ -77,6 +84,7 @@ impl<'a, R: AsGlesRenderer> RenderCtx<'a, R> {
         RenderCtx {
             renderer: self.renderer.as_gles_renderer(),
             target: self.target,
+            intent: self.intent,
             xray: self.xray,
         }
     }
@@ -91,6 +99,12 @@ pub enum RenderTarget {
     Screencast,
     /// Rendering for any other screen capture.
     ScreenCapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderIntent {
+    Normal,
+    PickerPreview,
 }
 
 /// Buffer with location, src and dst.
@@ -317,8 +331,10 @@ pub fn render_to_dmabuf(
     mut dmabuf: Dmabuf,
     elements: &[impl RenderElement<GlesRenderer>],
     states: RenderElementStates,
+    reference_luminance: f64,
 ) -> anyhow::Result<SyncPoint> {
     let _span = tracy_client::span!();
+    set_sdr_capture_blend(renderer, reference_luminance);
     let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
     ensure!(
         dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32,
@@ -345,8 +361,11 @@ pub fn render_to_shm(
     buffer: &WlBuffer,
     elements: &[impl RenderElement<GlesRenderer>],
     states: RenderElementStates,
+    reference_luminance: f64,
 ) -> anyhow::Result<()> {
     let _span = tracy_client::span!();
+    set_sdr_capture_blend(renderer, reference_luminance);
+
     // The pointer and length are the client's entire pool, which may hold other
     // buffers besides this one... buffer_data is the one we want.
     shm::with_buffer_contents_mut(buffer, |pool, pool_len, buffer_data| {
@@ -492,12 +511,12 @@ impl CaptureBuffer {
         match self {
             CaptureBuffer::Dma(dmabuf) => {
                 let sync =
-                    render_to_dmabuf(renderer, damage_tracker, dmabuf.clone(), elements, states)
+                    render_to_dmabuf(renderer, damage_tracker, dmabuf.clone(), elements, states, DEFAULT_REFERENCE_LUMINANCE)
                         .context("error rendering to screencopy dmabuf")?;
                 Ok(sync)
             }
             CaptureBuffer::Shm(wl_buffer) => {
-                render_to_shm(renderer, damage_tracker, wl_buffer, elements, states)
+                render_to_shm(renderer, damage_tracker, wl_buffer, elements, states, DEFAULT_REFERENCE_LUMINANCE)
                     .context("error rendering to screencopy shm buffer")?;
                 Ok(SyncPoint::signaled())
             }

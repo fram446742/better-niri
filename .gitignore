@@ -1,4 +1,12 @@
 /target
 /result
+/packaging/arch/pkg
+/packaging/arch/src
+/packaging/arch/*.pkg.tar.*
+/packaging/aur/pkg
+/packaging/aur/src
+/packaging/aur/niri-elite
+/packaging/aur/*.pkg.tar.*
 
 .idea
+*.pending-snap

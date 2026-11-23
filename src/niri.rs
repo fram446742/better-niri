@@ -15,7 +15,8 @@ use anyhow::{bail, ensure, Context};
 use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::input::XkbFile;
-use niri_config::output::MaxBpc;
+use niri_config::gestures::HotCornerAction;
+use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
     Bind, Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
@@ -24,8 +25,9 @@ use niri_config::{
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{InputTime, Keycode};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
+use smithay::backend::renderer::element::memory::{
+    MemoryRenderBuffer, MemoryRenderBufferRenderElement,
+};
 use smithay::backend::renderer::element::utils::{
     select_dmabuf_feedback, CropRenderElement, Relocate, RelocateRenderElement,
     RescaleRenderElement,
@@ -35,6 +37,7 @@ use smithay::backend::renderer::element::{
     RenderElementStates,
 };
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::Color32F;
 use smithay::desktop::utils::{
     bbox_from_surface_tree, output_update, send_dmabuf_feedback_surface_tree,
@@ -61,6 +64,7 @@ use smithay::reexports::calloop::{
     Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
 };
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1;
+use smithay::reexports::wayland_protocols::wp::tearing_control::v1::server::wp_tearing_control_v1::PresentationHint;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
@@ -76,11 +80,14 @@ use smithay::utils::{
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::compositor::{
-    with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
+    get_parent, with_states, with_surface_tree_downward, Barrier, CompositorClientState,
+    CompositorHandler,
     CompositorState, HookId, SurfaceData, TraversalAction,
 };
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::DmabufState;
+use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
+use smithay::wayland::fifo::{FifoBarrierCachedState, FifoManagerState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
 use smithay::wayland::idle_notify::IdleNotifierState;
@@ -95,6 +102,7 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsState};
 use smithay::wayland::pointer_gestures::PointerGesturesState;
+use smithay::wayland::pointer_warp::PointerWarpManager;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::security_context::SecurityContextState;
@@ -112,6 +120,9 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::tablet_manager::TabletManagerState;
+use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
+use smithay::wayland::content_type::{ContentTypeState, ContentTypeSurfaceCachedState};
+use smithay::wayland::tearing_control::{TearingControlState, TearingControlSurfaceCachedState};
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
@@ -122,9 +133,9 @@ use wayland_server::protocol::wl_output::WlOutput;
 
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
-use crate::animation::Clock;
+use crate::animation::{Animation, Clock};
 use crate::backend::tty::SurfaceDmabufFeedback;
-use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
+use crate::backend::{Backend, Headless, OutputHdrCaps, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_locale1::Locale1ToNiri;
@@ -135,7 +146,7 @@ use crate::dbus::gnome_shell::{GlobalShortcutsPortalBinds, ShellToNiri};
 #[cfg(feature = "dbus")]
 use crate::dbus::gnome_shell_introspect::{self, IntrospectToNiri, NiriToIntrospect};
 #[cfg(feature = "dbus")]
-use crate::dbus::gnome_shell_screenshot::{NiriToScreenshot, ScreenshotToNiri};
+use crate::dbus::gnome_shell_screenshot::ScreenshotToNiri;
 use crate::frame_clock::FrameClock;
 use crate::handlers::image_copy_capture::{
     self as image_copy_capture_impl, CursorCaptureGeometry, ImageCopyCursorSession,
@@ -162,21 +173,31 @@ use crate::layout::{
 use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
+use smithay::wayland::color::management::{
+    ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
+    Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
+    TransferFunction as CmTransferFunction,
+};
 use crate::protocols::gamma_control::GammaControlManagerState;
+use crate::protocols::kde_blur::KdeBlurState;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyManagerState};
+use crate::render_helpers::blend::{
+    set_sdr_capture_blend, BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE,
+};
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
-use crate::render_helpers::texture::TextureBuffer;
+use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    encompassing_geo, render_to_encompassing_texture, render_to_shm, render_to_texture,
-    render_to_vec, shaders, CaptureBuffer, RenderCtx, RenderTarget,
+    encompassing_geo, render_and_download, render_to_dmabuf, render_to_encompassing_texture,
+    render_to_shm, render_to_texture, render_to_vec, shaders, CaptureBuffer, RenderCtx,
+    RenderIntent, RenderTarget,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
@@ -184,8 +205,15 @@ use crate::ui::config_error_notification::ConfigErrorNotification;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
+use crate::ui::pick_color_ui::{clamp_to_output, PickColorUi, Region as PickColorRegion};
 use crate::ui::screen_transition::{self, ScreenTransition};
-use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
+#[cfg(feature = "xdp-gnome-screencast")]
+use crate::ui::screencast_picker::{PickerCandidate, ScreenCastPickerUi};
+use crate::ui::screencast_picker::{ScreenCastPickerRenderElement, PREVIEW_FRAME_INTERVAL};
+use crate::ui::screenshot_ui::{
+    OutputScreenshot, ScreenshotPathReplySender, ScreenshotPortalError, ScreenshotReplySender,
+    ScreenshotSelectionReplySender, ScreenshotUi, ScreenshotUiRenderElement,
+};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
@@ -306,6 +334,25 @@ pub struct Niri {
     pub tablets: HashMap<input::Device, TabletData>,
     pub touch: HashSet<input::Device>,
 
+    // Shake-to-enlarge tracking
+    pub pointer_shake_energy: f64,
+    pub pointer_last_position: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
+    pub pointer_last_time: Option<std::time::Instant>,
+    pub pointer_enlarged_until: Option<std::time::Instant>,
+    pub pointer_scale_animation: Option<crate::animation::Animation>,
+    pub pointer_grow_zoom: f64,
+
+    // Magnifier
+    pub magnifier_active: bool,
+    pub magnifier_zoom: f64,
+    pub magnifier_animation: Option<crate::animation::Animation>,
+    pub magnifier_capture: Cell<bool>,
+    /// Set while capturing the screen for the color picker magnifier, to leave it out.
+    pub pick_color_capture: Cell<bool>,
+    pub magnifier_center: RefCell<Option<(WeakOutput, Point<i32, Physical>)>>,
+    /// Movement of the shown magnifier center towards `magnifier_center`.
+    pub magnifier_center_anim: Option<MagnifierCenterAnim>,
+
     /// Output capture sessions. Kept out of the protocol state because each one needs a damage
     /// tracker and is handled in the redraw loop.
     pub image_copy_sessions: Vec<ImageCopySession>,
@@ -329,10 +376,12 @@ pub struct Niri {
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
+    pub kde_blur_state: KdeBlurState,
     pub xdg_foreign_state: XdgForeignState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
     pub dmabuf_state: DmabufState,
+    pub syncobj_state: Option<DrmSyncobjState>,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub seat_state: SeatState<State>,
     pub tablet_state: TabletManagerState,
@@ -344,6 +393,7 @@ pub struct Niri {
     pub pointer_gestures_state: PointerGesturesState,
     pub relative_pointer_state: RelativePointerManagerState,
     pub pointer_constraints_state: PointerConstraintsState,
+    pub pointer_warp_manager: PointerWarpManager,
     pub idle_notifier_state: IdleNotifierState<State>,
     pub idle_inhibit_manager_state: IdleInhibitManagerState,
     pub data_device_state: DataDeviceState,
@@ -352,11 +402,19 @@ pub struct Niri {
     pub ext_data_control_state: ExtDataControlState,
     pub popups: PopupManager,
     pub popup_grab: Option<PopupGrabState>,
+    /// The agent seat, unless turned off in the config. Only read at startup, since clients like
+    /// GTK 3 ignore seats that appear later.
+    #[cfg(feature = "agent")]
+    pub agent: Option<crate::agent::AgentState>,
     pub presentation_state: PresentationState,
+    pub tearing_control_state: TearingControlState,
+    pub content_type_state: ContentTypeState,
     pub security_context_state: SecurityContextState,
     pub gamma_control_manager_state: GammaControlManagerState,
+    pub color_management_state: ColorManagementState,
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
+    pub fifo_manager_state: FifoManagerState,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
     // particular, shaders will need to learn about the single pixel buffer. Also, it must be
@@ -382,6 +440,7 @@ pub struct Niri {
     pub bind_repeat_timer: Option<RegistrationToken>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
+    pub grid_mouse_focus: GridMouseFocus,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
     pub keyboard_shortcuts_inhibiting_surfaces: HashMap<WlSurface, KeyboardShortcutsInhibitor>,
@@ -457,6 +516,7 @@ pub struct Niri {
     pub locked_hint: Option<bool>,
 
     pub screenshot_ui: ScreenshotUi,
+    pub pick_color_ui: PickColorUi,
     pub config_error_notification: ConfigErrorNotification,
     pub hotkey_overlay: HotkeyOverlay,
     pub exit_confirm_dialog: ExitConfirmDialog,
@@ -465,6 +525,9 @@ pub struct Niri {
 
     pub window_mru_ui: WindowMruUi,
     pub pending_mru_commit: Option<PendingMruCommit>,
+
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub screen_cast_picker: ScreenCastPickerUi,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
     pub pick_color: Option<async_channel::Sender<Option<niri_ipc::PickedColor>>>,
@@ -565,6 +628,9 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
+    /// The blend-space image description last notified to color-management clients for this
+    /// output, to avoid spurious `image_description_changed` events.
+    pub blend_description: Option<ImageDescription>,
 }
 
 #[derive(Debug, Default)]
@@ -594,13 +660,37 @@ pub struct PopupGrabState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyboardFocus {
     // Layout is focused by default if there's nothing else to focus.
-    Layout { surface: Option<WlSurface> },
-    LayerShell { surface: WlSurface },
-    LockScreen { surface: Option<WlSurface> },
+    Layout {
+        surface: Option<WlSurface>,
+    },
+    LayerShell {
+        surface: WlSurface,
+    },
+    LockScreen {
+        surface: Option<WlSurface>,
+    },
     ScreenshotUi,
+    #[cfg(feature = "xdp-gnome-screencast")]
+    ScreenCastPicker,
     ExitConfirmDialog,
     Overview,
     Mru,
+}
+
+/// State of `grid-overview { focus-follows-mouse }`.
+///
+/// The pointer only takes the grid focus over once it moved far enough from where it was when the
+/// focus was last set some other way: when the grid opened, by keyboard navigation, or by a layout
+/// change. Then the focus follows every motion until it is set some other way again.
+#[derive(Debug, Default)]
+pub struct GridMouseFocus {
+    /// The grid session this state belongs to, from [`Layout::grid_overview_open_count`].
+    open_count: u64,
+    /// The grid focus as of the last pointer motion.
+    focus: Option<Window>,
+    /// Where the pointer was when the focus was last set some other way, while the pointer
+    /// hasn't moved far enough from there yet.
+    anchor: Option<Point<f64, Logical>>,
 }
 
 #[derive(Default, Clone, PartialEq)]
@@ -617,7 +707,7 @@ pub struct PointContents {
     // If surface belongs to a layer surface, this is that layer surface.
     pub layer: Option<LayerSurface>,
     // Point is over a hot corner.
-    pub hot_corner: bool,
+    pub hot_corner: Option<HotCornerAction>,
     // Point is over the overview.
     pub overview: bool,
 }
@@ -713,6 +803,38 @@ pub struct PendingMruCommit {
     stamp: Duration,
 }
 
+/// Animated movement of the locked magnifier center.
+#[derive(Debug)]
+pub struct MagnifierCenterAnim {
+    output: WeakOutput,
+    x: Animation,
+    y: Animation,
+}
+
+impl MagnifierCenterAnim {
+    /// Whether this animation moves the center of `output` towards `target`.
+    ///
+    /// Anything that sets the center some other way leaves a stale animation behind, which this
+    /// tells apart.
+    fn heads_to(&self, output: &Output, target: Point<i32, Physical>) -> bool {
+        self.output.upgrade().as_ref() == Some(output)
+            && self.x.to() == f64::from(target.x)
+            && self.y.to() == f64::from(target.y)
+    }
+
+    fn value(&self) -> Point<f64, Physical> {
+        Point::from((self.x.value(), self.y.value()))
+    }
+
+    fn current_velocity(&self) -> Point<f64, Physical> {
+        Point::from((self.x.current_velocity(), self.y.current_velocity()))
+    }
+
+    fn is_done(&self) -> bool {
+        self.x.is_done() && self.y.is_done()
+    }
+}
+
 impl RedrawState {
     fn queue_redraw(self) -> Self {
         match self {
@@ -749,6 +871,8 @@ impl KeyboardFocus {
             KeyboardFocus::LayerShell { surface } => Some(surface),
             KeyboardFocus::LockScreen { surface } => surface.as_ref(),
             KeyboardFocus::ScreenshotUi => None,
+            #[cfg(feature = "xdp-gnome-screencast")]
+            KeyboardFocus::ScreenCastPicker => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
             KeyboardFocus::Mru => None,
@@ -761,6 +885,8 @@ impl KeyboardFocus {
             KeyboardFocus::LayerShell { surface } => Some(surface),
             KeyboardFocus::LockScreen { surface } => surface,
             KeyboardFocus::ScreenshotUi => None,
+            #[cfg(feature = "xdp-gnome-screencast")]
+            KeyboardFocus::ScreenCastPicker => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
             KeyboardFocus::Mru => None,
@@ -843,9 +969,20 @@ impl State {
         // in order to clear completed animations and render elements. Even if we're not rendering,
         // it's good to advance every now and then so the workspace clean-up and animations don't
         // build up (the 1 second frame callback timer will call this line).
-        self.niri.advance_animations();
+        if self.niri.advance_animations() {
+            self.update_keyboard_focus();
+        }
 
         self.niri.redraw_queued_outputs(&mut self.backend);
+
+        // Follow changing screen contents in the color picker magnifier: recapture right after
+        // a frame was rendered. This only redraws when the captured pixels change, so it settles
+        // once the screen stops changing.
+        if self.niri.pick_color_ui.take_rendered() {
+            let location = self.niri.seat.get_pointer().unwrap().current_location();
+            self.update_pick_color_magnifier(location);
+            self.niri.redraw_queued_outputs(&mut self.backend);
+        }
 
         {
             let _span = tracy_client::span!("flush_clients");
@@ -896,6 +1033,7 @@ impl State {
         self.niri.refresh_pointer_outputs();
         self.niri.global_space.refresh();
         self.niri.refresh_idle_inhibit();
+        self.niri.refresh_color_management();
         self.refresh_pointer_contents();
         foreign_toplevel::refresh(self);
         ext_workspace::refresh(self);
@@ -1183,7 +1321,11 @@ impl State {
     pub fn focus_window(&mut self, window: &Window) {
         let active_output = self.niri.layout.active_output().cloned();
 
-        self.niri.layout.activate_window(window);
+        // A window shown in the grid overview is focused like picking its cell there: the grid
+        // closes and the window is activated.
+        if !self.niri.layout.confirm_grid_selection_for_window(window) {
+            self.niri.layout.activate_window(window);
+        }
 
         let new_active = self.niri.layout.active_output().cloned();
         if new_active != active_output {
@@ -1200,6 +1342,27 @@ impl State {
 
     pub fn confirm_mru(&mut self) {
         if let Some(window) = self.niri.close_mru(MruCloseRequest::Confirm) {
+            if self.niri.layout.is_grid_overview_open() {
+                let active_output = self.niri.layout.active_output().cloned();
+                if self.niri.layout.confirm_grid_selection_for_window(&window) {
+                    let new_active = self.niri.layout.active_output().cloned();
+                    if new_active != active_output {
+                        if let Some(output) = new_active {
+                            if !self.maybe_warp_cursor_to_focus_centered() {
+                                self.move_cursor_to_output(&output);
+                            }
+                        }
+                    } else {
+                        self.maybe_warp_cursor_to_focus();
+                    }
+
+                    self.niri.queue_redraw_all();
+                    return;
+                }
+
+                self.niri.layout.dismiss_grid_overview();
+            }
+
             // focus_window() will warp the cursor to the window only when the keyboard focus is on
             // the layout. However, right now the keyboard focus is still on the MRU (that we had
             // just closed) since it's only updated at the end of the event loop cycle. Force-update
@@ -1363,6 +1526,13 @@ impl State {
             }
         } else if self.niri.screenshot_ui.is_open() {
             KeyboardFocus::ScreenshotUi
+        } else if cfg!(feature = "xdp-gnome-screencast") && self.niri.screen_cast_picker_is_open() {
+            #[cfg(feature = "xdp-gnome-screencast")]
+            {
+                KeyboardFocus::ScreenCastPicker
+            }
+            #[cfg(not(feature = "xdp-gnome-screencast"))]
+            unreachable!()
         } else if self.niri.window_mru_ui.is_open() {
             KeyboardFocus::Mru
         } else if let Some(output) = self.niri.layout.active_output() {
@@ -1932,6 +2102,22 @@ impl State {
             xwls_changed = true;
         }
 
+        let old_magnifier_off = old_config.magnifier.off;
+        let old_magnifier_zoom = old_config.magnifier.zoom_factor;
+        let old_shake_off = old_config
+            .cursor
+            .shake_to_enlarge
+            .as_ref()
+            .is_none_or(|s| s.off);
+
+        let new_magnifier_off = config.magnifier.off;
+        let new_magnifier_zoom = config.magnifier.zoom_factor;
+        let new_shake_off = config
+            .cursor
+            .shake_to_enlarge
+            .as_ref()
+            .is_none_or(|s| s.off);
+
         *old_config = config;
 
         if let Some(outputs) = preserved_output_config {
@@ -1940,6 +2126,15 @@ impl State {
 
         // Release the borrow.
         drop(old_config);
+
+        self.niri.reconcile_magnifier_config(
+            old_magnifier_off,
+            old_magnifier_zoom,
+            new_magnifier_off,
+            new_magnifier_zoom,
+        );
+        self.niri
+            .reconcile_shake_config(old_shake_off, new_shake_off);
 
         // Now with a &mut self we can reload the xkb config.
         if reload_xkb {
@@ -2266,7 +2461,128 @@ impl State {
     }
 
     pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>) {
-        if self.niri.is_locked() || self.niri.screenshot_ui.is_open() {
+        self.open_screenshot_ui_with_reply(show_pointer, path, None);
+    }
+
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub fn open_screen_cast_picker(
+        &mut self,
+        request: crate::dbus::niri_portal_screen_cast::PickSourcesRequest,
+    ) {
+        use crate::utils::with_toplevel_role;
+
+        if self.niri.is_locked()
+            || self.niri.screenshot_ui.is_open()
+            || self.niri.screen_cast_picker.is_visible()
+            || self.niri.window_mru_ui.is_open()
+            || self.niri.exit_confirm_dialog.is_open()
+        {
+            request.fail("cannot open screen cast picker right now");
+            return;
+        }
+
+        let output = self
+            .niri
+            .output_under_cursor()
+            .or_else(|| self.niri.layout.active_output().cloned());
+        let Some(output) = output else {
+            request.fail("no output is available for the screen cast picker");
+            return;
+        };
+
+        let displays = self
+            .niri
+            .global_space
+            .outputs()
+            .map(|output| {
+                let name = output.name();
+                let subtitle = output.current_mode().map(|mode| {
+                    let size = output.current_transform().transform_size(mode.size);
+                    format!("{} × {}", size.w, size.h)
+                });
+                PickerCandidate::monitor(name.clone(), name, subtitle)
+            })
+            .collect();
+        let windows = self
+            .niri
+            .layout
+            .windows()
+            .map(|(_, mapped)| {
+                let (title, app_id) = with_toplevel_role(mapped.toplevel(), |role| {
+                    (role.title.clone(), role.app_id.clone())
+                });
+                PickerCandidate::window(mapped.id().get(), title, app_id)
+            })
+            .collect();
+
+        if self
+            .niri
+            .screen_cast_picker
+            .open(request, output, displays, windows)
+        {
+            self.niri.seat.get_pointer().unwrap().unset_grab(
+                self,
+                SERIAL_COUNTER.next_serial(),
+                InputTime::now(),
+            );
+            if let Some(touch) = self.niri.seat.get_touch() {
+                touch.unset_grab(self);
+            }
+            self.niri.queue_redraw_all();
+            self.update_keyboard_focus();
+        }
+    }
+
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub fn cancel_screen_cast_picker(&mut self) {
+        if self.niri.screen_cast_picker.cancel() {
+            self.niri.queue_redraw_all();
+            self.update_keyboard_focus();
+        }
+    }
+
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub fn confirm_screen_cast_picker(&mut self) {
+        if self.niri.screen_cast_picker.confirm() {
+            self.niri.queue_redraw_all();
+            self.update_keyboard_focus();
+        }
+    }
+
+    pub fn open_screenshot_ui_with_reply(
+        &mut self,
+        show_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+    ) {
+        self.open_screenshot_ui_with_replies(show_pointer, path, ipc_reply, None, None);
+    }
+
+    fn open_screenshot_ui_with_replies(
+        &mut self,
+        show_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
+        selection_reply: Option<ScreenshotSelectionReplySender>,
+    ) {
+        let send_error = |message: &str| {
+            if let Some(reply) = &ipc_reply {
+                let _ = reply.try_send(Err(String::from(message)));
+            }
+            if let Some(reply) = &path_reply {
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(message))));
+            }
+            if let Some(reply) = &selection_reply {
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(message))));
+            }
+        };
+
+        if self.niri.is_locked()
+            || self.niri.screenshot_ui.is_open()
+            || self.niri.screen_cast_picker_is_visible()
+        {
+            send_error("cannot open screenshot UI right now");
             return;
         }
 
@@ -2275,6 +2591,7 @@ impl State {
             .output_under_cursor()
             .or_else(|| self.niri.layout.active_output().cloned());
         let Some(default_output) = default_output else {
+            send_error("no output available for screenshot");
             return;
         };
 
@@ -2284,17 +2601,47 @@ impl State {
             .backend
             .with_primary_renderer(|renderer| self.niri.capture_screenshots(renderer).collect())
         else {
+            send_error("primary renderer is not available");
             return;
         };
 
         // Now that we captured the screenshots, clear grabs.
         self.cancel_pointing_grabs();
 
-        self.backend.with_primary_renderer(|renderer| {
-            self.niri
-                .screenshot_ui
-                .open(renderer, screenshots, default_output, show_pointer, path)
-        });
+        let ipc_reply_on_failure = ipc_reply.clone();
+        let path_reply_on_failure = path_reply.clone();
+        let selection_reply_on_failure = selection_reply.clone();
+        let opened = self
+            .backend
+            .with_primary_renderer(|renderer| {
+                self.niri.screenshot_ui.open(
+                    renderer,
+                    screenshots,
+                    default_output,
+                    show_pointer,
+                    path,
+                    ipc_reply,
+                    path_reply,
+                    selection_reply,
+                )
+            })
+            .unwrap_or(false);
+        if !opened {
+            if let Some(reply) = ipc_reply_on_failure {
+                let _ = reply.try_send(Err(String::from("error opening screenshot UI")));
+            }
+            if let Some(reply) = path_reply_on_failure {
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                    "error opening screenshot UI",
+                ))));
+            }
+            if let Some(reply) = selection_reply_on_failure {
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                    "error opening screenshot UI",
+                ))));
+            }
+            return;
+        }
 
         self.niri
             .cursor_manager
@@ -2319,46 +2666,325 @@ impl State {
         }
     }
 
-    pub fn handle_pick_color(&mut self, tx: async_channel::Sender<Option<niri_ipc::PickedColor>>) {
+    pub fn handle_pick_color(
+        &mut self,
+        tx: async_channel::Sender<Option<niri_ipc::PickedColor>>,
+        copy_to_clipboard: bool,
+    ) {
+        if self.niri.is_locked()
+            || self.niri.screenshot_ui.is_open()
+            || self.niri.pick_color_ui.is_open()
+            || self.niri.screen_cast_picker_is_visible()
+        {
+            let _ = tx.try_send(None);
+            return;
+        }
+
+        self.niri.pick_color_ui.open();
+
         let pointer = self.niri.seat.get_pointer().unwrap();
+        let location = pointer.current_location();
         let start_data = PointerGrabStartData {
             focus: None,
             button: 0,
-            location: pointer.current_location(),
+            location,
         };
-        let grab = PickColorGrab::new(start_data);
+        let grab = PickColorGrab::new(start_data, copy_to_clipboard);
         pointer.set_grab(self, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
         self.niri.pick_color = Some(tx);
+        // The magnifier replaces the cursor.
         self.niri
             .cursor_manager
-            .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
+            .set_cursor_image(CursorImageStatus::Hidden);
+        self.update_pick_color_magnifier(location);
         self.niri.queue_redraw_all();
     }
 
-    pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
-        let ScreenshotUi::Open { path, .. } = &mut self.niri.screenshot_ui else {
+    /// Captures the screen around the pointer and updates the color picker magnifier.
+    ///
+    /// Must not lock the pointer: this is called from inside the pointer grab.
+    pub fn update_pick_color_magnifier(&mut self, location: Point<f64, Logical>) {
+        if !self.niri.pick_color_ui.is_open() {
+            return;
+        }
+
+        let Some((output, pos)) = self
+            .niri
+            .output_under(location)
+            .map(|(output, pos)| (output.clone(), pos))
+        else {
+            if self.niri.pick_color_ui.clear() {
+                self.niri.queue_redraw_all();
+            }
             return;
         };
-        let path = path.take();
 
-        self.backend.with_primary_renderer(|renderer| {
-            match self.niri.screenshot_ui.capture(renderer) {
-                Ok((size, pixels)) => {
-                    if let Err(err) = self.niri.save_screenshot(size, pixels, write_to_disk, path) {
-                        warn!("error saving screenshot: {err:?}");
+        let scale = output.current_scale().fractional_scale();
+        let output_size = output
+            .current_transform()
+            .transform_size(output.current_mode().unwrap().size);
+        let half = self.niri.pick_color_ui.capture_half(scale);
+        let center = clamp_to_output(pos.to_physical_precise_floor(scale), output_size);
+        let origin = center - Point::from((half, half));
+        let side = half * 2 + 1;
+
+        self.niri.update_render_elements(Some(&output));
+        let niri = &self.niri;
+        let Some(pixels) = self
+            .backend
+            .with_primary_renderer(|renderer| {
+                niri.capture_pick_color_region(renderer, &output, origin, side)
+            })
+            .flatten()
+        else {
+            return;
+        };
+
+        let region = PickColorRegion {
+            output: output.clone(),
+            scale,
+            pos,
+            output_size,
+            origin,
+            side,
+            pixels,
+        };
+        let ui = &mut self.niri.pick_color_ui;
+        let changed = self
+            .backend
+            .with_primary_renderer(|renderer| ui.set_region(renderer, region))
+            .unwrap_or(false);
+        if changed {
+            self.niri.queue_redraw(&output);
+        }
+    }
+
+    pub fn cancel_screenshot(&mut self) {
+        if self.niri.screenshot_ui.close() {
+            self.niri
+                .cursor_manager
+                .set_cursor_image(CursorImageStatus::default_named());
+            self.niri.queue_redraw_all();
+        }
+
+        if self.niri.pick_color.is_some() {
+            self.niri.seat.get_pointer().unwrap().unset_grab(
+                self,
+                SERIAL_COUNTER.next_serial(),
+                InputTime::now(),
+            );
+        }
+    }
+
+    pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
+        let selection = self.niri.screenshot_ui.selection();
+        let (path, ipc_reply, path_reply, selection_reply) = {
+            let ScreenshotUi::Open {
+                path,
+                ipc_reply,
+                path_reply,
+                selection_reply,
+                ..
+            } = &mut self.niri.screenshot_ui
+            else {
+                return;
+            };
+
+            (
+                path.take(),
+                ipc_reply.take(),
+                path_reply.take(),
+                selection_reply.take(),
+            )
+        };
+
+        if let Some(selection_reply) = selection_reply {
+            let result = selection
+                .and_then(|(output, rect, scale)| {
+                    let output_geo = self.niri.global_space.output_geometry(&output)?;
+                    let rect = rect.to_f64().to_logical(scale);
+                    let x1 = rect.loc.x.floor() as i32;
+                    let y1 = rect.loc.y.floor() as i32;
+                    let x2 = (rect.loc.x + rect.size.w).ceil() as i32;
+                    let y2 = (rect.loc.y + rect.size.h).ceil() as i32;
+
+                    Some((
+                        output_geo.loc.x + x1,
+                        output_geo.loc.y + y1,
+                        x2 - x1,
+                        y2 - y1,
+                    ))
+                })
+                .ok_or_else(|| {
+                    ScreenshotPortalError::Failed(String::from(
+                        "cannot resolve screenshot selection geometry",
+                    ))
+                });
+            let _ = selection_reply.try_send(result);
+        } else {
+            let write_to_disk = write_to_disk || path_reply.is_some();
+
+            self.backend.with_primary_renderer(|renderer| {
+                match self.niri.screenshot_ui.capture(renderer) {
+                    Ok((size, pixels)) => {
+                        let ipc_reply_on_error = ipc_reply.clone();
+                        let path_reply_on_error = path_reply.clone();
+                        if let Err(err) = self.niri.save_screenshot_with_replies(
+                            size,
+                            pixels,
+                            write_to_disk,
+                            path,
+                            ipc_reply,
+                            path_reply,
+                        ) {
+                            warn!("error saving screenshot: {err:?}");
+                            if let Some(ipc_reply) = ipc_reply_on_error {
+                                let _ = ipc_reply
+                                    .try_send(Err(format!("error saving screenshot: {err}")));
+                            }
+                            if let Some(path_reply) = path_reply_on_error {
+                                let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(
+                                    format!("error saving screenshot: {err}"),
+                                )));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!("error capturing screenshot: {err:?}");
+                        if let Some(ipc_reply) = ipc_reply {
+                            let _ = ipc_reply
+                                .try_send(Err(format!("error capturing screenshot: {err}")));
+                        }
+                        if let Some(path_reply) = path_reply {
+                            let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(
+                                format!("error capturing screenshot: {err}"),
+                            )));
+                        }
                     }
                 }
-                Err(err) => {
-                    warn!("error capturing screenshot: {err:?}");
-                }
-            }
-        });
+            });
+        }
 
         self.niri.screenshot_ui.close();
         self.niri
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
         self.niri.queue_redraw_all();
+    }
+
+    pub fn screenshot_for_ipc_stdout(
+        &mut self,
+        action: niri_ipc::Action,
+        ipc_reply: ScreenshotReplySender,
+    ) {
+        let result = match action {
+            niri_ipc::Action::Screenshot {
+                show_pointer, path, ..
+            } => {
+                self.open_screenshot_ui_with_reply(show_pointer, path, Some(ipc_reply));
+                return;
+            }
+            niri_ipc::Action::ScreenshotScreen {
+                write_to_disk,
+                show_pointer,
+                path,
+                ..
+            } => {
+                let active = self
+                    .niri
+                    .layout
+                    .active_output()
+                    .cloned()
+                    .context("no active output to screenshot");
+                active.and_then(|active| {
+                    let ipc_reply_for_screenshot = ipc_reply.clone();
+                    self.backend
+                        .with_primary_renderer(|renderer| {
+                            self.niri.screenshot_with_reply(
+                                renderer,
+                                &active,
+                                write_to_disk,
+                                show_pointer,
+                                path,
+                                Some(ipc_reply_for_screenshot),
+                            )
+                        })
+                        .context("primary renderer is not available")
+                        .and_then(|res| res)
+                })
+            }
+            niri_ipc::Action::ScreenshotWindow {
+                id: None,
+                write_to_disk,
+                show_pointer,
+                path,
+                ..
+            } => {
+                let focus = self.niri.layout.focus_with_output();
+                let Some((mapped, output)) = focus else {
+                    let _ =
+                        ipc_reply.try_send(Err(String::from("no focused window to screenshot")));
+                    return;
+                };
+
+                let ipc_reply_for_screenshot = ipc_reply.clone();
+                self.backend
+                    .with_primary_renderer(|renderer| {
+                        self.niri.screenshot_window_with_reply(
+                            renderer,
+                            output,
+                            mapped,
+                            write_to_disk,
+                            show_pointer,
+                            path,
+                            Some(ipc_reply_for_screenshot),
+                        )
+                    })
+                    .context("primary renderer is not available")
+                    .and_then(|res| res)
+            }
+            niri_ipc::Action::ScreenshotWindow {
+                id: Some(id),
+                write_to_disk,
+                show_pointer,
+                path,
+                ..
+            } => {
+                let mut windows = self.niri.layout.windows();
+                let window = windows.find(|(_, mapped)| mapped.id().get() == id);
+                let Some((Some(monitor), mapped)) = window else {
+                    let _ = ipc_reply.try_send(Err(format!("window {id} was not found")));
+                    return;
+                };
+
+                let output = monitor.output();
+                let ipc_reply_for_screenshot = ipc_reply.clone();
+                self.backend
+                    .with_primary_renderer(|renderer| {
+                        self.niri.screenshot_window_with_reply(
+                            renderer,
+                            output,
+                            mapped,
+                            write_to_disk,
+                            show_pointer,
+                            path,
+                            Some(ipc_reply_for_screenshot),
+                        )
+                    })
+                    .context("primary renderer is not available")
+                    .and_then(|res| res)
+            }
+            _ => {
+                let _ = ipc_reply.try_send(Err(String::from(
+                    "action does not support screenshot stdout",
+                )));
+                return;
+            }
+        };
+
+        if let Err(err) = result {
+            let _ = ipc_reply.try_send(Err(err.to_string()));
+        }
     }
 
     pub fn store_unmap_snapshot(&mut self, window: &Window, output: Option<&Output>) {
@@ -2371,6 +2997,7 @@ impl State {
                 let mut ctx = RenderCtx {
                     target: RenderTarget::Output,
                     renderer,
+                    intent: RenderIntent::Normal,
                     xray: None,
                 };
 
@@ -2406,63 +3033,219 @@ impl State {
         });
     }
 
+    /// Minimizes a window, playing the window-close animation for the disappearing tile.
+    pub fn minimize_window(&mut self, window: &Window) {
+        if self.niri.layout.is_window_minimized(window) {
+            return;
+        }
+
+        let surface = window.toplevel().expect("no X11 support").wl_surface();
+        let Some((_, output)) = self.niri.layout.find_window_and_output(surface) else {
+            return;
+        };
+        let output = output.cloned();
+
+        // Play the window-close animation for the disappearing window; the layout handles the
+        // neighbors sliding in.
+        self.store_unmap_snapshot(window, output.as_ref());
+
+        let transaction = crate::utils::transaction::Transaction::new();
+        let blocker = transaction.blocker();
+        self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .layout
+                .start_close_animation_for_window(renderer, window, blocker);
+        });
+
+        let active_window = self.niri.layout.focus().map(|m| &m.window);
+        let was_active = active_window == Some(window);
+
+        self.niri.layout.set_window_minimized(window, true);
+
+        if !transaction.is_last() {
+            transaction.register_deadline_timer(&self.niri.event_loop);
+        }
+
+        if was_active {
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        // FIXME: granular.
+        self.niri.queue_redraw_all();
+    }
+
+    /// Restores a minimized window, optionally focusing it.
+    pub fn unminimize_window(&mut self, window: &Window, activate: bool) {
+        if !self.niri.layout.is_window_minimized(window) {
+            return;
+        }
+
+        self.niri.layout.unminimize_window(window, activate);
+
+        if activate {
+            self.niri.layer_shell_on_demand_focus = None;
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        // FIXME: granular.
+        self.niri.queue_redraw_all();
+    }
+
     #[cfg(not(feature = "xdp-gnome-screencast"))]
     pub fn set_dynamic_cast_target(&mut self, _target: CastTarget) {}
 
     #[cfg(feature = "dbus")]
-    pub fn on_screen_shot_msg(
-        &mut self,
-        to_screenshot: &async_channel::Sender<NiriToScreenshot>,
-        msg: ScreenshotToNiri,
-    ) {
+    pub fn on_screen_shot_msg(&mut self, msg: ScreenshotToNiri) {
         match msg {
-            ScreenshotToNiri::TakeScreenshot { include_cursor } => {
-                self.handle_take_screenshot(to_screenshot, include_cursor);
+            ScreenshotToNiri::TakeScreenshot {
+                include_cursor,
+                reply,
+            } => {
+                self.handle_take_screenshot(reply, include_cursor);
+            }
+            ScreenshotToNiri::InteractiveScreenshot(reply) => {
+                self.open_screenshot_ui_with_replies(true, None, None, Some(reply), None);
+            }
+            ScreenshotToNiri::TakeWindow {
+                include_cursor,
+                reply,
+            } => {
+                self.handle_take_window(reply, include_cursor);
+            }
+            ScreenshotToNiri::SelectArea(reply) => {
+                self.open_screenshot_ui_with_replies(false, None, None, None, Some(reply));
+            }
+            ScreenshotToNiri::TakeArea {
+                x,
+                y,
+                width,
+                height,
+                reply,
+            } => {
+                self.handle_take_area(reply, x, y, width, height);
+            }
+            ScreenshotToNiri::CancelScreenshot => {
+                self.cancel_screenshot();
             }
             ScreenshotToNiri::PickColor(tx) => {
-                self.handle_pick_color(tx);
+                self.handle_pick_color(tx, false);
             }
         }
     }
 
     #[cfg(feature = "dbus")]
-    fn handle_take_screenshot(
-        &mut self,
-        to_screenshot: &async_channel::Sender<NiriToScreenshot>,
-        include_cursor: bool,
-    ) {
+    fn handle_take_screenshot(&mut self, reply: ScreenshotPathReplySender, include_cursor: bool) {
         let _span = tracy_client::span!("TakeScreenshot");
 
         let rv = self.backend.with_primary_renderer(|renderer| {
-            let on_done = {
-                let to_screenshot = to_screenshot.clone();
-                move |path| {
-                    let msg = NiriToScreenshot::ScreenshotResult(Some(path));
-                    if let Err(err) = to_screenshot.send_blocking(msg) {
-                        warn!("error sending path to screenshot: {err:?}");
-                    }
-                }
-            };
-
-            let res = self
-                .niri
-                .screenshot_all_outputs(renderer, include_cursor, on_done);
-
-            if let Err(err) = res {
-                warn!("error taking a screenshot: {err:?}");
-
-                let msg = NiriToScreenshot::ScreenshotResult(None);
-                if let Err(err) = to_screenshot.send_blocking(msg) {
-                    warn!("error sending None to screenshot: {err:?}");
-                }
-            }
+            self.niri
+                .screenshot_all_outputs(renderer, include_cursor, reply.clone())
         });
 
-        if rv.is_none() {
-            let msg = NiriToScreenshot::ScreenshotResult(None);
-            if let Err(err) = to_screenshot.send_blocking(msg) {
-                warn!("error sending None to screenshot: {err:?}");
+        match rv {
+            None => {
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                    "primary renderer is not available",
+                ))));
             }
+            Some(Err(err)) => {
+                warn!("error taking a screenshot: {err:?}");
+                let _ = reply.try_send(Err(ScreenshotPortalError::Failed(err.to_string())));
+            }
+            Some(Ok(())) => (),
+        }
+    }
+
+    #[cfg(feature = "dbus")]
+    fn handle_take_window(&mut self, reply: ScreenshotPathReplySender, include_cursor: bool) {
+        let Some((mapped, output)) = self.niri.layout.focus_with_output() else {
+            let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                "no focused window to screenshot",
+            ))));
+            return;
+        };
+
+        let reply_on_error = reply.clone();
+        let result = self.backend.with_primary_renderer(|renderer| {
+            self.niri.screenshot_window_with_replies(
+                renderer,
+                output,
+                mapped,
+                true,
+                include_cursor,
+                None,
+                None,
+                Some(reply),
+            )
+        });
+
+        match result {
+            None => {
+                let _ = reply_on_error.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                    "primary renderer is not available",
+                ))));
+            }
+            Some(Err(err)) => {
+                warn!("error taking a window screenshot: {err:?}");
+                let _ =
+                    reply_on_error.try_send(Err(ScreenshotPortalError::Failed(err.to_string())));
+            }
+            Some(Ok(())) => (),
+        }
+    }
+
+    #[cfg(feature = "dbus")]
+    fn handle_take_area(
+        &mut self,
+        reply: ScreenshotPathReplySender,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        if width <= 0 || height <= 0 {
+            let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                "screenshot area is empty",
+            ))));
+            return;
+        }
+
+        let area = Rectangle::new(Point::from((x, y)), Size::from((width, height)));
+        let Some((output, output_geo)) = self.niri.global_space.outputs().find_map(|output| {
+            let geo = self.niri.global_space.output_geometry(output)?;
+            let right = area.loc.x.checked_add(area.size.w)?;
+            let bottom = area.loc.y.checked_add(area.size.h)?;
+            (area.loc.x >= geo.loc.x
+                && area.loc.y >= geo.loc.y
+                && right <= geo.loc.x + geo.size.w
+                && bottom <= geo.loc.y + geo.size.h)
+                .then(|| (output.clone(), geo))
+        }) else {
+            let _ = reply.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                "screenshot area must be contained by one output",
+            ))));
+            return;
+        };
+
+        let local_area = Rectangle::new(area.loc - output_geo.loc, area.size);
+        let reply_on_error = reply.clone();
+        let result = self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .screenshot_area_with_reply(renderer, &output, local_area, reply)
+        });
+
+        match result {
+            None => {
+                let _ = reply_on_error.try_send(Err(ScreenshotPortalError::Failed(String::from(
+                    "primary renderer is not available",
+                ))));
+            }
+            Some(Err(err)) => {
+                warn!("error taking an area screenshot: {err:?}");
+                let _ =
+                    reply_on_error.try_send(Err(ScreenshotPortalError::Failed(err.to_string())));
+            }
+            Some(Ok(())) => (),
         }
     }
 
@@ -2613,6 +3396,216 @@ fn reset_damage_tracker_if_changed(
 }
 
 impl Niri {
+    fn screen_cast_picker_is_open(&self) -> bool {
+        #[cfg(feature = "xdp-gnome-screencast")]
+        {
+            self.screen_cast_picker.is_open()
+        }
+        #[cfg(not(feature = "xdp-gnome-screencast"))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn screen_cast_picker_is_visible(&self) -> bool {
+        #[cfg(feature = "xdp-gnome-screencast")]
+        {
+            self.screen_cast_picker.is_visible()
+        }
+        #[cfg(not(feature = "xdp-gnome-screencast"))]
+        {
+            false
+        }
+    }
+
+    /// For fullscreen HDR passthrough: if `output` is showing a fullscreen window whose surface
+    /// carries an HDR (PQ / BT.2020) image description, returns that description. The TTY backend
+    /// uses this to decide whether to signal HDR on the connector in auto mode, and which metadata
+    /// to attach.
+    ///
+    /// The whole surface tree is searched, not just the toplevel surface: winewayland (Proton)
+    /// presents Vulkan content on a subsurface of the toplevel and attaches the HDR image
+    /// description there.
+    pub fn output_hdr_image_description(&self, output: &Output) -> Option<ImageDescription> {
+        let window = self.layout.monitor_for_output(output)?.active_window()?;
+        if !window.sizing_mode().is_fullscreen() {
+            return None;
+        }
+        surface_tree_hdr_description(window.toplevel().wl_surface())
+    }
+
+    /// Returns the HDR config of an output, but only if the output can actually do HDR
+    /// (driver + sink capabilities probed by the backend), together with those capabilities.
+    fn output_hdr_config(
+        &self,
+        output: &Output,
+    ) -> Option<(niri_config::output::Hdr, OutputHdrCaps)> {
+        let caps = *output.user_data().get::<OutputHdrCaps>()?;
+        if !caps.supported {
+            return None;
+        }
+        let name = output.user_data().get::<OutputName>()?;
+        let hdr = self.config.borrow().outputs.find(name)?.hdr.clone()?;
+        Some((hdr, caps))
+    }
+
+    /// The PQ/BT.2020 image description describing an HDR output, with luminances from the
+    /// sink's EDID and the configured SDR reference white.
+    fn hdr_blend_description(
+        hdr: &niri_config::output::Hdr,
+        caps: OutputHdrCaps,
+    ) -> ImageDescription {
+        // Same placeholder as build_hdr_metadata() in the TTY backend uses for sinks whose
+        // EDID doesn't provide luminance data.
+        let max_luminance = if caps.max_luminance > 0 {
+            u32::from(caps.max_luminance)
+        } else {
+            500
+        };
+        let reference_luminance = hdr.reference_luminance.map(|v| v.0).unwrap_or(203.) as u32;
+        ImageDescription {
+            transfer: CmTransferFunction::St2084Pq,
+            primaries: CmPrimariesOption {
+                named: Some(CmPrimaries::Bt2020),
+                values: None,
+            },
+            max_cll: (caps.max_luminance > 0).then(|| u32::from(caps.max_luminance)),
+            max_fall: (caps.max_frame_avg_luminance > 0)
+                .then(|| u32::from(caps.max_frame_avg_luminance)),
+            mastering_luminance: None,
+            mastering_primaries: None,
+            luminances: Some((
+                u32::from(caps.min_luminance),
+                max_luminance,
+                reference_luminance,
+            )),
+            windows_scrgb: false,
+            windows_bt2100: false,
+        }
+    }
+
+    /// The image description describing how this output is presented (its blend space).
+    ///
+    /// With `hdr mode="on"`, an HDR-capable output always reports its PQ/BT.2020 description.
+    /// In auto mode it reports PQ only while HDR is actually engaged (fullscreen HDR content),
+    /// so clients are never told the output is in HDR before the connector is.
+    pub fn output_blend_description(&self, output: &Output) -> ImageDescription {
+        let Some((hdr, caps)) = self.output_hdr_config(output) else {
+            return ImageDescription::SRGB;
+        };
+        match hdr.mode {
+            HdrMode::On => Self::hdr_blend_description(&hdr, caps),
+            HdrMode::Auto => {
+                if self.output_hdr_image_description(output).is_some() {
+                    Self::hdr_blend_description(&hdr, caps)
+                } else {
+                    ImageDescription::SRGB
+                }
+            }
+        }
+    }
+
+    pub(crate) fn output_capture_reference_luminance(&self, output: &Output) -> f64 {
+        let desc = self.output_blend_description(output);
+        desc.luminances
+            .map(|(_, _, reference)| reference as f64)
+            .unwrap_or(DEFAULT_REFERENCE_LUMINANCE)
+    }
+
+    /// The image description we'd prefer a window to use, given the output it is on.
+    ///
+    /// With `hdr mode="on"`, every window on the output is told to prefer PQ upfront — this is
+    /// what lets applications that only probe HDR support once at startup (e.g. many SDL
+    /// games) detect it. In auto mode, only the active fullscreen window is told to prefer PQ
+    /// (even while its content is still SDR): clients that listen for `preferred_changed`
+    /// then switch to HDR output, which in turn engages HDR on the connector.
+    fn preferred_description_for_window(
+        &self,
+        window: &Mapped,
+        output: &Output,
+    ) -> ImageDescription {
+        let Some((hdr, caps)) = self.output_hdr_config(output) else {
+            return ImageDescription::SRGB;
+        };
+        match hdr.mode {
+            HdrMode::On => Self::hdr_blend_description(&hdr, caps),
+            HdrMode::Auto => {
+                let is_active_fullscreen = window.sizing_mode().is_fullscreen()
+                    && self
+                        .layout
+                        .monitor_for_output(output)
+                        .and_then(|mon| mon.active_window())
+                        .is_some_and(|active| active.id() == window.id());
+                if is_active_fullscreen {
+                    Self::hdr_blend_description(&hdr, caps)
+                } else {
+                    ImageDescription::SRGB
+                }
+            }
+        }
+    }
+
+    /// The image description we'd prefer the given surface to use.
+    pub fn preferred_surface_description(&self, surface: &WlSurface) -> ImageDescription {
+        // Resolve subsurfaces to their root: winewayland presents Vulkan content on a
+        // subsurface of the toplevel and may query color feedback there.
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+
+        if let Some((window, Some(output))) = self.layout.find_window_and_output(&root) {
+            return self.preferred_description_for_window(window, output);
+        }
+        // Non-toplevel surfaces (e.g. layer shell): prefer the output's blend space.
+        if let Some(output) = self.output_for_root(&root) {
+            let output = output.clone();
+            return self.output_blend_description(&output);
+        }
+        ImageDescription::SRGB
+    }
+
+    /// Sends color-management change notifications for outputs and surfaces whose
+    /// blend/preferred image descriptions changed.
+    ///
+    /// Called from the refresh loop; the smithay-side notifications are deduplicated, and the
+    /// per-output cache below avoids spurious `image_description_changed` events.
+    pub fn refresh_color_management(&mut self) {
+        let _span = tracy_client::span!("Niri::refresh_color_management");
+
+        let outputs: Vec<Output> = self.global_space.outputs().cloned().collect();
+        for output in &outputs {
+            let desc = self.output_blend_description(output);
+            let Some(state) = self.output_state.get_mut(output) else {
+                continue;
+            };
+            if state.blend_description != Some(desc) {
+                state.blend_description = Some(desc);
+                self.color_management_state
+                    .output_description_changed(output);
+            }
+        }
+
+        let mut updates: Vec<(WlSurface, ImageDescription)> = Vec::new();
+        for (monitor, window) in self.layout.windows() {
+            let Some(output) = monitor.map(|mon| mon.output()) else {
+                continue;
+            };
+            let desc = self.preferred_description_for_window(window, output);
+            updates.push((window.toplevel().wl_surface().clone(), desc));
+        }
+        for output in &outputs {
+            let blend = self.output_blend_description(output);
+            for layer in layer_map_for_output(output).layers() {
+                updates.push((layer.wl_surface().clone(), blend));
+            }
+        }
+        for (surface, desc) in updates {
+            self.color_management_state
+                .preferred_changed(&surface, desc);
+        }
+    }
+
     pub fn new(
         config: Rc<RefCell<Config>>,
         event_loop: LoopHandle<'static, State>,
@@ -2648,7 +3641,11 @@ impl Niri {
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
-            [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
+            [
+                WmCapabilities::Fullscreen,
+                WmCapabilities::Maximize,
+                WmCapabilities::Minimize,
+            ],
         );
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {
@@ -2688,6 +3685,7 @@ impl Niri {
         let pointer_gestures_state = PointerGesturesState::new::<State>(&display_handle);
         let relative_pointer_state = RelativePointerManagerState::new::<State>(&display_handle);
         let pointer_constraints_state = PointerConstraintsState::new::<State>(&display_handle);
+        let pointer_warp_manager = PointerWarpManager::new::<State>(&display_handle);
         let idle_notifier_state = IdleNotifierState::new(&display_handle, event_loop.clone());
         let idle_inhibit_manager_state = IdleInhibitManagerState::new::<State>(&display_handle);
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
@@ -2710,6 +3708,8 @@ impl Niri {
         );
         let presentation_state =
             PresentationState::new::<State>(&display_handle, Monotonic::ID as u32);
+        let tearing_control_state = TearingControlState::new::<State>(&display_handle);
+        let content_type_state = ContentTypeState::new::<State>(&display_handle);
         let security_context_state =
             SecurityContextState::new::<State, _>(&display_handle, client_is_unrestricted);
 
@@ -2742,6 +3742,7 @@ impl Niri {
         );
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let background_effect_state = BackgroundEffectState::new::<State>(&display_handle);
+        let kde_blur_state = KdeBlurState::new::<State>(&display_handle);
         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
 
         let is_tty = matches!(backend, Backend::Tty(_));
@@ -2749,6 +3750,43 @@ impl Niri {
             GammaControlManagerState::new::<State, _>(&display_handle, move |client| {
                 is_tty && !client.get_data::<ClientState>().unwrap().restricted
             });
+        // Advertise color management only when at least one output opts into HDR in the config. This
+        // keeps HDR fully opt-in and off by default — with no `hdr` config, niri behaves exactly as
+        // before. Actual HDR signalling is additionally restricted to the TTY backend (it lives in
+        // `Tty::render`), so advertising on winit/headless is harmless. (Snapshot taken at startup;
+        // toggling `hdr` in the config needs a restart to (un)advertise the global.)
+        let advertise_color_management = config.borrow().outputs.0.iter().any(|o| o.hdr.is_some());
+        let color_management_state = ColorManagementState::new::<State, _>(
+            &display_handle,
+            // ext_linear is what Mesa's Vulkan WSI needs (in combination with sRGB primaries
+            // and extended_target_volume) to advertise scRGB
+            // (VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) swapchains, which in turn is what
+            // Windows games running under Proton probe for scRGB HDR support; see
+            // `render_helpers::blend` for how the linear content is composited.
+            [
+                CmTransferFunction::Srgb,
+                CmTransferFunction::Gamma22,
+                CmTransferFunction::ExtLinear,
+                CmTransferFunction::St2084Pq,
+            ],
+            [CmPrimaries::Srgb, CmPrimaries::Bt2020],
+            // Mastering-metadata features so HDR clients can convey it without erroring.
+            // Extended target volume: the mastering metadata is forwarded to the sink (HDR
+            // infoframe) rather than used for gamut mapping, so target volumes exceeding the
+            // primary volume are fine. Windows scRGB: rendered with a dedicated blend-space
+            // encode (see `render_helpers::blend`).
+            [
+                Feature::Parametric,
+                Feature::SetMasteringDisplayPrimaries,
+                Feature::SetPrimaries,
+                Feature::ExtendedTargetVolume,
+                Feature::SetLuminances,
+                Feature::WindowsScrgb,
+                Feature::WindowsBt2100,
+            ],
+            [CmRenderIntent::Perceptual],
+            move |_client| advertise_color_management,
+        );
         let activation_state = XdgActivationState::new::<State>(&display_handle);
         event_loop
             .insert_source(
@@ -2764,10 +3802,19 @@ impl Niri {
 
         let mutter_x11_interop_state =
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
+        let fifo_manager_state = FifoManagerState::new::<State>(&display_handle);
 
         #[cfg(test)]
         let single_pixel_buffer_state = SinglePixelBufferState::new::<State>(&display_handle);
 
+        // Apps launched for the agent see only the agent seat.
+        #[cfg(feature = "agent")]
+        let mut seat: Seat<State> = seat_state.new_wl_seat_with_filter(
+            &display_handle,
+            backend.seat_name(),
+            crate::agent::sees_user_seat,
+        );
+        #[cfg(not(feature = "agent"))]
         let mut seat: Seat<State> = seat_state.new_wl_seat(&display_handle, backend.seat_name());
         let keyboard = match seat.add_keyboard(
             config_.input.keyboard.xkb.to_xkb_config(),
@@ -2796,6 +3843,10 @@ impl Niri {
         }
         seat.add_pointer();
 
+        #[cfg(feature = "agent")]
+        let mut agent = (!config_.agent.off)
+            .then(|| crate::agent::AgentState::new(&mut seat_state, &display_handle, &config_));
+
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         let cursor_manager =
             CursorManager::new(&config_.cursor.xcursor_theme, config_.cursor.xcursor_size);
@@ -2811,6 +3862,8 @@ impl Niri {
 
         let screenshot_ui = ScreenshotUi::new(animation_clock.clone(), config.clone());
         let window_mru_ui = WindowMruUi::new(config.clone());
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let screen_cast_picker = ScreenCastPickerUi::new(animation_clock.clone(), config.clone());
         let config_error_notification =
             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
 
@@ -2852,6 +3905,11 @@ impl Niri {
             socket_name
         });
 
+        #[cfg(feature = "agent")]
+        if let (Some(agent), Some(socket_name)) = (&mut agent, &socket_name) {
+            agent.create_socket(&event_loop, socket_name);
+        }
+
         let ipc_server = match IpcServer::start(&event_loop, socket_name.as_deref()) {
             Ok(server) => Some(server),
             Err(err) => {
@@ -2887,6 +3945,7 @@ impl Niri {
             )
             .unwrap();
 
+        let magnifier_zoom_factor = config_.magnifier.zoom_factor;
         drop(config_);
         let mut niri = Self {
             config,
@@ -2923,6 +3982,21 @@ impl Niri {
             tablets: HashMap::new(),
             touch: HashSet::new(),
 
+            pointer_shake_energy: 0.0,
+            pointer_last_position: None,
+            pointer_last_time: None,
+            pointer_enlarged_until: None,
+            pointer_scale_animation: None,
+            pointer_grow_zoom: 1.0,
+
+            magnifier_active: false,
+            magnifier_zoom: magnifier_zoom_factor,
+            magnifier_animation: None,
+            magnifier_capture: Cell::new(false),
+            pick_color_capture: Cell::new(false),
+            magnifier_center: RefCell::new(None),
+            magnifier_center_anim: None,
+
             compositor_state,
             xdg_shell_state,
             xdg_decoration_state,
@@ -2940,6 +4014,7 @@ impl Niri {
             image_copy_cursor_sessions: Vec::new(),
             viewporter_state,
             background_effect_state,
+            kde_blur_state,
             xdg_foreign_state,
             text_input_state,
             input_method_state,
@@ -2949,12 +4024,14 @@ impl Niri {
             shm_state,
             output_manager_state,
             dmabuf_state,
+            syncobj_state: None,
             fractional_scale_manager_state,
             seat_state,
             tablet_state,
             pointer_gestures_state,
             relative_pointer_state,
             pointer_constraints_state,
+            pointer_warp_manager,
             idle_notifier_state,
             idle_inhibit_manager_state,
             data_device_state,
@@ -2963,6 +4040,8 @@ impl Niri {
             ext_data_control_state,
             popups: PopupManager::default(),
             popup_grab: None,
+            #[cfg(feature = "agent")]
+            agent,
             suppressed_keys: HashSet::new(),
             suppressed_buttons: HashSet::new(),
             pending_release_binds: HashMap::new(),
@@ -2971,16 +4050,21 @@ impl Niri {
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
             presentation_state,
+            tearing_control_state,
+            content_type_state,
             security_context_state,
             gamma_control_manager_state,
+            color_management_state,
             activation_state,
             mutter_x11_interop_state,
+            fifo_manager_state,
             #[cfg(test)]
             single_pixel_buffer_state,
 
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             layer_shell_on_demand_focus: None,
+            grid_mouse_focus: GridMouseFocus::default(),
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
             keyboard_shortcuts_inhibiting_surfaces: HashMap::new(),
@@ -3018,6 +4102,7 @@ impl Niri {
             locked_hint: None,
 
             screenshot_ui,
+            pick_color_ui: PickColorUi::new(),
             config_error_notification,
             hotkey_overlay,
             exit_confirm_dialog,
@@ -3026,6 +4111,9 @@ impl Niri {
 
             window_mru_ui,
             pending_mru_commit: None,
+
+            #[cfg(feature = "xdp-gnome-screencast")]
+            screen_cast_picker,
 
             pick_window: None,
             pick_color: None,
@@ -3062,6 +4150,19 @@ impl Niri {
     }
 
     pub fn insert_client(&mut self, client: NewClient) {
+        self.insert_client_inner(client, false);
+    }
+
+    /// Inserts a client that connected through the agent socket.
+    #[cfg(feature = "agent")]
+    pub fn insert_agent_client(&mut self, client: NewClient) {
+        self.insert_client_inner(client, true);
+    }
+
+    fn insert_client_inner(&mut self, client: NewClient, agent: bool) {
+        #[cfg(not(feature = "agent"))]
+        let _ = agent;
+
         let NewClient {
             client,
             restricted,
@@ -3075,6 +4176,10 @@ impl Niri {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
+            #[cfg(feature = "agent")]
+            hide_agent_seat: crate::agent::hides_agent_seat(&client, &config),
+            #[cfg(feature = "agent")]
+            agent_client: agent,
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -3308,6 +4413,7 @@ impl Niri {
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
+            blend_description: None,
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -3399,6 +4505,11 @@ impl Niri {
             self.queue_redraw_all();
         }
 
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if self.screen_cast_picker.cancel_immediately() {
+            self.queue_redraw_all();
+        }
+
         if self.window_mru_ui.output() == Some(output) {
             self.cancel_mru();
         }
@@ -3487,17 +4598,22 @@ impl Niri {
         Some((output, pos_within_output))
     }
 
-    fn is_inside_hot_corner(&self, output: &Output, pos: Point<f64, Logical>) -> bool {
+    fn hot_corner_action(
+        &self,
+        output: &Output,
+        pos: Point<f64, Logical>,
+    ) -> Option<HotCornerAction> {
         let config = self.config.borrow();
         let hot_corners = output
             .user_data()
             .get::<OutputName>()
             .and_then(|name| config.outputs.find(name))
             .and_then(|c| c.hot_corners)
-            .unwrap_or(config.gestures.hot_corners);
+            .unwrap_or(config.gestures.hot_corners)
+            .with_default_corners();
 
         if hot_corners.off {
-            return false;
+            return None;
         }
 
         // Use size from the ceiled output geometry, since that's what we currently use for pointer
@@ -3509,25 +4625,49 @@ impl Niri {
             Rectangle::new(corner, Size::new(1., 1.)).contains(pos)
         };
 
-        if hot_corners.top_right && contains(Point::new(size.w - 1., 0.)) {
-            return true;
-        }
-        if hot_corners.bottom_left && contains(Point::new(0., size.h - 1.)) {
-            return true;
-        }
-        if hot_corners.bottom_right && contains(Point::new(size.w - 1., size.h - 1.)) {
-            return true;
-        }
-
-        // If the user didn't explicitly set any corners, we default to top-left.
-        if (hot_corners.top_left
-            || !(hot_corners.top_right || hot_corners.bottom_right || hot_corners.bottom_left))
-            && contains(Point::new(0., 0.))
+        if let Some(action) = hot_corners
+            .top_right
+            .filter(|_| contains(Point::new(size.w - 1., 0.)))
         {
-            return true;
+            return Some(action);
+        }
+        if let Some(action) = hot_corners
+            .bottom_left
+            .filter(|_| contains(Point::new(0., size.h - 1.)))
+        {
+            return Some(action);
+        }
+        if let Some(action) = hot_corners
+            .bottom_right
+            .filter(|_| contains(Point::new(size.w - 1., size.h - 1.)))
+        {
+            return Some(action);
         }
 
-        false
+        if let Some(action) = hot_corners
+            .top_left
+            .filter(|_| contains(Point::new(0., 0.)))
+        {
+            return Some(action);
+        }
+
+        None
+    }
+
+    pub fn trigger_hot_corner(&mut self, action: HotCornerAction, output: Option<&Output>) {
+        match action {
+            HotCornerAction::Overview => self.layout.toggle_overview(),
+            HotCornerAction::GridOverview => {
+                // Without grid-all-monitors, the grid toggles on the active monitor, so make that
+                // the monitor whose hot corner was hit.
+                if !self.config.borrow().grid_overview.grid_all_monitors {
+                    if let Some(output) = output {
+                        self.layout.focus_output(output);
+                    }
+                }
+                self.layout.toggle_grid_overview();
+            }
+        }
     }
 
     pub fn is_sticky_obscured_under(
@@ -3573,7 +4713,7 @@ impl Niri {
             return false;
         }
 
-        if self.is_inside_hot_corner(output, pos_within_output) {
+        if self.hot_corner_action(output, pos_within_output).is_some() {
             return true;
         }
 
@@ -3644,7 +4784,11 @@ impl Niri {
         extended_bounds: bool,
         pos: Point<f64, Logical>,
     ) -> Option<(Output, &Workspace<Mapped>)> {
-        if self.exit_confirm_dialog.is_open() || self.is_locked() || self.screenshot_ui.is_open() {
+        if self.exit_confirm_dialog.is_open()
+            || self.is_locked()
+            || self.screenshot_ui.is_open()
+            || self.screen_cast_picker_is_visible()
+        {
             return None;
         }
 
@@ -3680,6 +4824,7 @@ impl Niri {
         if self.exit_confirm_dialog.is_open()
             || self.is_locked()
             || self.screenshot_ui.is_open()
+            || self.screen_cast_picker_is_visible()
             || self.window_mru_ui.is_open()
         {
             return None;
@@ -3760,7 +4905,10 @@ impl Niri {
             return rv;
         }
 
-        if self.screenshot_ui.is_open() || self.window_mru_ui.is_open() {
+        if self.screenshot_ui.is_open()
+            || self.screen_cast_picker_is_visible()
+            || self.window_mru_ui.is_open()
+        {
             return rv;
         }
 
@@ -3853,9 +5001,9 @@ impl Niri {
                 .or_else(window_under)
                 .or_else(|| layer_toplevel_under(Layer::Background));
         } else {
-            if self.is_inside_hot_corner(output, pos_within_output) {
+            if let Some(action) = self.hot_corner_action(output, pos_within_output) {
                 rv.overview = is_overview_open;
-                rv.hot_corner = true;
+                rv.hot_corner = Some(action);
                 return rv;
             }
 
@@ -3901,6 +5049,43 @@ impl Niri {
     pub fn output_under_cursor(&self) -> Option<Output> {
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.global_space.output_under(pos).next().cloned()
+    }
+
+    /// Returns the output that pointer motion from `pos` must stay within, because the focused
+    /// window on it is fullscreen (`confine-mouse-to-fullscreen`).
+    pub fn fullscreen_output_confining_pointer(&self, pos: Point<f64, Logical>) -> Option<Output> {
+        if !self.config.borrow().input.confine_mouse_to_fullscreen {
+            return None;
+        }
+
+        // Compositor UIs and the lock screen may need the pointer on other outputs.
+        if self.is_locked()
+            || self.screenshot_ui.is_open()
+            || self.screen_cast_picker_is_visible()
+            || self.exit_confirm_dialog.is_open()
+            || self.window_mru_ui.is_open()
+        {
+            return None;
+        }
+
+        let output = self.global_space.output_under(pos).next()?;
+        if self.layout.active_output() != Some(output) {
+            return None;
+        }
+
+        // A floating window focused above the fullscreen one lets the pointer go.
+        if !self
+            .layout
+            .focus()
+            .is_some_and(|win| win.sizing_mode().is_fullscreen())
+        {
+            return None;
+        }
+
+        // This is the same check that puts the fullscreen window above the top layer: its column
+        // is active and the view is stationary, outside the overview and the grid overview.
+        let mon = self.layout.monitor_for_output(output)?;
+        mon.render_above_top_layer().then(|| output.clone())
     }
 
     pub fn output_left_of(&self, current: &Output) -> Option<Output> {
@@ -4090,6 +5275,119 @@ impl Niri {
         self.layout.outputs().find(has_layer_surface)
     }
 
+    pub fn for_each_output_surface(
+        &self,
+        output: &Output,
+        mut f: impl FnMut(&WlSurface, &SurfaceData),
+    ) {
+        let Some(output_state) = self.output_state.get(output) else {
+            return;
+        };
+
+        for mapped in self.layout.windows_for_output(output) {
+            mapped
+                .window
+                .with_surfaces(|surface, states| f(surface, states));
+        }
+
+        for surface in layer_map_for_output(output).layers() {
+            surface.with_surfaces(|surface, states| f(surface, states));
+        }
+
+        if let Some(surface) = &output_state.lock_surface {
+            with_surfaces_surface_tree(surface.wl_surface(), |surface, states| {
+                f(surface, states);
+            });
+        }
+
+        if let Some(surface) = self.dnd_icon.as_ref().map(|icon| &icon.surface) {
+            with_surfaces_surface_tree(surface, |surface, states| f(surface, states));
+        }
+
+        if let CursorImageStatus::Surface(surface) = self.cursor_manager.cursor_image() {
+            with_surfaces_surface_tree(surface, |surface, states| f(surface, states));
+        }
+    }
+
+    pub fn get_fifo_barriers(&self, output: &Output) -> Vec<(Barrier, Client)> {
+        let mut barriers = Vec::new();
+
+        self.for_each_output_surface(output, |surface, states| {
+            if !states.cached_state.has::<FifoBarrierCachedState>() {
+                return;
+            }
+
+            let primary_scanout_output = surface_primary_scanout_output(surface, states);
+            if primary_scanout_output.as_ref().is_some_and(|o| o != output) {
+                return;
+            }
+
+            let fifo_barrier = states
+                .cached_state
+                .get::<FifoBarrierCachedState>()
+                .current()
+                .barrier
+                .clone();
+
+            if let Some(fifo_barrier) = fifo_barrier {
+                if !fifo_barrier.is_signaled() {
+                    if let Some(client) = surface.client() {
+                        barriers.push((fifo_barrier, client));
+                    }
+                }
+            }
+        });
+
+        barriers
+    }
+
+    pub fn signal_fifo(&self, output: &Output) {
+        let tx = self.blocker_cleared_tx.clone();
+
+        self.for_each_output_surface(output, |surface, states| {
+            if !states.cached_state.has::<FifoBarrierCachedState>() {
+                return;
+            }
+
+            let primary_scanout_output = surface_primary_scanout_output(surface, states);
+            if primary_scanout_output.as_ref().is_some_and(|o| o != output) {
+                return;
+            }
+
+            Self::signal_fifo_surface(surface, states, &tx);
+        });
+
+        self.signal_fifo_unmapped();
+    }
+
+    pub fn signal_fifo_unmapped(&self) {
+        let tx = self.blocker_cleared_tx.clone();
+
+        for unmapped in self.unmapped_windows.values() {
+            unmapped.window.with_surfaces(|surface, states| {
+                if states.cached_state.has::<FifoBarrierCachedState>() {
+                    Self::signal_fifo_surface(surface, states, &tx);
+                }
+            });
+        }
+    }
+
+    fn signal_fifo_surface(surface: &WlSurface, states: &SurfaceData, tx: &Sender<Client>) {
+        let fifo_barrier = states
+            .cached_state
+            .get::<FifoBarrierCachedState>()
+            .current()
+            .barrier
+            .take();
+
+        if let Some(fifo_barrier) = fifo_barrier {
+            fifo_barrier.signal();
+            if let Some(client) = surface.client() {
+                let _ = tx.send(client);
+            }
+        }
+    }
+
     pub fn lock_surface_focus(&self) -> Option<WlSurface> {
         let output_under_cursor = self.output_under_cursor();
         let output = output_under_cursor
@@ -4101,6 +5399,378 @@ impl Niri {
         state.lock_surface.as_ref().map(|s| s.wl_surface()).cloned()
     }
 
+    pub fn pointer_motion_absolute_shake(
+        &mut self,
+        pos: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        let (hold_duration_ms, threshold, is_off, grow, grow_speed, zoom_factor) =
+            if let Some(shake_conf) = self.config.borrow().cursor.shake_to_enlarge.as_ref() {
+                (
+                    shake_conf.hold_duration_ms,
+                    shake_conf.threshold,
+                    shake_conf.off,
+                    shake_conf.grow,
+                    shake_conf.grow_speed,
+                    shake_conf.zoom_factor,
+                )
+            } else {
+                return;
+            };
+
+        if is_off {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let distance = if let Some(last_pos) = self.pointer_last_position {
+            let dx = pos.x - last_pos.x;
+            let dy = pos.y - last_pos.y;
+            (dx * dx + dy * dy).sqrt()
+        } else {
+            0.0
+        };
+
+        if let Some(last_time) = self.pointer_last_time {
+            let dt = now.duration_since(last_time).as_secs_f64();
+            // Decay energy: half-life of ~0.23 seconds
+            let decay = (-dt * 3.0).exp();
+            self.pointer_shake_energy *= decay;
+        }
+        self.pointer_shake_energy += distance;
+        self.pointer_last_time = Some(now);
+        self.pointer_last_position = Some(pos);
+
+        let effective_threshold = threshold.max(1.0);
+        let growing = self.pointer_shake_energy > effective_threshold;
+        if growing {
+            let already_enlarged = self
+                .pointer_enlarged_until
+                .map(|t| now < t)
+                .unwrap_or(false);
+
+            if grow && already_enlarged {
+                // Grow the cursor further while continuing to shake.
+                // Cap at 30x to stay within the PipeWire cursor bitmap (1024×1024).
+                self.pointer_grow_zoom = (self.pointer_grow_zoom + grow_speed).min(30.0);
+            } else {
+                // Reset to base zoom factor on initial trigger.
+                self.pointer_grow_zoom = zoom_factor;
+            }
+
+            self.pointer_enlarged_until =
+                Some(now + std::time::Duration::from_millis(hold_duration_ms as u64));
+        }
+
+        self.update_pointer_scale_animation(growing);
+    }
+
+    pub fn update_pointer_scale_animation(&mut self, growing: bool) {
+        let (zoom_factor, is_off) =
+            if let Some(shake_conf) = self.config.borrow().cursor.shake_to_enlarge.as_ref() {
+                (shake_conf.zoom_factor, shake_conf.off)
+            } else {
+                return;
+            };
+
+        if is_off {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let enlarged = self
+            .pointer_enlarged_until
+            .map(|t| now < t)
+            .unwrap_or(false);
+        let current_scale = self
+            .pointer_scale_animation
+            .as_ref()
+            .map(|a| a.value())
+            .unwrap_or(1.0);
+
+        let target_scale = if enlarged {
+            if growing {
+                self.pointer_grow_zoom.max(zoom_factor)
+            } else {
+                current_scale
+            }
+        } else {
+            1.0
+        };
+
+        if self.pointer_scale_animation.is_none()
+            || (self.pointer_scale_animation.as_ref().unwrap().to() - target_scale).abs() > 0.01
+        {
+            if target_scale != 1.0 || current_scale != 1.0 {
+                let anim_config = niri_config::Animation {
+                    off: false,
+                    kind: self.config.borrow().animations.cursor_enlarge.0.kind,
+                };
+                let anim = crate::animation::Animation::new(
+                    self.clock.clone(),
+                    current_scale,
+                    target_scale,
+                    0.0,
+                    anim_config,
+                );
+                self.pointer_scale_animation = Some(anim);
+                self.queue_redraw_all();
+            }
+        }
+    }
+
+    pub fn toggle_magnifier(&mut self) {
+        let (off, zoom_factor, anim_config) = {
+            let config = self.config.borrow();
+            (
+                config.magnifier.off,
+                config.magnifier.zoom_factor,
+                config.animations.magnifier.0,
+            )
+        };
+        if off {
+            return;
+        }
+        self.magnifier_active = !self.magnifier_active;
+
+        if self.magnifier_active {
+            *self.magnifier_center.borrow_mut() = None;
+        }
+
+        let from = self.magnifier_animation.as_ref().map_or(
+            if self.magnifier_active {
+                1.
+            } else {
+                self.magnifier_zoom
+            },
+            |a| a.value(),
+        );
+        let to = if self.magnifier_active {
+            self.magnifier_zoom = zoom_factor;
+            self.magnifier_zoom
+        } else {
+            1.
+        };
+
+        self.magnifier_animation = Some(crate::animation::Animation::new(
+            self.clock.clone(),
+            from,
+            to,
+            0.,
+            anim_config,
+        ));
+        self.queue_redraw_all();
+    }
+
+    pub fn update_magnifier_animation(&mut self) {
+        if let Some(anim) = &self.magnifier_animation {
+            if anim.is_done() {
+                self.magnifier_animation = None;
+            }
+        }
+        if let Some(anim) = &self.magnifier_center_anim {
+            if anim.is_done() {
+                self.magnifier_center_anim = None;
+            }
+        }
+    }
+
+    pub fn adjust_magnifier_zoom(&mut self, delta: f64) {
+        let off = {
+            let config = self.config.borrow();
+            config.magnifier.off
+        };
+        if off {
+            return;
+        }
+
+        if !self.magnifier_active {
+            self.magnifier_active = true;
+            self.magnifier_zoom = 1.0;
+            *self.magnifier_center.borrow_mut() = None;
+        }
+
+        self.magnifier_zoom = (self.magnifier_zoom + delta).clamp(1.0, 10.0);
+        if self.magnifier_zoom <= 1.0 {
+            self.magnifier_active = false;
+            self.magnifier_zoom = 1.0;
+        }
+
+        self.magnifier_animation = None;
+        self.queue_redraw_all();
+    }
+
+    pub fn can_drag_magnifier_center(&self) -> bool {
+        let config = self.config.borrow();
+        self.magnifier_active
+            && !self.magnifier_capture.get()
+            && !config.magnifier.off
+            && !config.magnifier.track_cursor
+            && self.magnifier_zoom > 1.0
+    }
+
+    pub fn begin_magnifier_center_drag(
+        &mut self,
+        location: Point<f64, Logical>,
+    ) -> Option<(Output, Point<i32, Physical>)> {
+        if !self.can_drag_magnifier_center() {
+            return None;
+        }
+
+        {
+            let borrowed = self.magnifier_center.borrow();
+            if let Some((weak, center)) = borrowed.as_ref() {
+                let output = weak.upgrade()?;
+                let output_geo = self.global_space.output_geometry(&output)?;
+                if output_geo.to_f64().contains(location) {
+                    // Grab the view where it is shown, even halfway through a move.
+                    let center = self.shown_magnifier_center(&output, *center);
+                    return Some((output, center));
+                }
+
+                return None;
+            }
+        }
+
+        let Some((output, pos_within_output)) = self.output_under(location) else {
+            return None;
+        };
+        let output = output.clone();
+        let output_scale = Scale::from(output.current_scale().fractional_scale());
+        let center = pos_within_output.to_physical_precise_round(output_scale);
+
+        *self.magnifier_center.borrow_mut() = Some((output.downgrade(), center));
+        Some((output, center))
+    }
+
+    pub fn set_magnifier_center(&mut self, output: &Output, center: Point<i32, Physical>) -> bool {
+        if !self.can_drag_magnifier_center() {
+            return false;
+        }
+
+        let center = self.clamp_magnifier_center_to_output(output, center);
+        *self.magnifier_center.borrow_mut() = Some((output.downgrade(), center));
+        self.magnifier_center_anim = None;
+        self.queue_redraw(&output);
+        true
+    }
+
+    /// Moves the locked magnifier center by `dx` and `dy` steps.
+    pub fn move_magnifier_center(&mut self, dx: f64, dy: f64) {
+        if !self.can_drag_magnifier_center() {
+            return;
+        }
+
+        let locked = self
+            .magnifier_center
+            .borrow()
+            .as_ref()
+            .and_then(|(weak, center)| Some((weak.upgrade()?, *center)));
+        let (output, center) = match locked {
+            Some(locked) => locked,
+            None => {
+                // The center locks on the first magnified frame. If that frame hasn't happened
+                // yet, start from the pointer, like compute_magnifier_params() would.
+                let pointer_pos = self
+                    .tablet_cursor_location
+                    .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                let Some((output, pos_within_output)) = self.output_under(pointer_pos) else {
+                    return;
+                };
+                let output_scale = Scale::from(output.current_scale().fractional_scale());
+                let center = pos_within_output.to_physical_precise_round(output_scale);
+                (output.clone(), center)
+            }
+        };
+
+        let size = output.current_mode().unwrap().size;
+        let size = output.current_transform().transform_size(size);
+        let zoom = self.magnifier_zoom;
+        let step = self.config.borrow().magnifier.move_step;
+        let delta = Point::<f64, Physical>::from((
+            dx * magnifier_move_step(size.w, zoom, step),
+            dy * magnifier_move_step(size.h, zoom, step),
+        ));
+        let target = (center.to_f64() + delta).to_i32_round();
+        let target = self.clamp_magnifier_center_to_output(&output, target);
+
+        // Continue from where the view is shown, at its current speed, so that the steps of a
+        // held key chain into one smooth movement.
+        let (from, velocity) = match &self.magnifier_center_anim {
+            Some(anim) if anim.heads_to(&output, center) => (anim.value(), anim.current_velocity()),
+            _ => (center.to_f64(), Point::default()),
+        };
+        let config = self.config.borrow().animations.magnifier.0;
+        let anim = |from, to: i32, velocity| {
+            Animation::new(self.clock.clone(), from, f64::from(to), velocity, config)
+        };
+        self.magnifier_center_anim = Some(MagnifierCenterAnim {
+            output: output.downgrade(),
+            x: anim(from.x, target.x, velocity.x),
+            y: anim(from.y, target.y, velocity.y),
+        });
+
+        *self.magnifier_center.borrow_mut() = Some((output.downgrade(), target));
+        self.queue_redraw(&output);
+    }
+
+    /// Returns where the magnifier shows the locked `center` of `output`, which differs from it
+    /// while the center is moving.
+    fn shown_magnifier_center(
+        &self,
+        output: &Output,
+        center: Point<i32, Physical>,
+    ) -> Point<i32, Physical> {
+        let shown = match &self.magnifier_center_anim {
+            Some(anim) if anim.heads_to(output, center) => anim.value().to_i32_round(),
+            _ => center,
+        };
+        self.clamp_magnifier_center_to_output(output, shown)
+    }
+
+    fn clamp_magnifier_center_to_output(
+        &self,
+        output: &Output,
+        center: Point<i32, Physical>,
+    ) -> Point<i32, Physical> {
+        let size = output.current_mode().unwrap().size;
+        let size = output.current_transform().transform_size(size);
+        let max_x = (size.w - 1).max(0);
+        let max_y = (size.h - 1).max(0);
+
+        Point::from((center.x.clamp(0, max_x), center.y.clamp(0, max_y)))
+    }
+
+    fn reconcile_magnifier_config(
+        &mut self,
+        was_off: bool,
+        was_zoom: f64,
+        now_off: bool,
+        now_zoom: f64,
+    ) {
+        if !was_off && now_off && self.magnifier_active {
+            self.magnifier_active = false;
+            self.magnifier_animation = None;
+            *self.magnifier_center.borrow_mut() = None;
+            self.queue_redraw_all();
+        }
+
+        if self.magnifier_active && (now_zoom - was_zoom).abs() > f64::EPSILON {
+            self.magnifier_zoom = now_zoom;
+            self.magnifier_animation = None;
+            self.queue_redraw_all();
+        }
+    }
+
+    fn reconcile_shake_config(&mut self, was_off: bool, now_off: bool) {
+        if !was_off && now_off {
+            self.pointer_scale_animation = None;
+            self.pointer_enlarged_until = None;
+            self.pointer_grow_zoom = 1.0;
+            self.pointer_shake_energy = 0.0;
+            self.queue_redraw_all();
+        }
+    }
+
     /// Schedules an immediate redraw on all outputs if one is not already scheduled.
     pub fn queue_redraw_all(&mut self) {
         for state in self.output_state.values_mut() {
@@ -4110,8 +5780,18 @@ impl Niri {
 
     /// Schedules an immediate redraw if one is not already scheduled.
     pub fn queue_redraw(&mut self, output: &Output) {
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let picker_host = self.screen_cast_picker.preview_host_for_source(output);
+
         let state = self.output_state.get_mut(output).unwrap();
         state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
+
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if let Some(host) = picker_host {
+            if let Some(state) = self.output_state.get_mut(&host) {
+                state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
+            }
+        }
     }
 
     pub fn redraw_queued_outputs(&mut self, backend: &mut Backend) {
@@ -4126,6 +5806,11 @@ impl Niri {
             trace!("redrawing output");
             let output = output.clone();
             self.redraw(backend, &output);
+
+            let state = self.output_state.get(&output).unwrap();
+            if matches!(state.redraw_state, RedrawState::Idle) {
+                self.signal_fifo(&output);
+            }
         }
     }
 
@@ -4140,16 +5825,102 @@ impl Niri {
         let output_pos = self.global_space.output_geometry(output).unwrap().loc;
 
         // Check whether we need to draw the tablet cursor or the regular cursor.
-        let pointer_pos = self
+        let mut pointer_pos = self
             .tablet_cursor_location
             .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-        let pointer_pos = pointer_pos - output_pos.to_f64();
+        pointer_pos -= output_pos.to_f64();
+
+        // When magnifier's scale-cursor is disabled, pre-transform the cursor
+        // position so it moves correctly without RescaleElement wrapping.
+        // Skip when capturing screenshots (magnifier is disabled for the capture).
+        {
+            let config = self.config.borrow();
+            if !config.magnifier.scale_cursor
+                && !config.magnifier.off
+                && !self.magnifier_capture.get()
+            {
+                drop(config);
+                if let Some((zoom, center)) = self.compute_magnifier_params(output) {
+                    let output_scale_f = output_scale.fractional_scale();
+                    let center_logical = center.to_f64().to_logical(output_scale_f);
+                    let cx = center_logical.x;
+                    let cy = center_logical.y;
+                    pointer_pos.x = cx + (pointer_pos.x - cx) * zoom;
+                    pointer_pos.y = cy + (pointer_pos.y - cy) * zoom;
+                }
+            }
+        }
 
         // Get the render cursor to draw.
-        let cursor_scale = output_scale.integer_scale();
+        // When shake-to-enlarge is active, load a larger cursor image so the
+        // RescaleRenderElement downscales rather than upscales, avoiding blur.
+        let output_int_scale = output_scale.integer_scale();
+        let load_mult = self
+            .pointer_scale_animation
+            .as_ref()
+            .map(|a| a.value())
+            .filter(|z| (*z - 1.0).abs() > 0.001)
+            .map(|z| (z.ceil() as i32).max(1))
+            .unwrap_or(1);
+        let cursor_scale = (output_int_scale * load_mult).max(1);
         let render_cursor = self.cursor_manager.get_render_cursor(cursor_scale);
 
+        // Pre-extract frame widths for adjusted zoom calculation.
+        let enlarged_frame_width = if let RenderCursor::Named { cursor: ref c, .. } = &render_cursor
+        {
+            let (_, f) = c.frame(0);
+            Some(f.width)
+        } else {
+            None
+        };
+        let normal_frame_width = if load_mult > 1 {
+            match self.cursor_manager.get_render_cursor(output_int_scale) {
+                RenderCursor::Named { cursor, .. } => {
+                    let (_, f) = cursor.frame(0);
+                    Some(f.width)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let output_scale = Scale::from(output.current_scale().fractional_scale());
+
+        let mut push = |elem: PointerRenderElements<R>| {
+            if let Some(anim) = &self.pointer_scale_animation {
+                let zoom = anim.value();
+                if (zoom - 1.0).abs() > 0.001 {
+                    let pivot = pointer_pos.to_physical_precise_round(output_scale);
+                    match elem {
+                        PointerRenderElements::Wayland(e) => {
+                            push(PointerRenderElements::RescaledWayland(
+                                RescaleRenderElement::from_element(e, pivot, zoom),
+                            ));
+                            return;
+                        }
+                        PointerRenderElements::NamedPointer(e) => {
+                            // Compute adjusted zoom based on actual loaded image sizes.
+                            let adjusted_zoom = match (enlarged_frame_width, normal_frame_width) {
+                                (Some(ew), Some(nw)) if nw > 0 => zoom * nw as f64 / ew as f64,
+                                _ => zoom / load_mult as f64,
+                            }
+                            .max(0.0);
+                            if (adjusted_zoom - 1.0).abs() > 0.001 && adjusted_zoom > 0.01 {
+                                push(PointerRenderElements::RescaledNamedPointer(
+                                    RescaleRenderElement::from_element(e, pivot, adjusted_zoom),
+                                ));
+                            } else {
+                                push(PointerRenderElements::NamedPointer(e));
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            push(elem);
+        };
 
         match render_cursor {
             RenderCursor::Hidden => (),
@@ -4173,11 +5944,24 @@ impl Niri {
                 cursor,
             } => {
                 let (idx, frame) = cursor.frame(self.start_time.elapsed().as_millis() as u32);
-                let hotspot = XCursor::hotspot(frame).to_logical(scale);
+                let hotspot = XCursor::hotspot(frame).to_logical(output_int_scale);
                 let pointer_pos =
                     (pointer_pos - hotspot.to_f64()).to_physical_precise_round(output_scale);
 
-                let texture = self.cursor_texture_cache.get(icon, scale, &cursor, idx);
+                // When shake-to-enlarge loads a larger cursor, build the texture
+                // directly with output_int_scale to preserve the full pixel data.
+                let texture = if load_mult > 1 {
+                    MemoryRenderBuffer::from_slice(
+                        &frame.pixels_rgba,
+                        Fourcc::Argb8888,
+                        (frame.width as i32, frame.height as i32),
+                        output_int_scale,
+                        Transform::Normal,
+                        None,
+                    )
+                } else {
+                    self.cursor_texture_cache.get(icon, scale, &cursor, idx)
+                };
                 match MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     pointer_pos,
@@ -4479,6 +6263,8 @@ impl Niri {
             // layer-shell, the layout will briefly draw as active, despite never having focus.
             KeyboardFocus::LockScreen { .. } => true,
             KeyboardFocus::ScreenshotUi => true,
+            #[cfg(feature = "xdp-gnome-screencast")]
+            KeyboardFocus::ScreenCastPicker => true,
             KeyboardFocus::ExitConfirmDialog => true,
             KeyboardFocus::Overview => true,
             KeyboardFocus::Mru => true,
@@ -4546,13 +6332,17 @@ impl Niri {
         }
     }
 
-    pub fn advance_animations(&mut self) {
+    pub fn advance_animations(&mut self) -> bool {
         let _span = tracy_client::span!("Niri::advance_animations");
 
         self.layout.advance_animations();
         self.config_error_notification.advance_animations();
         self.exit_confirm_dialog.advance_animations();
         self.screenshot_ui.advance_animations();
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let screen_cast_picker_closed = self.screen_cast_picker.advance_animations();
+        #[cfg(not(feature = "xdp-gnome-screencast"))]
+        let screen_cast_picker_closed = false;
         self.window_mru_ui.advance_animations();
 
         for state in self.output_state.values_mut() {
@@ -4562,6 +6352,7 @@ impl Niri {
                 }
             }
         }
+        screen_cast_picker_closed
     }
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
@@ -4653,7 +6444,138 @@ impl Niri {
         self.render(ctx, output, include_pointer, &mut |elem| {
             elements.push(elem)
         });
+
         elements
+    }
+
+    #[cfg(feature = "xdp-gnome-screencast")]
+    fn refresh_screen_cast_picker_display_previews(
+        &self,
+        renderer: &mut GlesRenderer,
+        host_output: &Output,
+    ) {
+        if !self.screen_cast_picker.is_host_output(host_output) {
+            return;
+        }
+        if !self.screen_cast_picker.display_previews_due(host_output) {
+            return;
+        }
+        let requests = self
+            .screen_cast_picker
+            .display_preview_requests(host_output);
+        self.screen_cast_picker
+            .begin_display_preview_frame(&requests);
+        if requests.is_empty() {
+            return;
+        }
+
+        for request in requests {
+            let Some(source) = self
+                .global_space
+                .outputs()
+                .find(|output| output.name() == request.name)
+                .cloned()
+            else {
+                continue;
+            };
+            let source_size = output_size(&source);
+            // Layout elements carry physical locations from their source output.
+            let source_scale = Scale::from(source.current_scale().fractional_scale());
+            if source_size.w <= 0. || source_size.h <= 0. {
+                continue;
+            }
+            let factor = f64::min(
+                request.size.w / source_size.w,
+                request.size.h / source_size.h,
+            )
+            .clamp(0.001, 1.);
+            let preview_bounds =
+                screen_cast_picker_preview_bounds(source_size, factor, source_scale);
+            let ctx = RenderCtx {
+                renderer: &mut *renderer,
+                target: RenderTarget::Screencast,
+                intent: RenderIntent::PickerPreview,
+                xray: None,
+            };
+            let elements = self.render_to_vec(ctx, &source, false);
+            let elements: Vec<_> = elements
+                .into_iter()
+                .map(|element| {
+                    RescaleRenderElement::from_element(element, Point::new(0, 0), factor)
+                })
+                .collect();
+            self.screen_cast_picker.update_display_preview(
+                &request.name,
+                renderer,
+                source_scale,
+                preview_bounds,
+                &elements,
+            );
+        }
+        self.screen_cast_picker.mark_display_previews_refreshed();
+    }
+
+    pub fn compute_magnifier_params(&self, output: &Output) -> Option<(f64, Point<i32, Physical>)> {
+        if self.magnifier_capture.get() {
+            return None;
+        }
+        let config = self.config.borrow();
+        if config.magnifier.off {
+            return None;
+        }
+        let magnifier_anim_ongoing = self
+            .magnifier_animation
+            .as_ref()
+            .map(|a| !a.is_done())
+            .unwrap_or(false);
+        if !self.magnifier_active && !magnifier_anim_ongoing {
+            return None;
+        }
+        let zoom = if magnifier_anim_ongoing {
+            self.magnifier_animation.as_ref().unwrap().value()
+        } else {
+            self.magnifier_zoom
+        };
+        if (zoom - 1.0).abs() <= 0.001 {
+            return None;
+        }
+        let pointer_pos = self
+            .tablet_cursor_location
+            .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+        let output_geo = self.global_space.output_geometry(output).unwrap();
+
+        if config.magnifier.track_cursor {
+            if !output_geo.to_f64().contains(pointer_pos) {
+                return None;
+            }
+            let pointer_on_output = pointer_pos - output_geo.loc.to_f64();
+            let output_scale = Scale::from(output.current_scale().fractional_scale());
+            let pivot = pointer_on_output.to_physical_precise_round(output_scale);
+            Some((zoom, pivot))
+        } else {
+            // Fixed center: capture on first activation, then lock per-output.
+            let center = {
+                let borrowed = self.magnifier_center.borrow();
+                borrowed.as_ref().and_then(|(weak, c)| {
+                    if weak.upgrade().as_ref() == Some(output) {
+                        Some(*c)
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(c) = center {
+                return Some((zoom, self.shown_magnifier_center(output, c)));
+            }
+            if !output_geo.to_f64().contains(pointer_pos) {
+                return None;
+            }
+            let pointer_on_output = pointer_pos - output_geo.loc.to_f64();
+            let output_scale = Scale::from(output.current_scale().fractional_scale());
+            let c = pointer_on_output.to_physical_precise_round(output_scale);
+            *self.magnifier_center.borrow_mut() = Some((output.downgrade(), c));
+            Some((zoom, c))
+        }
     }
 
     pub fn render<R: NiriRenderer>(
@@ -4665,13 +6587,22 @@ impl Niri {
     ) {
         let _span = tracy_client::span!("Niri::render");
 
-        if ctx.target == RenderTarget::Output {
+        let rendering_output = ctx.target == RenderTarget::Output;
+        if rendering_output {
             if let Some(preview) = self.config.borrow().debug.preview_render {
                 ctx.target = match preview {
                     PreviewRender::Screencast => RenderTarget::Screencast,
                     PreviewRender::ScreenCapture => RenderTarget::ScreenCapture,
                 };
             }
+        }
+
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if rendering_output && self.screen_cast_picker.is_visible() {
+            self.refresh_screen_cast_picker_display_previews(
+                ctx.renderer.as_gles_renderer(),
+                output,
+            );
         }
 
         self.fill_xray_elements(ctx.as_gles(), output);
@@ -4681,7 +6612,31 @@ impl Niri {
         let state = self.output_state.get(output).unwrap();
         ctx.xray = Some(&state.xray);
 
-        self.render_inner(ctx, output, include_pointer, push);
+        if let Some((zoom, pivot)) = self.compute_magnifier_params(output) {
+            let scale_cursor = self.config.borrow().magnifier.scale_cursor;
+            let mut magnifier_push = |elem| {
+                if !scale_cursor {
+                    match &elem {
+                        OutputRenderElements::Pointer(_) => {
+                            push(elem);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                let rescaled = RescaleRenderElement::from_element(Box::new(elem), pivot, zoom);
+                push(OutputRenderElements::Magnified(rescaled))
+            };
+            self.render_inner(
+                ctx,
+                output,
+                include_pointer,
+                rendering_output,
+                &mut magnifier_push,
+            );
+        } else {
+            self.render_inner(ctx, output, include_pointer, rendering_output, push);
+        }
 
         self.clear_xray_elements(output);
     }
@@ -4691,6 +6646,7 @@ impl Niri {
         mut ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
+        _rendering_output: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     ) {
         let state = self.output_state.get(output).unwrap();
@@ -4763,15 +6719,77 @@ impl Niri {
         )
         .into();
 
+        // Draw the color picker magnifier on top, unless capturing the screen for it.
+        if self.pick_color_ui.is_open() && !self.pick_color_capture.get() {
+            self.pick_color_ui.render_output(output, &mut |elem| {
+                push(OutputRenderElements::Texture(elem))
+            });
+        }
+
         // If the screenshot UI is open, draw it.
         if self.screenshot_ui.is_open() {
-            self.screenshot_ui
-                .render_output(output, ctx.target, &mut |elem| push(elem.into()));
+            if self.compute_magnifier_params(output).is_some() {
+                // When the magnifier is active, render all screenshot UI elements
+                // to a single texture first. This avoids per-element rounding gaps
+                // that RescaleRenderElement::geometry() creates with to_i32_round().
+                let size = output.current_mode().unwrap().size;
+                let transform = output.current_transform();
+                let size = transform.transform_size(size);
+                let scale = Scale::from(output.current_scale().fractional_scale());
+
+                let mut ui_elements: Vec<ScreenshotUiRenderElement> = Vec::new();
+                self.screenshot_ui
+                    .render_output(output, ctx.target, &mut |elem| ui_elements.push(elem));
+
+                let renderer = ctx.renderer.as_gles_renderer();
+
+                let res = render_to_texture(
+                    renderer,
+                    size,
+                    scale,
+                    transform,
+                    Fourcc::Abgr8888,
+                    ui_elements.iter().rev(),
+                );
+
+                if let Ok((texture, _sync)) = res {
+                    let tex_buffer = TextureBuffer::from_texture(
+                        renderer,
+                        texture,
+                        scale,
+                        transform,
+                        Vec::new(),
+                    );
+                    let tex_elem =
+                        PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                            tex_buffer,
+                            (0., 0.),
+                            1.,
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ));
+                    push(OutputRenderElements::Texture(tex_elem));
+                }
+            } else {
+                self.screenshot_ui
+                    .render_output(output, ctx.target, &mut |elem| push(elem.into()));
+            }
 
             // Add the backdrop for outputs that were connected while the screenshot UI was open.
             push(backdrop);
 
             return;
+        }
+
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if self.screen_cast_picker.is_visible()
+            && should_render_screen_cast_picker(_rendering_output, ctx.intent)
+        {
+            // Render the picker on top of the live output contents, so that the background
+            // keeps updating while the picker is open.
+            self.screen_cast_picker
+                .render(self, output, ctx.r(), &mut |elem| push(elem.into()));
         }
 
         // Draw the hotkey overlay on top.
@@ -5083,16 +7101,56 @@ impl Niri {
         // Freeze the clock at the target time.
         self.clock.set_unadjusted(target_presentation_time);
 
-        self.update_render_elements(Some(output));
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let update_all_outputs = self.screen_cast_picker.is_host_output(output)
+            && !self
+                .screen_cast_picker
+                .display_preview_requests(output)
+                .is_empty();
+        #[cfg(not(feature = "xdp-gnome-screencast"))]
+        let update_all_outputs = false;
+
+        if update_all_outputs {
+            self.update_render_elements(None);
+        } else {
+            self.update_render_elements(Some(output));
+        }
 
         let mut res = RenderResult::Skipped;
         if self.monitors_active {
+            // Check if shake-to-enlarge hold duration expired and update animation.
+            self.update_pointer_scale_animation(false);
+            self.update_magnifier_animation();
+            let pointer_anim_ongoing = self
+                .pointer_scale_animation
+                .as_ref()
+                .map(|a| !a.is_done())
+                .unwrap_or(false)
+                || self
+                    .pointer_enlarged_until
+                    .map(|t| std::time::Instant::now() < t)
+                    .unwrap_or(false);
+            let magnifier_anim_ongoing = self
+                .magnifier_animation
+                .as_ref()
+                .map(|a| !a.is_done())
+                .unwrap_or(false);
+            let magnifier_center_anim_ongoing = self
+                .magnifier_center_anim
+                .as_ref()
+                .is_some_and(|a| a.output.upgrade().as_ref() == Some(output) && !a.is_done());
+
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
                 self.config_error_notification.are_animations_ongoing();
             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();
             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
+            #[cfg(feature = "xdp-gnome-screencast")]
+            {
+                state.unfinished_animations_remain |=
+                    self.screen_cast_picker.are_animations_ongoing(output);
+            }
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= state.screen_transition.is_some();
 
@@ -5100,6 +7158,10 @@ impl Niri {
             state.unfinished_animations_remain |= self
                 .cursor_manager
                 .is_current_cursor_animated(output.current_scale().integer_scale());
+
+            state.unfinished_animations_remain |= pointer_anim_ongoing;
+            state.unfinished_animations_remain |= magnifier_anim_ongoing;
+            state.unfinished_animations_remain |= magnifier_center_anim_ongoing;
 
             // Also check layer surfaces.
             if !state.unfinished_animations_remain {
@@ -5244,6 +7306,110 @@ impl Niri {
             });
 
         backend.set_output_on_demand_vrr(self, output, current);
+    }
+
+    pub fn output_allows_tearing(&self, output: &Output) -> bool {
+        self.layout.windows_for_output(output).any(|mapped| {
+            let mut visible = false;
+            let mut hint = false;
+            let mut content_type = ContentType::None;
+
+            mapped.window.with_surfaces(|surface, states| {
+                if surface_primary_scanout_output(surface, states).as_ref() != Some(output) {
+                    return;
+                }
+
+                visible = true;
+
+                let mut state = states
+                    .cached_state
+                    .get::<TearingControlSurfaceCachedState>();
+                hint |= *state.current().presentation_hint() == PresentationHint::Async;
+                drop(state);
+
+                let declared = *states
+                    .cached_state
+                    .get::<ContentTypeSurfaceCachedState>()
+                    .current()
+                    .content_type();
+                // Keep the most specific declaration: any surface that says game or video is what
+                // we are after, so prefer those over None/Photo.
+                if content_type == ContentType::None {
+                    content_type = declared;
+                }
+            });
+
+            let rules = mapped.rules();
+            let allowed = tearing_allowed(
+                rules.allow_tearing,
+                rules.allow_tearing_content_type.as_deref(),
+                hint,
+                content_type,
+            );
+
+            if tracing::enabled!(tracing::Level::TRACE) {
+                use crate::utils::with_toplevel_role;
+                let app_id = with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone());
+                // `none` is the protocol's "nothing declared" default, not a content category, so
+                // spell it out in the log instead of printing a bare `None`.
+                let declared = match content_type {
+                    ContentType::None => "none (client declared no content type)",
+                    ContentType::Game => "game",
+                    ContentType::Video => "video",
+                    ContentType::Photo => "photo",
+                    _ => "unknown",
+                };
+                tracing::trace!(
+                    window = mapped.id().get(),
+                    ?app_id,
+                    visible,
+                    rule = ?rules.allow_tearing,
+                    content_types = ?rules.allow_tearing_content_type,
+                    declared_content_type = declared,
+                    client_hint = hint,
+                    allowed,
+                    "tearing decision"
+                );
+            }
+
+            allowed && visible
+        })
+    }
+
+    /// Content type a window declared, and whether its rules allow tearing.
+    ///
+    /// The result ignores whether the window is currently visible on the output, which is the extra
+    /// condition [`Self::output_allows_tearing`] applies.
+    pub fn window_tearing_info(&self, mapped: &Mapped) -> (Option<niri_ipc::ContentType>, bool) {
+        let mut hint = false;
+        let mut content_type = ContentType::None;
+
+        mapped.window.with_surfaces(|_surface, states| {
+            let mut state = states
+                .cached_state
+                .get::<TearingControlSurfaceCachedState>();
+            hint |= *state.current().presentation_hint() == PresentationHint::Async;
+            drop(state);
+
+            let declared = *states
+                .cached_state
+                .get::<ContentTypeSurfaceCachedState>()
+                .current()
+                .content_type();
+            if content_type == ContentType::None {
+                content_type = declared;
+            }
+        });
+
+        let rules = mapped.rules();
+        let allowed = tearing_allowed(
+            rules.allow_tearing,
+            rules.allow_tearing_content_type.as_deref(),
+            hint,
+            content_type,
+        );
+
+        (ipc_content_type(content_type), allowed)
     }
 
     pub fn update_primary_scanout_output(
@@ -5433,6 +7599,45 @@ impl Niri {
         }
     }
 
+    pub fn add_syncobj_state(&mut self, device_fd: smithay::backend::drm::DrmDeviceFd) {
+        let disable_syncobj = env::var_os("NIRI_DISABLE_SYNCOBJ").is_some();
+        if !supports_syncobj_eventfd(&device_fd) || disable_syncobj {
+            self.remove_syncobj_state();
+            return;
+        }
+
+        if let Some(state) = self.syncobj_state.as_mut() {
+            state.update_device(device_fd);
+        } else {
+            self.syncobj_state = Some(DrmSyncobjState::new::<State>(
+                &self.display_handle,
+                device_fd,
+            ))
+        }
+        debug!("explicit sync enabled for primary gpu")
+    }
+
+    pub fn remove_syncobj_state(&mut self) {
+        let Some(state) = self.syncobj_state.take() else {
+            return;
+        };
+
+        let global = state.into_global();
+        self.display_handle.disable_global::<State>(global.clone());
+        self.event_loop
+            .insert_source(
+                Timer::from_duration(Duration::from_secs(10)),
+                move |_, _, state| {
+                    state
+                        .niri
+                        .display_handle
+                        .remove_global::<State>(global.clone());
+                    TimeoutAction::Drop
+                },
+            )
+            .unwrap();
+    }
+
     pub fn send_dmabuf_feedbacks(
         &self,
         output: &Output,
@@ -5454,6 +7659,7 @@ impl Niri {
                         render_element_states,
                         &feedback.render,
                         &feedback.scanout,
+                        &feedback.r#async,
                     )
                 },
             );
@@ -5469,6 +7675,7 @@ impl Niri {
                         render_element_states,
                         &feedback.render,
                         &feedback.scanout,
+                        &feedback.r#async,
                     )
                 },
             );
@@ -5485,6 +7692,7 @@ impl Niri {
                         render_element_states,
                         &feedback.render,
                         &feedback.scanout,
+                        &feedback.r#async,
                     )
                 },
             );
@@ -5501,6 +7709,7 @@ impl Niri {
                         render_element_states,
                         &feedback.render,
                         &feedback.scanout,
+                        &feedback.r#async,
                     )
                 },
             );
@@ -5517,6 +7726,7 @@ impl Niri {
                         render_element_states,
                         &feedback.render,
                         &feedback.scanout,
+                        &feedback.r#async,
                     )
                 },
             );
@@ -5530,6 +7740,7 @@ impl Niri {
 
         let _span = tracy_client::span!("Niri::send_frame_callbacks");
 
+        let mindbg = std::env::var_os("NIRI_MINDBG").is_some();
         let state = self.output_state.get(output).unwrap();
         let sequence = state.frame_callback_sequence;
 
@@ -5549,6 +7760,14 @@ impl Niri {
         // workaround will stop working, so we'll need to do it properly then (by keeping the frame
         // callback timer going through some other means).
         let ignore_primary_output = Cell::new(false);
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let picker_display_preview = self.screen_cast_picker.is_display_previewing_host(output);
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let picker_window_previews: HashSet<_> = self
+            .screen_cast_picker
+            .host_window_preview_ids(output)
+            .into_iter()
+            .collect();
 
         let should_send = |surface: &WlSurface, states: &SurfaceData| {
             // Do the standard primary scanout output check. For pointer surfaces it deduplicates
@@ -5587,11 +7806,53 @@ impl Niri {
 
         let frame_callback_time = get_monotonic_time();
 
+        // While the grid overview is open, minimized windows show live previews in it, so they
+        // need frame callbacks despite not being part of any output's scanout.
+        let minimized_grid_previews = self.layout.is_grid_overview_open_on(output);
+
         for mapped in self.layout.windows_for_output_mut(output) {
             if mapped.is_window_cast_target() {
                 ignore_primary_output.set(true);
             }
 
+            #[cfg(feature = "xdp-gnome-screencast")]
+            if picker_display_preview || picker_window_previews.contains(&mapped.id().get()) {
+                // Surfaces visible behind the picker keep their regular frame callbacks, while
+                // ones visible only in previews are throttled to the preview interval.
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    Some(PREVIEW_FRAME_INTERVAL),
+                    should_send,
+                );
+                continue;
+            }
+            // Fast-track callbacks also flow to minimized windows that haven't been suspended
+            // yet: their client may still be responding to the minimize configure (e.g. the
+            // default-size resize when expelling out of a multi-window column), and
+            // callback-paced clients like Chromium won't commit it on idle throttling alone.
+            // The commit suspends them (suspend_minimized_hidden), dropping them back to the
+            // regular throttling.
+            if mapped.is_minimized() && (minimized_grid_previews || !mapped.is_suspended()) {
+                if mindbg {
+                    debug!(
+                        target: "niri::mindbg",
+                        "frame->min id={:?} out={} suspended={} grid_preview={} size={:?}",
+                        mapped.id(),
+                        output.name(),
+                        mapped.is_suspended(),
+                        minimized_grid_previews,
+                        mapped.window.geometry().size,
+                    );
+                }
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    Some(PREVIEW_FRAME_INTERVAL),
+                    |_, _| None,
+                );
+                continue;
+            }
             mapped.send_frame(
                 output,
                 frame_callback_time,
@@ -5603,6 +7864,16 @@ impl Niri {
         }
 
         for surface in layer_map_for_output(output).layers() {
+            #[cfg(feature = "xdp-gnome-screencast")]
+            if picker_display_preview {
+                surface.send_frame(
+                    output,
+                    frame_callback_time,
+                    Some(PREVIEW_FRAME_INTERVAL),
+                    should_send,
+                );
+                continue;
+            }
             surface.send_frame(
                 output,
                 frame_callback_time,
@@ -5798,6 +8069,45 @@ impl Niri {
         feedback
     }
 
+    #[allow(clippy::type_complexity)]
+    fn render_for_screencopy_internal(
+        renderer: &mut GlesRenderer,
+        damage_tracker: &mut OutputDamageTracker,
+        elements: &[impl RenderElement<GlesRenderer>],
+        states: RenderElementStates,
+        screencopy: &Screencopy,
+        reference_luminance: f64,
+    ) -> anyhow::Result<SyncPoint> {
+        let sync = match screencopy.buffer() {
+            CaptureBuffer::Dma(dmabuf) => {
+                let sync = render_to_dmabuf(
+                    renderer,
+                    damage_tracker,
+                    dmabuf.clone(),
+                    elements,
+                    states,
+                    reference_luminance,
+                )
+                .context("error rendering to screencopy dmabuf")?;
+                sync
+            }
+            CaptureBuffer::Shm(wl_buffer) => {
+                render_to_shm(
+                    renderer,
+                    damage_tracker,
+                    wl_buffer,
+                    elements,
+                    states,
+                    reference_luminance,
+                )
+                .context("error rendering to screencopy shm buffer")?;
+                SyncPoint::signaled()
+            }
+        };
+
+        Ok(sync)
+    }
+
     pub fn render_for_screencopy_with_damage(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -5814,6 +8124,7 @@ impl Niri {
                     let ctx = RenderCtx {
                         renderer,
                         target: RenderTarget::ScreenCapture,
+                        intent: RenderIntent::Normal,
                         xray: None,
                     };
                     let offset = screencopy.region_loc().upscale(-1);
@@ -5844,10 +8155,16 @@ impl Niri {
 
                         screencopy.damage(damages);
 
-                        let render_result =
-                            screencopy
-                                .buffer()
-                                .render(renderer, damage_tracker, &elements, states);
+                        let reference_luminance =
+                            self.output_capture_reference_luminance(screencopy.output());
+                        let render_result = Self::render_for_screencopy_internal(
+                            renderer,
+                            damage_tracker,
+                            &elements,
+                            states,
+                            screencopy,
+                            reference_luminance,
+                        );
                         match render_result {
                             Ok(sync) => {
                                 queue.pop().submit_after_sync(false, sync, &self.event_loop);
@@ -5889,6 +8206,7 @@ impl Niri {
         let ctx = RenderCtx {
             renderer,
             target: RenderTarget::ScreenCapture,
+            intent: RenderIntent::Normal,
             xray: None,
         };
         let offset = screencopy.region_loc().upscale(-1);
@@ -5898,6 +8216,7 @@ impl Niri {
             elements.push(elem);
         });
 
+        let reference_luminance = self.output_capture_reference_luminance(output);
         let Some(damage_tracker) = self.screencopy_state.damage_tracker(manager) else {
             error!("screencopy queue must not be deleted as long as frames exist");
             bail!("screencopy queue missing");
@@ -5905,9 +8224,14 @@ impl Niri {
 
         let (_damages, states) =
             Self::damage_screencopy_internal(output, &elements, damage_tracker, &screencopy);
-        let res = screencopy
-            .buffer()
-            .render(renderer, damage_tracker, &elements, states);
+        let res = Self::render_for_screencopy_internal(
+            renderer,
+            damage_tracker,
+            &elements,
+            states,
+            &screencopy,
+            reference_luminance,
+        );
         let res = res.map(|sync| screencopy.submit_after_sync(false, sync, &self.event_loop));
 
         if res.is_err() {
@@ -6005,6 +8329,7 @@ impl Niri {
                 let ctx = RenderCtx {
                     renderer: &mut *renderer,
                     target: RenderTarget::ScreenCapture,
+                    intent: RenderIntent::Normal,
                     xray: None,
                 };
                 let mut elements = Vec::new();
@@ -6105,6 +8430,7 @@ impl Niri {
                 renderer,
                 // Consistent with outputs and wlr-screencopy.
                 target: RenderTarget::ScreenCapture,
+                intent: RenderIntent::Normal,
                 xray: None,
             };
             mapped.render_for_screen_cast(ctx, scale, &mut |elem| {
@@ -6225,7 +8551,14 @@ impl Niri {
                 continue;
             }
 
-            let res = render_to_shm(renderer, &mut s.damage_tracker, &buffer, elements, states);
+            let res = render_to_shm(
+                renderer,
+                &mut s.damage_tracker,
+                &buffer,
+                elements,
+                states,
+                self.output_capture_reference_luminance(output),
+            );
             match res {
                 Ok(()) => {
                     s.session
@@ -6462,6 +8795,50 @@ impl Niri {
         self.queue_redraw_all();
     }
 
+    /// Renders a square region of the output, without the color picker magnifier, and downloads
+    /// its RGBA8 pixels.
+    pub fn capture_pick_color_region(
+        &self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        origin: Point<i32, Physical>,
+        side: i32,
+    ) -> Option<Vec<u8>> {
+        use smithay::backend::renderer::ExportMem as _;
+
+        let _span = tracy_client::span!("Niri::capture_pick_color_region");
+
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let ctx = RenderCtx {
+            renderer,
+            // This is an interactive operation so we can render without blocking out.
+            target: RenderTarget::Output,
+            intent: RenderIntent::Normal,
+            xray: None,
+        };
+        let was_capture = self.pick_color_capture.replace(true);
+        let elements = self.render_to_vec(ctx, output, false);
+        self.pick_color_capture.set(was_capture);
+
+        let mapping = render_and_download(
+            renderer,
+            Size::from((side, side)),
+            scale,
+            Transform::Normal,
+            Fourcc::Abgr8888,
+            elements.iter().rev().map(|elem| {
+                RelocateRenderElement::from_element(elem, origin.upscale(-1), Relocate::Relative)
+            }),
+        )
+        .map_err(|err| warn!("error capturing screen for color picking: {err:?}"))
+        .ok()?;
+        let pixels = renderer
+            .map_texture(&mapping)
+            .map_err(|err| warn!("error mapping color picker capture: {err:?}"))
+            .ok()?;
+        Some(pixels.to_vec())
+    }
+
     pub fn capture_screenshots<'a>(
         &'a self,
         renderer: &'a mut GlesRenderer,
@@ -6481,8 +8858,10 @@ impl Niri {
                 let ctx = RenderCtx {
                     renderer,
                     target,
+                    intent: RenderIntent::Normal,
                     xray: None,
                 };
+                let was_magnifier_capture = self.magnifier_capture.replace(true);
                 let elements = self.render_to_vec(ctx, &output, false);
                 let elements = elements.iter().rev();
 
@@ -6507,6 +8886,8 @@ impl Niri {
                 if self.pointer_visibility != PointerVisibility::Disabled {
                     self.render_pointer(renderer, &output, &mut |elem| pointer.push(elem));
                 }
+
+                self.magnifier_capture.set(was_magnifier_capture);
 
                 let res_pointer = if pointer.is_empty() {
                     None
@@ -6551,6 +8932,39 @@ impl Niri {
         include_pointer: bool,
         path: Option<String>,
     ) -> anyhow::Result<()> {
+        self.screenshot_with_reply(renderer, output, write_to_disk, include_pointer, path, None)
+    }
+
+    pub fn screenshot_with_reply(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        write_to_disk: bool,
+        include_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+    ) -> anyhow::Result<()> {
+        self.screenshot_with_replies(
+            renderer,
+            output,
+            write_to_disk,
+            include_pointer,
+            path,
+            ipc_reply,
+            None,
+        )
+    }
+
+    pub fn screenshot_with_replies(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        write_to_disk: bool,
+        include_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
+    ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Niri::screenshot");
 
         self.update_render_elements(Some(output));
@@ -6560,9 +8974,11 @@ impl Niri {
         let size = transform.transform_size(size);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
+        set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
         let ctx = RenderCtx {
             renderer,
             target: RenderTarget::ScreenCapture,
+            intent: RenderIntent::Normal,
             xray: None,
         };
         let elements = self.render_to_vec(ctx, output, include_pointer);
@@ -6576,7 +8992,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(size, pixels, write_to_disk, path)
+        self.save_screenshot_with_replies(size, pixels, write_to_disk, path, ipc_reply, path_reply)
             .context("error saving screenshot")
     }
 
@@ -6589,6 +9005,51 @@ impl Niri {
         show_pointer: bool,
         path: Option<String>,
     ) -> anyhow::Result<()> {
+        self.screenshot_window_with_replies(
+            renderer,
+            output,
+            mapped,
+            write_to_disk,
+            show_pointer,
+            path,
+            None,
+            None,
+        )
+    }
+
+    pub fn screenshot_window_with_reply(
+        &self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        mapped: &Mapped,
+        write_to_disk: bool,
+        show_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+    ) -> anyhow::Result<()> {
+        self.screenshot_window_with_replies(
+            renderer,
+            output,
+            mapped,
+            write_to_disk,
+            show_pointer,
+            path,
+            ipc_reply,
+            None,
+        )
+    }
+
+    pub fn screenshot_window_with_replies(
+        &self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        mapped: &Mapped,
+        write_to_disk: bool,
+        show_pointer: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
+    ) -> anyhow::Result<()> {
         let target = RenderTarget::ScreenCapture;
         if target.should_hide(mapped.rules().block_out_from) {
             // We won't have any elements to render. Saving a fully transparent picture is odd.
@@ -6596,6 +9057,8 @@ impl Niri {
         }
 
         let _span = tracy_client::span!("Niri::screenshot_window");
+
+        let was_magnifier_capture = self.magnifier_capture.replace(true);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
         let alpha =
@@ -6621,9 +9084,11 @@ impl Niri {
         }
         let pointer_count = elements.len();
 
+        set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
         let ctx = RenderCtx {
             renderer,
-            target,
+            target: RenderTarget::ScreenCapture,
+            intent: RenderIntent::Normal,
             xray: None,
         };
         mapped.render(
@@ -6650,8 +9115,85 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
-            .context("error saving screenshot")
+        self.magnifier_capture.set(was_magnifier_capture);
+
+        self.save_screenshot_with_replies(
+            geo.size,
+            pixels,
+            write_to_disk,
+            path,
+            ipc_reply,
+            path_reply,
+        )
+        .context("error saving screenshot")
+    }
+
+    #[cfg(feature = "dbus")]
+    pub fn screenshot_area_with_reply(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        area: Rectangle<i32, Logical>,
+        path_reply: ScreenshotPathReplySender,
+    ) -> anyhow::Result<()> {
+        let _span = tracy_client::span!("Niri::screenshot_area");
+
+        ensure!(
+            area.size.w > 0 && area.size.h > 0,
+            "screenshot area is empty"
+        );
+        self.update_render_elements(Some(output));
+
+        let output_size = output
+            .current_mode()
+            .context("output has no current mode")?
+            .size;
+        let output_size = output.current_transform().transform_size(output_size);
+        let scale_value = output.current_scale().fractional_scale();
+        let scale = Scale::from(scale_value);
+        let physical_area = area.to_f64().to_physical_precise_round(scale_value);
+
+        ensure!(
+            physical_area.loc.x >= 0
+                && physical_area.loc.y >= 0
+                && physical_area.loc.x + physical_area.size.w <= output_size.w
+                && physical_area.loc.y + physical_area.size.h <= output_size.h,
+            "screenshot area is outside the output"
+        );
+
+        let ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::ScreenCapture,
+            intent: RenderIntent::Normal,
+            xray: None,
+        };
+        let elements = self.render_to_vec(ctx, output, false);
+        let pixels = render_to_vec(
+            renderer,
+            output_size,
+            scale,
+            Transform::Normal,
+            Fourcc::Abgr8888,
+            elements.iter().rev(),
+        )?;
+
+        let source_stride = output_size.w as usize * 4;
+        let target_stride = physical_area.size.w as usize * 4;
+        let mut cropped = Vec::with_capacity(target_stride * physical_area.size.h as usize);
+        for row in physical_area.loc.y..physical_area.loc.y + physical_area.size.h {
+            let start = row as usize * source_stride + physical_area.loc.x as usize * 4;
+            cropped.extend_from_slice(&pixels[start..start + target_stride]);
+        }
+
+        self.save_screenshot_with_replies(
+            physical_area.size,
+            cropped,
+            true,
+            None,
+            None,
+            Some(path_reply),
+        )
+        .context("error saving screenshot area")
     }
 
     pub fn save_screenshot(
@@ -6661,7 +9203,31 @@ impl Niri {
         write_to_disk: bool,
         path_arg: Option<String>,
     ) -> anyhow::Result<()> {
-        let path = write_to_disk
+        self.save_screenshot_with_reply(size, pixels, write_to_disk, path_arg, None)
+    }
+
+    pub fn save_screenshot_with_reply(
+        &self,
+        size: Size<i32, Physical>,
+        pixels: Vec<u8>,
+        write_to_disk: bool,
+        path_arg: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+    ) -> anyhow::Result<()> {
+        self.save_screenshot_with_replies(size, pixels, write_to_disk, path_arg, ipc_reply, None)
+    }
+
+    pub fn save_screenshot_with_replies(
+        &self,
+        size: Size<i32, Physical>,
+        pixels: Vec<u8>,
+        write_to_disk: bool,
+        path_arg: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
+    ) -> anyhow::Result<()> {
+        let must_write = write_to_disk || path_reply.is_some();
+        let mut path = must_write
             .then(|| {
                 // When given an explicit path, don't try to strftime it or create parents.
                 path_arg.map(|p| (PathBuf::from(p), false)).or_else(|| {
@@ -6675,6 +9241,16 @@ impl Niri {
                 })
             })
             .flatten();
+
+        if must_write && path.is_none() {
+            path = Some((
+                env::temp_dir().join(format!(
+                    "niri-portal-screenshot-{:016x}.png",
+                    fastrand::u64(..)
+                )),
+                false,
+            ));
+        }
 
         // Prepare to set the encoded image as our clipboard selection. This must be done from the
         // main thread.
@@ -6711,6 +9287,15 @@ impl Niri {
             let w = std::io::Cursor::new(&mut buf);
             if let Err(err) = write_png_rgba8(w, size.w as u32, size.h as u32, &pixels) {
                 warn!("error encoding screenshot image: {err:?}");
+                if let Some(ipc_reply) = ipc_reply {
+                    let _ = ipc_reply
+                        .send_blocking(Err(format!("error encoding screenshot image: {err}")));
+                }
+                if let Some(path_reply) = path_reply {
+                    let _ = path_reply.send_blocking(Err(ScreenshotPortalError::Failed(format!(
+                        "error encoding screenshot image: {err}"
+                    ))));
+                }
                 return;
             }
 
@@ -6718,6 +9303,7 @@ impl Niri {
             let _ = tx.send(buf.clone());
 
             let mut image_path = None;
+            let mut save_error = None;
 
             if let Some((path, create_parent)) = path {
                 debug!("saving screenshot to {path:?}");
@@ -6735,10 +9321,11 @@ impl Niri {
                     }
                 }
 
-                match std::fs::write(&path, buf) {
+                match std::fs::write(&path, &*buf) {
                     Ok(()) => image_path = Some(path),
                     Err(err) => {
                         warn!("error saving screenshot image: {err:?}");
+                        save_error = Some(format!("error saving screenshot image: {err}"));
                     }
                 }
             } else {
@@ -6756,6 +9343,18 @@ impl Niri {
                 .and_then(|p| p.to_str())
                 .map(|s| s.to_owned());
             let _ = event_tx.send(path_string);
+
+            if let Some(ipc_reply) = ipc_reply {
+                let _ = ipc_reply.send_blocking(Ok(buf));
+            }
+            if let Some(path_reply) = path_reply {
+                let result = image_path.ok_or_else(|| {
+                    ScreenshotPortalError::Failed(
+                        save_error.unwrap_or_else(|| String::from("screenshot was not saved")),
+                    )
+                });
+                let _ = path_reply.send_blocking(result);
+            }
         });
 
         Ok(())
@@ -6766,7 +9365,7 @@ impl Niri {
         &mut self,
         renderer: &mut GlesRenderer,
         include_pointer: bool,
-        on_done: impl FnOnce(PathBuf) + Send + 'static,
+        path_reply: ScreenshotPathReplySender,
     ) -> anyhow::Result<()> {
         use smithay::backend::renderer::{Bind as _, ExportMem as _};
 
@@ -6802,6 +9401,7 @@ impl Niri {
             let ctx = RenderCtx {
                 renderer,
                 target: RenderTarget::ScreenCapture,
+                intent: RenderIntent::Normal,
                 xray: None,
             };
             let elements = self.render_to_vec(ctx, output, include_pointer);
@@ -6816,6 +9416,7 @@ impl Niri {
             )
             .context("error rendering")?;
 
+            set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(&output));
             let buffer = TextureBuffer::from_texture(
                 renderer,
                 texture,
@@ -6856,35 +9457,8 @@ impl Niri {
             .context("error mapping texture")?;
         let pixels = copy.to_vec();
 
-        let path = make_screenshot_path(&self.config.borrow())
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| {
-                let mut path = env::temp_dir();
-                path.push("screenshot.png");
-                path
-            });
-        debug!("saving screenshot to {path:?}");
-
-        thread::spawn(move || {
-            let file = match std::fs::File::create(&path) {
-                Ok(file) => file,
-                Err(err) => {
-                    warn!("error creating file: {err:?}");
-                    return;
-                }
-            };
-
-            let w = std::io::BufWriter::new(file);
-            if let Err(err) = write_png_rgba8(w, geo.size.w as u32, geo.size.h as u32, &pixels) {
-                warn!("error encoding screenshot image: {err:?}");
-                return;
-            }
-
-            on_done(path);
-        });
-
-        Ok(())
+        self.save_screenshot_with_replies(geo.size, pixels, true, None, None, Some(path_reply))
+            .context("error saving screenshot")
     }
 
     pub fn clear_input_state(&mut self) {
@@ -7003,6 +9577,8 @@ impl Niri {
                 self.event_loop.remove(deadline_token);
 
                 self.screenshot_ui.close();
+                #[cfg(feature = "xdp-gnome-screencast")]
+                self.screen_cast_picker.cancel_immediately();
                 self.cursor_manager
                     .set_cursor_image(CursorImageStatus::default_named());
                 self.cancel_mru();
@@ -7265,6 +9841,60 @@ impl Niri {
         }
     }
 
+    /// Moves the grid focus to the cell under the pointer as the pointer moves.
+    ///
+    /// Call this before the pointer moves to `new_pos`, with `under` the contents there.
+    pub fn handle_grid_focus_follows_mouse(
+        &mut self,
+        new_pos: Point<f64, Logical>,
+        under: &PointContents,
+    ) {
+        let ffm = self.config.borrow().grid_overview.focus_follows_mouse;
+        let Some(ffm) = ffm.filter(|_| self.layout.is_grid_overview_open()) else {
+            self.grid_mouse_focus = GridMouseFocus::default();
+            return;
+        };
+
+        // Drags and the MRU switcher own the pointer.
+        let pointer = self.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() || self.window_mru_ui.is_open() {
+            return;
+        }
+
+        let old_pos = pointer.current_location();
+        let open_count = self.layout.grid_overview_open_count();
+        let focus = self.layout.grid_focused_window_id();
+
+        let state = &mut self.grid_mouse_focus;
+        if state.open_count != open_count || state.focus != focus {
+            // A new grid, or the focus was set some other way since the last motion.
+            state.open_count = open_count;
+            state.focus = focus.clone();
+            state.anchor = Some(old_pos);
+        }
+
+        if let Some(anchor) = state.anchor {
+            let delta = new_pos - anchor;
+            if delta.x.hypot(delta.y) < ffm.min_distance() {
+                return;
+            }
+            state.anchor = None;
+        }
+
+        // Over a gap or over a window that isn't in the grid, the focus stays where it is.
+        let Some((window, _)) = &under.window else {
+            return;
+        };
+        if focus.as_ref() == Some(window) || !self.layout.window_is_in_open_grid_overview(window) {
+            return;
+        }
+
+        if self.layout.focus_grid_cell_for_window(window) {
+            self.grid_mouse_focus.focus = self.layout.grid_focused_window_id();
+            self.queue_redraw_all();
+        }
+    }
+
     pub fn handle_focus_follows_mouse(
         &mut self,
         prev_location: Point<f64, Logical>,
@@ -7293,7 +9923,12 @@ impl Niri {
         }
 
         if let Some(window) = &new_focus.window {
-            if !self.layout.is_overview_open() && current_focus.window.as_ref() != Some(window) {
+            // Like in the overview, hovering grid cells doesn't focus them: that would activate
+            // windows behind the grid without the grid focus following.
+            if !self.layout.is_overview_open()
+                && !self.layout.window_is_in_open_grid_overview(&window.0)
+                && current_focus.window.as_ref() != Some(window)
+            {
                 let (window, hit) = window;
 
                 // Don't trigger focus-follows-mouse over the tab indicator.
@@ -7351,6 +9986,7 @@ impl Niri {
                     let ctx = RenderCtx {
                         renderer,
                         target,
+                        intent: RenderIntent::Normal,
                         xray: None,
                     };
                     let elements = self.render_to_vec(ctx, &output, false);
@@ -7570,11 +10206,49 @@ pub struct ClientState {
     pub restricted: bool,
     /// We cannot retrieve this client's socket credentials.
     pub credentials_unknown: bool,
+    /// Whether the agent seat global is hidden from this client.
+    #[cfg(feature = "agent")]
+    pub hide_agent_seat: bool,
+    /// Whether this client connected through the agent socket.
+    #[cfg(feature = "agent")]
+    pub agent_client: bool,
 }
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// Searches a surface and its subsurfaces for a committed HDR image description, returning the
+/// first one found.
+///
+/// Clients differ in where they attach the description: mpv attaches it to the toplevel surface
+/// itself, while winewayland (Proton) presents Vulkan content on a subsurface and attaches it
+/// there.
+fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription> {
+    let mut found = None;
+    with_surface_tree_downward(
+        surface,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |_, states, _| {
+            if found.is_none() {
+                // The surface's states are already locked by the traversal, so read the cached
+                // state through them rather than via get_surface_description() (which would
+                // re-lock and deadlock).
+                let mut guard = states
+                    .cached_state
+                    .get::<ColorManagementSurfaceCachedState>();
+                if let Some(desc) = guard.current().description {
+                    if desc.is_hdr() {
+                        found = Some(desc);
+                    }
+                }
+            }
+        },
+        |_, _, _| true,
+    );
+    found
 }
 
 fn scale_relocate_crop<E: Element>(
@@ -7591,8 +10265,10 @@ fn scale_relocate_crop<E: Element>(
 
 niri_render_elements! {
     PointerRenderElements<R> => {
-        Wayland = WaylandSurfaceRenderElement<R>,
+        Wayland = BlendSurfaceRenderElement<R>,
         NamedPointer = MemoryRenderBufferRenderElement<R>,
+        RescaledWayland = RescaleRenderElement<BlendSurfaceRenderElement<R>>,
+        RescaledNamedPointer = RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
     }
 }
 
@@ -7622,13 +10298,302 @@ niri_render_elements! {
             SolidColorRenderElement
         >>>,
         Pointer = PointerRenderElements<R>,
-        Wayland = WaylandSurfaceRenderElement<R>,
+        Wayland = BlendSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
         ScreenshotUi = ScreenshotUiRenderElement,
+        ScreenCastPicker = ScreenCastPickerRenderElement<R>,
         WindowMruUi = WindowMruUiRenderElement<R>,
         ExitConfirmDialog = ExitConfirmDialogRenderElement,
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
+        Magnified = RescaleRenderElement<Box<OutputRenderElements<R>>>,
+    }
+}
+
+impl<R: NiriRenderer> smithay::backend::renderer::element::Element
+    for Box<OutputRenderElements<R>>
+{
+    fn id(&self) -> &smithay::backend::renderer::element::Id {
+        (**self).id()
+    }
+
+    fn current_commit(&self) -> smithay::backend::renderer::utils::CommitCounter {
+        (**self).current_commit()
+    }
+
+    fn geometry(
+        &self,
+        scale: smithay::utils::Scale<f64>,
+    ) -> smithay::utils::Rectangle<i32, smithay::utils::Physical> {
+        (**self).geometry(scale)
+    }
+
+    fn transform(&self) -> smithay::utils::Transform {
+        (**self).transform()
+    }
+
+    fn src(&self) -> smithay::utils::Rectangle<f64, smithay::utils::Buffer> {
+        (**self).src()
+    }
+
+    fn damage_since(
+        &self,
+        scale: smithay::utils::Scale<f64>,
+        commit: Option<smithay::backend::renderer::utils::CommitCounter>,
+    ) -> smithay::backend::renderer::utils::DamageSet<i32, smithay::utils::Physical> {
+        (**self).damage_since(scale, commit)
+    }
+
+    fn opaque_regions(
+        &self,
+        scale: smithay::utils::Scale<f64>,
+    ) -> smithay::backend::renderer::utils::OpaqueRegions<i32, smithay::utils::Physical> {
+        (**self).opaque_regions(scale)
+    }
+
+    fn alpha(&self) -> f32 {
+        (**self).alpha()
+    }
+
+    fn kind(&self) -> smithay::backend::renderer::element::Kind {
+        (**self).kind()
+    }
+
+    fn is_framebuffer_effect(&self) -> bool {
+        (**self).is_framebuffer_effect()
+    }
+}
+
+impl
+    smithay::backend::renderer::element::RenderElement<
+        smithay::backend::renderer::gles::GlesRenderer,
+    > for Box<OutputRenderElements<smithay::backend::renderer::gles::GlesRenderer>>
+{
+    fn capture_framebuffer(
+        &self,
+        frame: &mut smithay::backend::renderer::gles::GlesFrame<'_, '_>,
+        src: smithay::utils::Rectangle<f64, smithay::utils::Buffer>,
+        dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        cache: &smithay::utils::user_data::UserDataMap,
+    ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
+        smithay::backend::renderer::element::RenderElement::<
+            smithay::backend::renderer::gles::GlesRenderer,
+        >::capture_framebuffer(&**self, frame, src, dst, cache)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::gles::GlesFrame<'_, '_>,
+        src: smithay::utils::Rectangle<f64, smithay::utils::Buffer>,
+        dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        opaque_regions: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
+        smithay::backend::renderer::element::RenderElement::<
+            smithay::backend::renderer::gles::GlesRenderer,
+        >::draw(&**self, frame, src, dst, damage, opaque_regions, cache)
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+        (**self).underlying_storage(renderer)
+    }
+}
+
+impl<'render>
+    smithay::backend::renderer::element::RenderElement<crate::backend::tty::TtyRenderer<'render>>
+    for Box<OutputRenderElements<crate::backend::tty::TtyRenderer<'render>>>
+{
+    fn capture_framebuffer(
+        &self,
+        frame: &mut crate::backend::tty::TtyFrame<'render, '_, '_>,
+        src: smithay::utils::Rectangle<f64, smithay::utils::Buffer>,
+        dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        cache: &smithay::utils::user_data::UserDataMap,
+    ) -> Result<(), crate::backend::tty::TtyRendererError<'render>> {
+        smithay::backend::renderer::element::RenderElement::<
+            crate::backend::tty::TtyRenderer<'render>,
+        >::capture_framebuffer(&**self, frame, src, dst, cache)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut crate::backend::tty::TtyFrame<'render, '_, '_>,
+        src: smithay::utils::Rectangle<f64, smithay::utils::Buffer>,
+        dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        opaque_regions: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), crate::backend::tty::TtyRendererError<'render>> {
+        smithay::backend::renderer::element::RenderElement::<
+            crate::backend::tty::TtyRenderer<'render>,
+        >::draw(&**self, frame, src, dst, damage, opaque_regions, cache)
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut crate::backend::tty::TtyRenderer<'render>,
+    ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+        (**self).underlying_storage(renderer)
+    }
+}
+
+/// Returns how far one move-magnifier step moves the center across an output `size` pixels long,
+/// for a step that is `step` of the visible area.
+///
+/// The magnifier center is the zoom pivot rather than the middle of the view: moving it by `d`
+/// moves the view by `d * (1 - 1 / zoom)`. Dividing by that keeps a step at the same fraction of
+/// the visible area at any zoom level.
+fn magnifier_move_step(size: i32, zoom: f64, step: f64) -> f64 {
+    let visible = f64::from(size) / zoom;
+    visible * step / (1. - 1. / zoom)
+}
+
+#[cfg(feature = "xdp-gnome-screencast")]
+fn should_render_screen_cast_picker(rendering_output: bool, intent: RenderIntent) -> bool {
+    // Render the picker into screencasts and screen captures (screencopy, i.e. wf-recorder and
+    // friends), but never into its own window/display previews.
+    rendering_output || intent == RenderIntent::Normal
+}
+
+#[cfg(feature = "xdp-gnome-screencast")]
+fn screen_cast_picker_preview_bounds(
+    source_size: Size<f64, Logical>,
+    factor: f64,
+    source_scale: Scale<f64>,
+) -> Rectangle<i32, Physical> {
+    Rectangle::from_size(
+        source_size
+            .upscale(factor)
+            .to_physical_precise_round(source_scale),
+    )
+}
+
+#[cfg(all(test, feature = "xdp-gnome-screencast"))]
+mod screen_cast_picker_preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_bounds_keep_the_source_output_origin_and_scale() {
+        let bounds =
+            screen_cast_picker_preview_bounds(Size::from((1920., 1200.)), 0.25, Scale::from(1.5));
+
+        assert_eq!(bounds, Rectangle::from_size(Size::from((720, 450))));
+    }
+
+    #[test]
+    fn picker_is_visible_to_outputs_and_normal_captures_only() {
+        assert!(should_render_screen_cast_picker(true, RenderIntent::Normal));
+        assert!(should_render_screen_cast_picker(
+            false,
+            RenderIntent::Normal
+        ));
+        assert!(!should_render_screen_cast_picker(
+            false,
+            RenderIntent::PickerPreview
+        ));
+    }
+}
+
+#[cfg(test)]
+mod magnifier_tests {
+    use super::*;
+
+    #[test]
+    fn move_step_is_the_same_share_of_the_view_at_any_zoom() {
+        let size = 2560;
+        let step = 0.05;
+        for zoom in [1.2, 2., 3., 10.] {
+            // Zooming around pivot p shows the area starting at p * (1 - 1 / zoom).
+            let view_x = |pivot: f64| pivot * (1. - 1. / zoom);
+
+            let pivot = 1000.;
+            let moved = view_x(pivot + magnifier_move_step(size, zoom, step)) - view_x(pivot);
+            let visible = f64::from(size) / zoom;
+            assert!((moved - visible * step).abs() < 1e-9, "zoom {zoom}");
+        }
+    }
+}
+
+/// Decide whether tearing may be enabled for a window.
+///
+/// `explicit` is the `allow-tearing` rule, `types` is `allow-tearing-content-type`, `client_hint` is
+/// the window's `wp_tearing_control` async request and `content_type` is what the window declared
+/// with `wp_content_type_v1`.
+fn tearing_allowed(
+    explicit: Option<bool>,
+    types: Option<&[niri_config::TearingContentType]>,
+    client_hint: bool,
+    content_type: ContentType,
+) -> bool {
+    // An explicit rule always wins, in both directions.
+    match explicit {
+        Some(false) => return false,
+        Some(true) => return true,
+        None => {}
+    }
+
+    // Then a declared content type the rule accepts.
+    if let Some(types) = types {
+        if types.iter().any(|ty| content_type_allowed(*ty, content_type)) {
+            return true;
+        }
+    }
+
+    // Otherwise keep the stock behavior: only what the client asked for.
+    client_hint
+}
+
+/// Map a declared content type to what the IPC protocol reports, where `None` means "not declared".
+fn ipc_content_type(content_type: ContentType) -> Option<niri_ipc::ContentType> {
+    match content_type {
+        ContentType::None => None,
+        ContentType::Game => Some(niri_ipc::ContentType::Game),
+        ContentType::Video => Some(niri_ipc::ContentType::Video),
+        ContentType::Photo => Some(niri_ipc::ContentType::Photo),
+        // The protocol enum is non-exhaustive; unknown types are reported as not declared.
+        _ => None,
+    }
+}
+
+/// Whether a rule entry accepts the given declared content type.
+fn content_type_allowed(rule: niri_config::TearingContentType, declared: ContentType) -> bool {
+    matches!(
+        (rule, declared),
+        (niri_config::TearingContentType::Game, ContentType::Game)
+            | (niri_config::TearingContentType::Video, ContentType::Video)
+            | (niri_config::TearingContentType::Photo, ContentType::Photo)
+    )
+}
+
+#[cfg(test)]
+mod tearing_tests {
+    use super::tearing_allowed;
+    use niri_config::TearingContentType;
+    use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
+
+    #[test]
+    fn explicit_rules_win_over_content_type() {
+        let types = [TearingContentType::Game];
+        assert!(!tearing_allowed(Some(false), Some(&types), true, ContentType::Game));
+        assert!(tearing_allowed(Some(true), None, false, ContentType::None));
+    }
+
+    #[test]
+    fn content_types_allow_tearing_independently_of_the_bool() {
+        let types = [TearingContentType::Game, TearingContentType::Video];
+        // No allow-tearing, but a game or video declaration.
+        assert!(tearing_allowed(None, Some(&types), false, ContentType::Game));
+        assert!(tearing_allowed(None, Some(&types), false, ContentType::Video));
+        // Declared types the rule does not list, or no declaration at all.
+        assert!(!tearing_allowed(None, Some(&types), false, ContentType::Photo));
+        assert!(!tearing_allowed(None, Some(&types), false, ContentType::None));
+        // The client hint still works on its own.
+        assert!(tearing_allowed(None, None, true, ContentType::None));
+        assert!(!tearing_allowed(None, None, false, ContentType::Game));
     }
 }

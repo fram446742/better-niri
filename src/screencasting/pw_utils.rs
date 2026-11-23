@@ -51,9 +51,8 @@ use smithay::reexports::rustix::fs::{
     fcntl_add_seals, ftruncate, memfd_create, MemfdFlags, SealFlags,
 };
 use smithay::utils::{DeviceFd, Logical, Physical, Point, Scale, Size, Transform};
-use zbus::object_server::SignalEmitter;
 
-use crate::dbus::mutter_screen_cast::{self, CursorMode};
+use crate::dbus::mutter_screen_cast::{CursorMode, NodeIdSink};
 use crate::niri::{CastTarget, State};
 use crate::render_helpers::{
     clear_dmabuf, encompassing_geo, render_and_download, render_and_download_with_damage,
@@ -409,7 +408,7 @@ impl PipeWire {
         refresh: u32,
         alpha: bool,
         mut cursor_mode: CursorMode,
-        signal_ctx: SignalEmitter<'static>,
+        node_sink: NodeIdSink,
     ) -> anyhow::Result<Cast> {
         let _span = tracy_client::span!("PipeWire::start_cast");
         let _span = debug_span!("start_cast", %session_id).entered();
@@ -480,59 +479,13 @@ impl PipeWire {
                                 if inner.node_id.is_none() {
                                     let id = stream.node_id();
                                     inner.node_id = Some(id);
-                                    debug!("sending signal with {id}");
+                                    debug!("delivering node id {id}");
 
-                                    let _span = tracy_client::span!("sending PipeWireStreamAdded");
-                                    async_io::block_on(async {
-                                        let res_v1 =
-                                            mutter_screen_cast::Stream::pipe_wire_stream_added(
-                                                &signal_ctx,
-                                                id,
-                                            )
-                                            .await;
-
-                                        if let Err(err) = &res_v1 {
-                                            warn!("error sending PipeWireStreamAdded: {err:?}");
-                                        }
-
-                                        // PipeWireStreamAddedV2 is like PipeWireStreamAdded, but
-                                        // with the node serial-id, added in ScreenCast V6. Both
-                                        // versions are sent for backward compability.
-                                        //
-                                        // Based on Mutter implementation: https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5467
-                                        // xdp-gnome implementation: https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/merge_requests/276
-
-                                        // The value is required, so defaults to 0, following the
-                                        // Mutter implementation
-                                        let serial = stream
-                                            .properties()
-                                            .get("object.serial")
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-
-                                        trace!(
-                                            "sending PipeWireStreamAddedV2 with serial {serial}"
-                                        );
-
-                                        let props = mutter_screen_cast::PipeWireStreamProperties {
-                                            node_id: id,
-                                            node_serial: serial,
-                                        };
-                                        let res_v2 =
-                                            mutter_screen_cast::Stream::pipe_wire_stream_added_v2(
-                                                &signal_ctx,
-                                                props,
-                                            )
-                                            .await;
-
-                                        if let Err(err) = &res_v2 {
-                                            warn!("error sending PipeWireStreamAddedV2: {err:?}");
-                                        }
-
-                                        if res_v1.is_err() && res_v2.is_err() {
-                                            stop_cast();
-                                        }
-                                    });
+                                    let _span = tracy_client::span!("delivering PipeWire node id");
+                                    if let Err(err) = node_sink.deliver(id) {
+                                        warn!("error delivering PipeWire node id: {err:?}");
+                                        stop_cast();
+                                    }
                                 }
 
                                 inner.is_active = false;
@@ -1250,6 +1203,7 @@ impl Cast {
         cursor_data: &CursorData<CastRenderElement<GlesRenderer>>,
         size: Size<i32, Physical>,
         scale: Scale<f64>,
+        reference_luminance: f64,
     ) -> bool {
         let mut inner = self.inner.borrow_mut();
 
@@ -1346,7 +1300,14 @@ impl Cast {
             let res = match (*(*spa_buffer).datas).type_ {
                 x if x == DataType::DmaBuf.as_raw() => {
                     let dmabuf = inner_.dmabufs[&fd].clone();
-                    render_to_dmabuf(renderer, damage_tracker, dmabuf, elements, states)
+                    render_to_dmabuf(
+                        renderer,
+                        damage_tracker,
+                        dmabuf,
+                        elements,
+                        states,
+                        reference_luminance,
+                    )
                         .map(|x| (x, SharingBuf::Dma))
                 }
                 x if x == DataType::MemFd.as_raw() => {
@@ -1358,7 +1319,14 @@ impl Cast {
                         Fourcc::Xrgb8888
                     };
 
-                    render_to_shmbuf(renderer, damage_tracker, shmbuf, fourcc, elements, states)
+                    render_to_shmbuf(
+                        renderer,
+                        damage_tracker,
+                        shmbuf,
+                        fourcc,
+                        elements,
+                        states,
+                    )
                         .map(|()| (SyncPoint::signaled(), SharingBuf::Shm(shmbuf.layout)))
                 }
                 _ => Err(anyhow::anyhow!(

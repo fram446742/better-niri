@@ -20,6 +20,7 @@ pub struct FocusRing {
     use_border_shader: bool,
     config: niri_config::FocusRing,
     thicken_corners: bool,
+    width_override: Option<f64>,
 }
 
 niri_render_elements! {
@@ -41,11 +42,20 @@ impl FocusRing {
             use_border_shader: false,
             config,
             thicken_corners: true,
+            width_override: None,
         }
     }
 
     pub fn update_config(&mut self, config: niri_config::FocusRing) {
         self.config = config;
+    }
+
+    pub fn set_width_override(&mut self, width: f64) {
+        self.width_override = Some(width);
+    }
+
+    pub fn clear_width_override(&mut self) {
+        self.width_override = None;
     }
 
     pub fn update_shaders(&mut self) {
@@ -65,7 +75,7 @@ impl FocusRing {
         scale: f64,
         alpha: f32,
     ) {
-        let width = self.config.width;
+        let width = self.width();
         self.full_size = win_size + Size::from((width, width)).upscale(2.);
         self.is_border = is_border;
 
@@ -258,7 +268,7 @@ impl FocusRing {
     }
 
     pub fn width(&self) -> f64 {
-        self.config.width
+        self.width_override.unwrap_or(self.config.width)
     }
 
     pub fn is_off(&self) -> bool {

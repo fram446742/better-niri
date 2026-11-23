@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "26.4.0"
+version = "26.4.0-elite"
 description = "A scrollable-tiling Wayland compositor"
 authors = ["Ivan Molodetskikh <yalterz@gmail.com>"]
 license = "GPL-3.0-or-later"
@@ -48,12 +48,12 @@ tracy-client = { version = "0.18.5", default-features = false }
 #         build
 [workspace.dependencies.smithay]
 git = "https://github.com/fram446742/better-smithay.git"
-rev = "a38bb709a0400759b6a4fab6129e0f1dd72808c3"
+rev = "2e8e9edbe8a89af91d6bf3369c379cff21af76ff"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
 git = "https://github.com/fram446742/better-smithay.git"
-rev = "a38bb709a0400759b6a4fab6129e0f1dd72808c3"
+rev = "2e8e9edbe8a89af91d6bf3369c379cff21af76ff"
 # path = "../better-smithay/smithay-drm-extras"
 
 [package]
@@ -77,6 +77,7 @@ arrayvec = "0.7.8"
 async-channel = "2.5.0"
 async-io = { version = "2.6.0", optional = true }
 atomic = "0.6.1"
+base64 = "0.22.1"
 bitflags.workspace = true
 bytemuck = { version = "1.25.2", features = ["derive"] }
 calloop = { version = "0.14.5", features = ["executor", "futures-io", "signals"] }
@@ -87,15 +88,16 @@ directories = "6.0.0"
 drm-ffi = "0.9.1"
 fastrand = "2.5.0"
 futures-util = { version = "0.3", default-features = false, features = ["std", "io"] }
+getrandom = { version = "0.3.4", optional = true }
 git-version = "0.3.9"
 glam = "0.33"
 input = { version = "0.10.0", features = ["libinput_1_21"] }
 keyframe = { version = "1.1.1", default-features = false }
 libc = "0.2.189"
-libdisplay-info = "0.3.0"
+libdisplay-info = { version = "0.3.0", features = ["v0_2"] }
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-niri-config = { version = "26.4.0", path = "niri-config" }
-niri-ipc = { version = "26.4.0", path = "niri-ipc", features = ["clap"] }
+niri-config = { version = "26.4.0-elite", path = "niri-config" }
+niri-ipc = { version = "26.4.0-elite", path = "niri-ipc", features = ["clap"] }
 ordered-float = "5"
 pango = { version = "0.21.5", features = ["v1_44"] }
 pangocairo = "0.21.5"
@@ -103,6 +105,8 @@ pipewire = { version = "0.10", optional = true, features = ["v0_3_33"] }
 png = "0.18.1"
 portable-atomic = "1"
 profiling = "1.0.18"
+resvg = "0.44"
+usvg = "0.44"
 sd-notify = "0.5.0"
 serde.workspace = true
 serde_json.workspace = true
@@ -110,7 +114,8 @@ smithay-drm-extras.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 tracy-client.workspace = true
-wayland-backend = "0.3"
+wayland-backend = "0.3.16"
+wayland-protocols-plasma = { version = "0.3.11", features = ["server"] }
 wayland-scanner = "0.31.11"
 wayland-server = "0.31.14"
 xcursor = "0.3.11"
@@ -148,13 +153,15 @@ xshell = "0.2.7"
 pkg-config = "0.3"
 
 [features]
-default = ["dbus", "systemd", "xdp-gnome-screencast"]
+default = ["agent", "dbus", "systemd", "xdp-gnome-screencast"]
+# Enables the agent seat, a second input seat for automation over IPC.
+agent = []
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).
 systemd = ["dbus"]
 # Enables screencasting support through xdg-desktop-portal-gnome.
-xdp-gnome-screencast = ["dbus", "pipewire"]
+xdp-gnome-screencast = ["dbus", "pipewire", "dep:getrandom"]
 # Enables the Tracy profiler instrumentation.
 profile-with-tracy = ["profiling/profile-with-tracy", "tracy-client/default", "smithay/tracy_gpu_profiling"]
 # Enables the on-demand Tracy profiler instrumentation.
@@ -205,3 +212,6 @@ assets = [
     ["resources/niri.service", "/usr/lib/systemd/user/", "644"],
     ["resources/niri-shutdown.target", "/usr/lib/systemd/user/", "644"],
 ]
+
+# Fork-only: Smithay with SeatState::new_wl_seat_with_filter() for the agent seat. When upstream
+# bumps the Smithay rev above, rebase the seat-global-filter commit onto it and update this rev.

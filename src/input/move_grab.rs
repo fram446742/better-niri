@@ -17,6 +17,7 @@ use smithay::input::touch::{
 use smithay::input::{tablet, SeatHandler};
 use smithay::output::Output;
 use smithay::utils::{IsAlive, Logical, Point, SERIAL_COUNTER};
+use tracing::warn;
 
 use crate::input::AnyStartData;
 use crate::niri::State;
@@ -83,22 +84,26 @@ impl MoveGrab {
         let layout = &mut data.niri.layout;
         match self.gesture {
             GestureState::Recognizing => {
-                // Activate the window on release. This is most prominent in the overview where
-                // windows are not activated on click. In the overview, we also try to do a nice
-                // synchronized workspace animation.
-                if layout.is_overview_open() {
-                    let res = layout.workspaces().find_map(|(mon, ws_idx, ws)| {
-                        ws.windows()
-                            .any(|w| w.window == self.window)
-                            .then(|| (mon.map(|mon| mon.output().clone()), ws_idx))
-                    });
-                    if let Some((Some(output), ws_idx)) = res {
-                        layout.focus_output(&output);
-                        layout.toggle_overview_to_workspace(ws_idx);
+                if layout.window_is_in_open_grid_overview(&self.window) {
+                    layout.confirm_grid_selection_for_window(&self.window);
+                } else {
+                    // Activate the window on release. This is most prominent in the overview where
+                    // windows are not activated on click. In the overview, we also try to do a nice
+                    // synchronized workspace animation.
+                    if layout.is_overview_open() {
+                        let res = layout.workspaces().find_map(|(mon, ws_idx, ws)| {
+                            ws.windows()
+                                .any(|w| w.window == self.window)
+                                .then(|| (mon.map(|mon| mon.output().clone()), ws_idx))
+                        });
+                        if let Some((Some(output), ws_idx)) = res {
+                            layout.focus_output(&output);
+                            layout.toggle_overview_to_workspace(ws_idx);
+                        }
                     }
-                }
 
-                layout.activate_window(&self.window);
+                    layout.activate_window(&self.window);
+                }
             }
             GestureState::Move => layout.interactive_move_end(&self.window),
             GestureState::ViewOffset => {
@@ -259,15 +264,14 @@ impl MoveGrab {
         false
     }
 
-    fn on_toggle_floating(&mut self, data: &mut State) -> bool {
+    fn on_toggle_floating(&mut self, data: &mut State, location: Point<f64, Logical>) -> bool {
         if self.gesture == GestureState::ViewOffset {
             return true;
         }
 
         // Start move if still recognizing.
         if self.gesture == GestureState::Recognizing {
-            let Some((output, pos_within_output)) = data.niri.output_under(self.last_location)
-            else {
+            let Some((output, pos_within_output)) = data.niri.output_under(location) else {
                 return false;
             };
             let output = output.clone();
@@ -279,13 +283,38 @@ impl MoveGrab {
             // Apply the delta accumulated during recognizing.
             let ongoing = data.niri.layout.interactive_move_update(
                 &self.window,
-                self.last_location - self.start_data.location(),
+                location - self.start_data.location(),
                 output,
                 pos_within_output,
             );
             if !ongoing {
                 return false;
             }
+
+            self.last_location = location;
+            self.new_location = location;
+            self.event_timestamp = None;
+            self.relative_delta = None;
+        } else if self.gesture == GestureState::Move && location != self.last_location {
+            let Some((output, pos_within_output)) = data.niri.output_under(location) else {
+                return false;
+            };
+            let output = output.clone();
+            let ongoing = data.niri.layout.interactive_move_update(
+                &self.window,
+                location - self.last_location,
+                output,
+                pos_within_output,
+            );
+            if !ongoing {
+                warn!("MoveGrab::on_toggle_floating flush update failed");
+                return false;
+            }
+
+            self.last_location = location;
+            self.new_location = location;
+            self.event_timestamp = None;
+            self.relative_delta = None;
         }
 
         data.niri.layout.toggle_window_floating(Some(&self.window));
@@ -354,7 +383,7 @@ impl PointerGrab<State> for MoveGrab {
             return;
         }
 
-        if !self.on_toggle_floating(data) {
+        if !self.on_toggle_floating(data, handle.current_location()) {
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
@@ -478,7 +507,7 @@ impl TouchGrab<State> for MoveGrab {
             return;
         }
 
-        if !self.on_toggle_floating(data) {
+        if !self.on_toggle_floating(data, event.location) {
             handle.unset_grab(self, data);
         }
     }

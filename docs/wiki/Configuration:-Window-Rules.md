@@ -516,6 +516,28 @@ window-rule {
 }
 ```
 
+#### `ignore-grid-overview`
+
+Keep a floating window out of the grid overview. The window stays visible in its normal floating
+position and can still be clicked, but it does not become a grid item and is not selected by grid
+navigation.
+
+While the grid is open, the window gets all its input as usual: middle click, the scroll wheel
+and keys like Return, Escape and hjkl go to the window instead of driving the grid.
+
+This only applies to floating windows. Tiled windows keep their normal grid behavior even if this
+rule matches them. A minimized window gets a grid cell regardless, since the grid is where it can
+be seen and restored.
+
+```kdl
+// Keep short-lived notification-style windows out of the grid overview.
+window-rule {
+    match app-id="steam" is-floating=true
+
+    ignore-grid-overview true
+}
+```
+
 #### `open-focused`
 
 <sup>Since: 25.01</sup>
@@ -681,6 +703,49 @@ window-rule {
     opacity 0.95
 }
 ```
+
+#### `allow-tearing`
+
+Allow screen tearing on an output where this window is visible. Takes `true` or `false`; `false`
+also overrides a client that asks for tearing with `wp_tearing_control`.
+
+```kdl
+// Allow tearing only when osu! has keyboard focus.
+window-rule {
+    match app-id="^osu!$" is-focused=true
+
+    allow-tearing true
+}
+```
+
+#### `allow-tearing-content-type`
+
+List the content types that may tear, so that windows declaring themselves with
+`wp_content_type_v1` do not need to be named one by one. Accepts exactly the protocol's three content
+types: `"photo"`, `"video"` and `"game"`. The protocol's `none` is not a content type — it means the
+client declared nothing — so it cannot be listed and never matches.
+
+This is independent of `allow-tearing`: you can keep an explicit rule for one application and let
+a content-type rule cover everything else at the same time. Precedence is:
+
+1. `allow-tearing false` — never tear this window.
+2. `allow-tearing true` — always allow tearing while the window is visible.
+3. `allow-tearing-content-type` — allow tearing when the window declared a listed type.
+4. Otherwise, tear only if the client asked for it with `wp_tearing_control`.
+
+```kdl
+// Anything that declares itself as game or video content may tear, e.g. fullscreen players and
+// games; everything else stays tear-free unless it explicitly asks.
+window-rule {
+    allow-tearing-content-type "game" "video"
+}
+```
+
+> [!NOTE]
+> XWayland windows can never match a content type: X11 clients cannot use Wayland protocols, so
+> `allow-tearing-content-type` does nothing for Wine/Proton games and old X11 programs. Give those
+> an explicit rule instead, for example `match app-id=r#"^steam_app_"#` for games started by Steam,
+> `match app-id="^gamescope$"` for gamescope, or a title match for launchers that set no app id.
 
 #### `variable-refresh-rate`
 

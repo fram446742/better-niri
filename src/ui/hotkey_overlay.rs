@@ -246,6 +246,7 @@ fn collect_actions(config: &Config) -> Vec<&Action> {
 
     actions.extend(&[
         &Action::CloseWindow,
+        &Action::MinimizeWindow,
         &Action::FocusColumnLeft,
         &Action::FocusColumnRight,
         action_move_column_left,
@@ -290,6 +291,7 @@ fn collect_actions(config: &Config) -> Vec<&Action> {
         &Action::ToggleWindowFloating,
         &Action::SwitchFocusBetweenFloatingAndTiling,
         &Action::ToggleOverview,
+        &Action::ToggleGridOverview,
     ]);
 
     // Screenshot is not as important, can omit if not bound.
@@ -514,11 +516,15 @@ fn action_name(action: &Action) -> String {
         Action::MaximizeColumn => String::from("Maximize Column"),
         Action::ConsumeOrExpelWindowLeft => String::from("Consume or Expel Window Left"),
         Action::ConsumeOrExpelWindowRight => String::from("Consume or Expel Window Right"),
+        Action::MinimizeWindow => String::from("Minimize Window"),
+        Action::UnminimizeWindow => String::from("Unminimize Window"),
+        Action::ToggleWindowMinimized => String::from("Minimize or Restore Window"),
         Action::ToggleWindowFloating => String::from("Move Window Between Floating and Tiling"),
         Action::SwitchFocusBetweenFloatingAndTiling => {
             String::from("Switch Focus Between Floating and Tiling")
         }
         Action::ToggleOverview => String::from("Open the Overview"),
+        Action::ToggleGridOverview => String::from("Toggle Grid Overview"),
         Action::Screenshot(_, _) => String::from("Take a Screenshot"),
         Action::Spawn(args) => format!(
             "Spawn <span face='monospace' bgcolor='#000000'>{}</span>",
@@ -664,6 +670,22 @@ mod tests {
         } else {
             String::from("None")
         }
+    }
+
+    #[test]
+    fn bare_mod_bind_is_named_after_the_mod_key() {
+        // This used to show up as "Modifier".
+        assert_snapshot!(
+            check(
+                r#"binds {
+                    Mod {
+                        release { toggle-grid-overview; }
+                    }
+                }"#,
+                Action::ToggleGridOverview,
+            ),
+            @" Super : Toggle Grid Overview"
+        );
     }
 
     #[test]

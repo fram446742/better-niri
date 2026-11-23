@@ -58,6 +58,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+pub mod agent;
 pub mod socket;
 pub mod state;
 
@@ -119,6 +120,10 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
+    /// Drive the agent seat, a second input seat for automation.
+    ///
+    /// See the [`agent`] module.
+    Agent(agent::AgentAction),
 }
 
 /// Reply from niri to client.
@@ -165,6 +170,19 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
+    /// PNG screenshot data.
+    Screenshot {
+        /// Base64-encoded PNG image data.
+        png_base64: String,
+    },
+    /// Window image captured for the agent seat.
+    AgentCapture(agent::AgentCapture),
+    /// What an agent action caused.
+    AgentReceipt(agent::AgentReceipt),
+    /// Window of an app launched for the agent seat.
+    AgentLaunched(agent::AgentWindow),
+    /// Facts about a window for agent tools.
+    AgentInfo(agent::AgentInfo),
 }
 
 /// Overview information.
@@ -234,6 +252,11 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = true))]
         show_pointer: bool,
 
+        /// Write the screenshot PNG to stdout.
+        #[serde(default)]
+        #[cfg_attr(feature = "clap", arg(long))]
+        stdout: bool,
+
         /// Path to save the screenshot to.
         ///
         /// The path must be absolute, otherwise an error is returned.
@@ -255,6 +278,11 @@ pub enum Action {
         #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = true))]
         show_pointer: bool,
+
+        /// Write the screenshot PNG to stdout.
+        #[serde(default)]
+        #[cfg_attr(feature = "clap", arg(long))]
+        stdout: bool,
 
         /// Path to save the screenshot to.
         ///
@@ -286,6 +314,11 @@ pub enum Action {
         #[serde(default)]
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = false))]
         show_pointer: bool,
+
+        /// Write the screenshot PNG to stdout.
+        #[serde(default)]
+        #[cfg_attr(feature = "clap", arg(long))]
+        stdout: bool,
 
         /// Path to save the screenshot to.
         ///
@@ -394,6 +427,39 @@ pub enum Action {
     )]
     UnsetWindowedFullscreen {
         /// Id of the window to disable windowed fullscreen on.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Minimize a window.
+    #[cfg_attr(feature = "clap", clap(about = "Minimize the focused window"))]
+    MinimizeWindow {
+        /// Id of the window to minimize.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Unminimize (restore) a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Unminimize the most recently minimized window")
+    )]
+    UnminimizeWindow {
+        /// Id of the window to unminimize.
+        ///
+        /// If `None`, uses the most recently minimized window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Toggle the minimized state of a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Toggle the minimized state of the focused window")
+    )]
+    ToggleWindowMinimized {
+        /// Id of the window to toggle the minimized state of.
         ///
         /// If `None`, uses the focused window.
         #[cfg_attr(feature = "clap", arg(long))]
@@ -1162,6 +1228,36 @@ pub enum Action {
     },
     /// Toggle (open/close) the Overview.
     ToggleOverview {},
+    /// Toggle (open/close) the Grid Overview.
+    ToggleGridOverview {},
+    /// Open the Grid Overview.
+    OpenGridOverview {},
+    /// Close the Grid Overview.
+    CloseGridOverview {},
+    /// Toggle the screen magnifier.
+    ToggleMagnifier {},
+    /// Adjust screen magnifier zoom factor.
+    AdjustMagnifierZoom {
+        /// Amount to adjust the zoom factor by (positive = zoom in, negative = zoom out).
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        delta: f64,
+    },
+    /// Move the magnified view left.
+    ///
+    /// Only works while the magnifier is on with `track-cursor false`.
+    MoveMagnifierLeft {},
+    /// Move the magnified view right.
+    ///
+    /// Only works while the magnifier is on with `track-cursor false`.
+    MoveMagnifierRight {},
+    /// Move the magnified view up.
+    ///
+    /// Only works while the magnifier is on with `track-cursor false`.
+    MoveMagnifierUp {},
+    /// Move the magnified view down.
+    ///
+    /// Only works while the magnifier is on with `track-cursor false`.
+    MoveMagnifierDown {},
     /// Open the Overview.
     OpenOverview {},
     /// Close the Overview.
@@ -1635,6 +1731,24 @@ pub struct Window {
     pub is_floating: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
+    /// Whether this window is currently minimized.
+    ///
+    /// Minimized windows remain on their workspace but are hidden from the layout until restored.
+    pub is_minimized: bool,
+    /// Whether this window belongs to an app launched for the agent seat.
+    #[serde(default)]
+    pub is_agent: bool,
+    /// Content type the window declared with `wp_content_type_v1`, if any.
+    ///
+    /// Only Wayland clients can declare it; XWayland windows always report `None`.
+    #[serde(default)]
+    pub content_type: Option<ContentType>,
+    /// Whether this window's rules and declarations allow tearing on its output.
+    ///
+    /// This ignores whether the window is actually visible on an output, which the compositor also
+    /// requires before it presents a torn frame.
+    #[serde(default)]
+    pub tearing_allowed: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.
@@ -1648,6 +1762,19 @@ pub struct Window {
 }
 
 /// A moment in time.
+/// Content type a window declared with `wp_content_type_v1`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ContentType {
+    /// The client says it shows game content.
+    Game,
+    /// The client says it shows video content.
+    Video,
+    /// The client says it shows photo content.
+    Photo,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct Timestamp {
@@ -1977,6 +2104,13 @@ pub enum Event {
         id: u64,
         /// The new urgency state of the window.
         urgent: bool,
+    },
+    /// Window minimized state changed.
+    WindowMinimizedChanged {
+        /// Id of the window.
+        id: u64,
+        /// The new minimized state of the window.
+        is_minimized: bool,
     },
     /// The layout of one or more windows has changed.
     WindowLayoutsChanged {
@@ -2474,5 +2608,18 @@ mod tests {
         );
         assert!("-".parse::<PositionChange>().is_err());
         assert!("10% ".parse::<PositionChange>().is_err());
+    }
+
+    #[test]
+    fn screenshot_stdout_defaults_to_false() {
+        let action: Action = serde_json::from_str(
+            r#"{"ScreenshotScreen":{"write_to_disk":false,"show_pointer":true,"path":null}}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            action,
+            Action::ScreenshotScreen { stdout: false, .. }
+        ));
     }
 }

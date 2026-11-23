@@ -22,8 +22,13 @@ pub struct Animations {
     pub config_notification_open_close: ConfigNotificationOpenCloseAnim,
     pub exit_confirmation_open_close: ExitConfirmationOpenCloseAnim,
     pub screenshot_ui_open: ScreenshotUiOpenAnim,
+    pub screen_cast_picker_open_close: ScreenCastPickerOpenCloseAnim,
     pub overview_open_close: OverviewOpenCloseAnim,
+    pub grid_overview_open_close: GridOverviewOpenCloseAnim,
+    pub focus_ring: FocusRingAnim,
+    pub magnifier: MagnifierAnim,
     pub recent_windows_close: RecentWindowsCloseAnim,
+    pub cursor_enlarge: CursorEnlargeAnim,
 }
 
 impl Default for Animations {
@@ -40,8 +45,13 @@ impl Default for Animations {
             config_notification_open_close: Default::default(),
             exit_confirmation_open_close: Default::default(),
             screenshot_ui_open: Default::default(),
+            screen_cast_picker_open_close: Default::default(),
             overview_open_close: Default::default(),
+            grid_overview_open_close: Default::default(),
+            focus_ring: Default::default(),
+            magnifier: Default::default(),
             recent_windows_close: Default::default(),
+            cursor_enlarge: Default::default(),
         }
     }
 }
@@ -73,9 +83,19 @@ pub struct AnimationsPart {
     #[knuffel(child)]
     pub screenshot_ui_open: Option<ScreenshotUiOpenAnim>,
     #[knuffel(child)]
+    pub screen_cast_picker_open_close: Option<ScreenCastPickerOpenCloseAnim>,
+    #[knuffel(child)]
     pub overview_open_close: Option<OverviewOpenCloseAnim>,
     #[knuffel(child)]
+    pub grid_overview_open_close: Option<GridOverviewOpenCloseAnim>,
+    #[knuffel(child)]
+    pub focus_ring: Option<FocusRingAnim>,
+    #[knuffel(child)]
+    pub magnifier: Option<MagnifierAnim>,
+    #[knuffel(child)]
     pub recent_windows_close: Option<RecentWindowsCloseAnim>,
+    #[knuffel(child)]
+    pub cursor_enlarge: Option<CursorEnlargeAnim>,
 }
 
 impl MergeWith<AnimationsPart> for Animations {
@@ -100,8 +120,13 @@ impl MergeWith<AnimationsPart> for Animations {
             config_notification_open_close,
             exit_confirmation_open_close,
             screenshot_ui_open,
+            screen_cast_picker_open_close,
             overview_open_close,
+            grid_overview_open_close,
+            focus_ring,
+            magnifier,
             recent_windows_close,
+            cursor_enlarge,
         );
     }
 }
@@ -355,6 +380,21 @@ impl Default for ScreenshotUiOpenAnim {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenCastPickerOpenCloseAnim(pub Animation);
+
+impl Default for ScreenCastPickerOpenCloseAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 200,
+                curve: Curve::EaseOutQuad,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OverviewOpenCloseAnim(pub Animation);
 
 impl Default for OverviewOpenCloseAnim {
@@ -371,6 +411,39 @@ impl Default for OverviewOpenCloseAnim {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridOverviewOpenCloseAnim(pub Animation);
+
+impl Default for GridOverviewOpenCloseAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 1.,
+                stiffness: 800,
+                epsilon: 0.0001,
+            }),
+        })
+    }
+}
+
+/// The focus ring moving to another window: growing in and shrinking back, or sliding to another
+/// cell in the grid overview.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FocusRingAnim(pub Animation);
+
+impl Default for FocusRingAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 300,
+                curve: Curve::EaseOutCubic,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RecentWindowsCloseAnim(pub Animation);
 
 impl Default for RecentWindowsCloseAnim {
@@ -381,6 +454,38 @@ impl Default for RecentWindowsCloseAnim {
                 damping_ratio: 1.,
                 stiffness: 800,
                 epsilon: 0.001,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CursorEnlargeAnim(pub Animation);
+
+impl Default for CursorEnlargeAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 0.82,
+                stiffness: 400,
+                epsilon: 0.0001,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MagnifierAnim(pub Animation);
+
+impl Default for MagnifierAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 1.,
+                stiffness: 800,
+                epsilon: 0.0001,
             }),
         })
     }
@@ -566,6 +671,21 @@ where
     }
 }
 
+impl<S> knuffel::Decode<S> for ScreenCastPickerOpenCloseAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
 impl<S> knuffel::Decode<S> for OverviewOpenCloseAnim
 where
     S: knuffel::traits::ErrorSpan,
@@ -581,7 +701,67 @@ where
     }
 }
 
+impl<S> knuffel::Decode<S> for GridOverviewOpenCloseAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
 impl<S> knuffel::Decode<S> for RecentWindowsCloseAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for CursorEnlargeAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for FocusRingAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for MagnifierAnim
 where
     S: knuffel::traits::ErrorSpan,
 {

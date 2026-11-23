@@ -27,7 +27,7 @@ use smithay::wayland::presentation::Refresh;
 use super::{IpcOutputMap, OutputId, RenderResult};
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
-use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
+use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
 use crate::utils::{get_monotonic_time, logical_output, WinitScale};
 
 pub struct Winit {
@@ -192,6 +192,7 @@ impl Winit {
 
         resources::init(renderer);
         shaders::init(renderer);
+        crate::render_helpers::blend::FrameBlendState::init(renderer);
 
         let config = self.config.borrow();
         if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
@@ -326,6 +327,7 @@ impl Winit {
         let ctx = RenderCtx {
             renderer: self.backend.renderer(),
             target: RenderTarget::Output,
+            intent: RenderIntent::Normal,
             xray: None,
         };
         let mut elements = niri.render_to_vec(ctx, output, true);

@@ -7,18 +7,21 @@ use anyhow::Context as _;
 use calloop::LoopHandle;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::GbmDevice;
-use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
+use smithay::backend::renderer::element::utils::{
+    Relocate, RelocateRenderElement, RescaleRenderElement,
+};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::gbm::Modifier;
 use smithay::utils::{DeviceFd, Physical, Point, Scale, Size};
-use zbus::object_server::SignalEmitter;
 
-use crate::dbus::mutter_screen_cast::{self, CursorMode, ScreenCastToNiri, StreamTargetId};
+use crate::dbus::mutter_screen_cast::{
+    self, CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId,
+};
 use crate::niri::{CastTarget, Niri, OutputRenderElements, PointerRenderElements, State};
 use crate::niri_render_elements;
-use crate::render_helpers::{RenderCtx, RenderTarget};
+use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget};
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
 use crate::window::mapped::{MappedId, WindowCastRenderElements};
 
@@ -48,7 +51,7 @@ pub struct PendingCast {
     pub session_id: CastSessionId,
     pub stream_id: CastStreamId,
     pub cursor_mode: CursorMode,
-    pub signal_ctx: SignalEmitter<'static>,
+    pub node_sink: NodeIdSink,
 }
 
 impl Screencasting {
@@ -228,6 +231,7 @@ impl State {
                 let ctx = RenderCtx {
                     renderer,
                     target: RenderTarget::Screencast,
+                    intent: RenderIntent::Normal,
                     xray: None,
                 };
                 let main_start = elements.len();
@@ -238,12 +242,14 @@ impl State {
                 let cursor_data =
                     CursorData::compute(&elements, main_start, pointer_location, scale);
 
+                let reference_luminance = self.niri.output_capture_reference_luminance(output);
                 if cast.dequeue_buffer_and_render(
                     renderer,
                     &elements,
                     &cursor_data,
                     bbox.size,
                     scale,
+                    reference_luminance,
                 ) {
                     cast.record_frame_time(get_monotonic_time());
                 }
@@ -368,7 +374,7 @@ impl State {
                 refresh,
                 alpha,
                 pending.cursor_mode,
-                pending.signal_ctx,
+                pending.node_sink,
             );
             match res {
                 Ok(mut cast) => {
@@ -389,12 +395,21 @@ impl State {
 
     pub fn on_screen_cast_msg(&mut self, msg: ScreenCastToNiri) {
         match msg {
+            ScreenCastToNiri::PickSources(request) => {
+                self.open_screen_cast_picker(request);
+            }
+            ScreenCastToNiri::CancelPickSources(request) => {
+                if self.niri.screen_cast_picker.cancel_request(&request) {
+                    self.niri.queue_redraw_all();
+                    self.update_keyboard_focus();
+                }
+            }
             ScreenCastToNiri::StartCast {
                 session_id,
                 stream_id,
                 target,
                 cursor_mode,
-                signal_ctx,
+                node_sink,
             } => {
                 let _span = tracy_client::span!("StartCast");
                 let _span = debug_span!("StartCast", %session_id, %stream_id).entered();
@@ -420,7 +435,7 @@ impl State {
                             session_id,
                             stream_id,
                             cursor_mode,
-                            signal_ctx,
+                            node_sink,
                         });
                         return;
                     }
@@ -453,7 +468,7 @@ impl State {
                     refresh,
                     alpha,
                     cursor_mode,
-                    signal_ctx,
+                    node_sink,
                 );
                 match res {
                     Ok(cast) => {
@@ -575,9 +590,32 @@ impl Niri {
                     // happily appear anywhere outside the output video source in OBS.
                     if output_geo.contains(pointer_loc) {
                         pointer_pos = pointer_loc - output_geo.loc;
+                        let mut visual_pointer_pos = pointer_pos;
+                        if let Some((zoom, center)) = self.compute_magnifier_params(output) {
+                            let output_scale_f = output.current_scale().fractional_scale();
+                            let center_logical = center.to_f64().to_logical(output_scale_f);
+                            let cx = center_logical.x;
+                            let cy = center_logical.y;
+                            visual_pointer_pos.x = cx + (pointer_pos.x - cx) * zoom;
+                            visual_pointer_pos.y = cy + (pointer_pos.y - cy) * zoom;
+                        }
+
                         self.render_pointer(renderer, output, &mut |elem| {
-                            elements.push(elem.into())
+                            let magnifier_params = self.compute_magnifier_params(output);
+                            let scale_cursor = self.config.borrow().magnifier.scale_cursor;
+
+                            if let Some((zoom, center)) = magnifier_params {
+                                if scale_cursor {
+                                    elements.push(CastRenderElement::MagnifiedPointer(
+                                        RescaleRenderElement::from_element(elem, center, zoom),
+                                    ));
+                                    return;
+                                }
+                            }
+                            elements.push(elem.into());
                         });
+
+                        pointer_pos = visual_pointer_pos;
                     }
                 }
 
@@ -585,6 +623,7 @@ impl Niri {
                 let ctx = RenderCtx {
                     renderer,
                     target: RenderTarget::Screencast,
+                    intent: RenderIntent::Normal,
                     xray: None,
                 };
                 self.render(ctx, output, false, &mut |elem| elements.push(elem.into()));
@@ -598,7 +637,15 @@ impl Niri {
             }
             let cursor_data = cursor_data.as_ref().unwrap();
 
-            if cast.dequeue_buffer_and_render(renderer, &elements, cursor_data, size, scale) {
+            let reference_luminance = self.output_capture_reference_luminance(output);
+            if cast.dequeue_buffer_and_render(
+                renderer,
+                &elements,
+                cursor_data,
+                size,
+                scale,
+                reference_luminance,
+            ) {
                 cast.record_frame_time(target_presentation_time);
             }
         }
@@ -616,6 +663,8 @@ impl Niri {
         target_presentation_time: Duration,
     ) {
         let _span = tracy_client::span!("Niri::render_windows_for_screen_cast");
+
+        let was_magnifier_capture = self.magnifier_capture.replace(true);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
 
@@ -676,6 +725,7 @@ impl Niri {
             let ctx = RenderCtx {
                 renderer,
                 target: RenderTarget::Screencast,
+                intent: RenderIntent::Normal,
                 xray: None,
             };
             let main_start = elements.len();
@@ -685,7 +735,15 @@ impl Niri {
 
             let cursor_data = CursorData::compute(&elements, main_start, pointer_location, scale);
 
-            if cast.dequeue_buffer_and_render(renderer, &elements, &cursor_data, bbox.size, scale) {
+            let reference_luminance = self.output_capture_reference_luminance(output);
+            if cast.dequeue_buffer_and_render(
+                renderer,
+                &elements,
+                &cursor_data,
+                bbox.size,
+                scale,
+                reference_luminance,
+            ) {
                 cast.record_frame_time(target_presentation_time);
             }
         }
@@ -694,6 +752,8 @@ impl Niri {
         for id in casts_to_stop {
             self.stop_cast(id);
         }
+
+        self.magnifier_capture.set(was_magnifier_capture);
     }
 
     pub fn stop_cast(&mut self, session_id: CastSessionId) {
@@ -725,9 +785,31 @@ impl Niri {
             async_io::block_on(async move {
                 iface
                     .get()
-                    .stop(server.inner(), iface.signal_emitter().clone())
+                    .stop_from_compositor(server.inner(), iface.signal_emitter().clone())
                     .await
             });
+        }
+
+        // Close the built-in portal backend session, if this cast belongs to one.
+        let portal_path = dbus
+            .portal_casts
+            .as_ref()
+            .and_then(|casts| casts.lock().unwrap().get(&session_id).cloned());
+        if let (Some(path), Some(conn)) = (portal_path, dbus.conn_portal.as_ref()) {
+            let _span = tracy_client::span!("closing portal session");
+
+            let server = conn.object_server();
+            if let Ok(iface) =
+                server.interface::<_, crate::dbus::freedesktop_portal::Session>(&path)
+            {
+                async_io::block_on(async move {
+                    let ctxt = iface.signal_emitter().clone();
+                    iface
+                        .get()
+                        .close_from_compositor(server.inner(), &ctxt)
+                        .await;
+                });
+            }
         }
     }
 
@@ -788,5 +870,6 @@ niri_render_elements! {
         Window = WindowCastRenderElements<R>,
         Pointer = PointerRenderElements<R>,
         RelocatedPointer = RelocateRenderElement<PointerRenderElements<R>>,
+        MagnifiedPointer = RescaleRenderElement<PointerRenderElements<R>>,
     }
 }

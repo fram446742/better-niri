@@ -34,6 +34,8 @@ pub struct WindowRule {
     #[knuffel(child, unwrap(argument))]
     pub open_floating: Option<bool>,
     #[knuffel(child, unwrap(argument))]
+    pub open_minimized: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
     pub open_focused: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub on_xdg_activate: Option<OnXdgActivate>,
@@ -69,6 +71,11 @@ pub struct WindowRule {
     #[knuffel(child)]
     pub block_out_from: Option<BlockOutFrom>,
     #[knuffel(child, unwrap(argument))]
+    pub allow_tearing: Option<bool>,
+    /// Content types that may tear, independently of `allow-tearing`.
+    #[knuffel(child, unwrap(arguments))]
+    pub allow_tearing_content_type: Option<Vec<TearingContentType>>,
+    #[knuffel(child, unwrap(argument))]
     pub variable_refresh_rate: Option<VrrRule>,
     #[knuffel(child, unwrap(argument, str))]
     pub default_column_display: Option<ColumnDisplay>,
@@ -80,10 +87,23 @@ pub struct WindowRule {
     pub pinch_sensitivity: Option<FloatOrInt<0, 100>>,
     #[knuffel(child, unwrap(argument))]
     pub tiled_state: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub ignore_grid_overview: Option<bool>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]
     pub popups: PopupsRule,
+}
+
+/// A content type a window can declare with `wp_content_type_v1`.
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TearingContentType {
+    /// Game content, as declared by the client.
+    Game,
+    /// Video content, as declared by the client.
+    Video,
+    /// Photo content, as declared by the client.
+    Photo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +168,9 @@ pub struct Match {
     pub is_floating: Option<bool>,
     #[knuffel(property)]
     pub is_window_cast_target: Option<bool>,
+    /// Matches windows of apps launched for the agent seat.
+    #[knuffel(property)]
+    pub is_agent: Option<bool>,
     #[knuffel(property)]
     pub is_urgent: Option<bool>,
     #[knuffel(property)]
@@ -215,5 +238,54 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for VrrRule {
                 rust_type: stringify!(VrrRule),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TearingContentType;
+    use crate::Config;
+
+    #[test]
+    fn allow_tearing_parses_alongside_content_types() {
+        let config = Config::parse_mem(
+            r##"
+            window-rule {
+                match app-id="a"
+                allow-tearing true
+            }
+            window-rule {
+                match app-id="b"
+                allow-tearing false
+            }
+            window-rule {
+                allow-tearing-content-type "game" "video"
+            }
+            window-rule {
+                match app-id="c"
+                allow-tearing true
+                allow-tearing-content-type "photo"
+            }
+            window-rule {
+                match app-id="d"
+            }
+            "##,
+        )
+        .unwrap();
+
+        assert_eq!(config.window_rules[0].allow_tearing, Some(true));
+        assert_eq!(config.window_rules[1].allow_tearing, Some(false));
+        assert_eq!(config.window_rules[2].allow_tearing, None);
+        assert_eq!(
+            config.window_rules[2].allow_tearing_content_type,
+            Some(vec![TearingContentType::Game, TearingContentType::Video])
+        );
+        // Both properties can be set in one rule; they are independent.
+        assert_eq!(config.window_rules[3].allow_tearing, Some(true));
+        assert_eq!(
+            config.window_rules[3].allow_tearing_content_type,
+            Some(vec![TearingContentType::Photo])
+        );
+        assert_eq!(config.window_rules[4].allow_tearing_content_type, None);
     }
 }

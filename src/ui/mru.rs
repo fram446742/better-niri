@@ -381,9 +381,16 @@ impl Thumbnail {
         let clip = move |elem| match elem {
             LayoutElementRenderElement::Wayland(elem) => {
                 if let Some(shader) = clip_shader.clone() {
-                    if ClippedSurfaceRenderElement::will_clip(&elem, s, geo, radius) {
-                        let elem =
-                            ClippedSurfaceRenderElement::new(elem, s, geo, shader.clone(), radius);
+                    if ClippedSurfaceRenderElement::will_clip(elem.inner(), s, geo, radius) {
+                        let content = elem.content();
+                        let elem = ClippedSurfaceRenderElement::new(
+                            elem.into_inner(),
+                            s,
+                            geo,
+                            shader.clone(),
+                            radius,
+                            content,
+                        );
                         return ThumbnailRenderElement::ClippedSurface(elem);
                     }
                 }
@@ -425,6 +432,8 @@ impl Thumbnail {
                 error!("background effect clipping is unimplemented");
                 elem.into()
             }
+            // Drawn above the window, not clipped to it.
+            elem @ LayoutElementRenderElement::AgentCursor(_) => elem.into(),
         };
 
         let downscale = move |elem| {
