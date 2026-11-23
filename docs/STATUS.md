@@ -68,6 +68,23 @@ pointer warp, direct scanout, DPMS, multi-GPU, screencasting). Do not merge to
 - `fram446742/better-niri` `main` remains the safe baseline; the elite branch is
   pushed separately, never force-updated.
 
+## Architecture decision (2026-11-23)
+
+The module boundary is now documented and drives the next integrations:
+
+- **Core**: presentation/HDR/colour, sync/tearing/FIFO, input (including
+  per-keyboard), layout/window primitives, outputs, protocols, config/IPC.
+- **Built-in modules**: `effects` (all shader scopes + liquid glass presets),
+  `navigation` (grid/carousel/zoom/magnifier), `cursor` (SVG/shake), `agent`
+  (off by default), `portal`, `kde`, `vulkan`.
+- **Companions**: better-nsticky, better-companion, better-session,
+  better-sidepanels, better-shot, better-monitor, better-audio,
+  better-wallpaper, better-settings; shell integration stays Noctalia-only.
+
+See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. A per-keyboard branch
+(`integration/biri-per-keyboard`) is parked with the config/tests commits
+applied; it is core input work and resumes next.
+
 ## Next steps
 
 1. Runtime-test the elite branch on AMD/Intel/Nvidia and multi-monitor. Keep the

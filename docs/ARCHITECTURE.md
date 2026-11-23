@@ -108,6 +108,24 @@ configuration.
 - `better-smithay` is the only forked dependency. Everything else stays on
   crates.io/GitHub upstream.
 
+### Delivery tiers
+
+Features are classified before they are integrated:
+
+- **Tier 1 core** — must be in the compositor (presentation, HDR/colour, input,
+  layout/window primitives, outputs, protocols, config/IPC).
+- **Tier 2 built-in modules** — shipped in the binary, compile-time optional,
+  inert until configured: `effects`, `navigation`, `cursor`, `agent`, `portal`,
+  `kde`, `vulkan`.
+- **Tier 3 companions** — separate repositories over IPC: nsticky, automation,
+  sessions, panels, shot, monitor, audio, wallpaper, settings.
+- **Tier 4 shell** — Noctalia plugins only (frozen).
+
+The complete boundary, naming and zero-cost rules are in
+[`MODULES.md`](MODULES.md); the ecosystem responsibilities and roadmap are in
+[`ECOSYSTEM.md`](ECOSYSTEM.md). A feature that can be implemented as a companion
+must not be pulled into the render loop merely to simplify packaging.
+
 ## 4. Where features plug into niri
 
 | Concern | Seam | Pattern |
