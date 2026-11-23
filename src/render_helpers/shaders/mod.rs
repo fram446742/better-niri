@@ -19,6 +19,7 @@ pub struct Shaders {
     pub texture_hdr: Option<GlesTexProgram>,
     pub texture_hdr_to_sdr: Option<GlesTexProgram>,
     pub border: Option<ShaderProgram>,
+    pub panel: Option<ShaderProgram>,
     pub decoration_light: Option<ShaderProgram>,
     pub decorations: RefCell<HashMap<u64, ShaderProgram>>,
     pub shadow: Option<ShaderProgram>,
@@ -41,6 +42,7 @@ pub struct Shaders {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramType {
     Border,
+    Panel,
     DecorationLight,
     Decoration(u64),
     Shadow,
@@ -99,6 +101,20 @@ impl Shaders {
             &["light_texture"],
         )
         .map_err(|err| warn!("error compiling decoration light shader: {err:?}"))
+        .ok();
+
+        let panel = ShaderProgram::compile(
+            renderer,
+            include_str!("panel.frag"),
+            &[
+                UniformName::new("niri_panel_inv", UniformType::Matrix3x3),
+                UniformName::new("niri_panel_dim", UniformType::_1f),
+            ],
+            &["niri_panel_tex"],
+        )
+        .map_err(|err| {
+            warn!("error compiling panel shader: {err:?}");
+        })
         .ok();
 
         let shadow = ShaderProgram::compile(
@@ -274,6 +290,7 @@ impl Shaders {
             texture_hdr,
             texture_hdr_to_sdr,
             border,
+            panel,
             decoration_light,
             decorations: RefCell::new(HashMap::new()),
             shadow,
@@ -329,6 +346,7 @@ impl Shaders {
     pub fn program(&self, program: ProgramType) -> Option<ShaderProgram> {
         match program {
             ProgramType::Border => self.border.clone(),
+            ProgramType::Panel => self.panel.clone(),
             ProgramType::DecorationLight => self.decoration_light.clone(),
             ProgramType::Decoration(key) => self
                 .decorations
