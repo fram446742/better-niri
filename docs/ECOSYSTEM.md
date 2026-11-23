@@ -283,3 +283,13 @@ Remaining questions:
 - **better-portal scope**: ScreenCast + Screenshot first, RemoteDesktop later?
 - **better-settings**: thin GTK4 frontend that delegates to each app's
   validated config API (recommended) rather than owning configuration itself.
+
+
+## better-portal status
+
+`better-portal/` now exists as a separate daemon inside this repository,
+excluded from niri's Cargo workspace. It implements the portal Screenshot
+backend (fullscreen/interactive screenshot and colour picking) by delegating to
+the compositor's GNOME-Shell-style interfaces, with a cancellable
+`org.freedesktop.impl.portal.Request`. ScreenCast extraction and the external
+layer-shell picker remain.
