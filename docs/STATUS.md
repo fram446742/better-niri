@@ -59,7 +59,9 @@ Reconciled with upstream `02ee0585`:
 
 Added on top of the elite base after the initial merge:
 
-- KDE output order (`kde_output_order_v1`) and KDE colour picker D-Bus interface.
+- KDE output order (`kde_output_order_v1`), KDE colour picker and
+  `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
+  interactive) D-Bus interfaces, all gated by the `kde` feature.
 - Global post-process shaders (`global-shader`): multi-pass chains, feedback
   (`niri_prev`/`niri_buffer`), `niri_screen`/`niri_source`, region/cursor mode,
   redraw intelligence and black-seeded first frame.

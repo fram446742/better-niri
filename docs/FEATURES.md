@@ -117,7 +117,7 @@ This table is the integration contract, not a claim of completion.
 | Region capture | Upstream (image copy) | upstream | upstream | Upstream | Verify HDR→SDR conversion. |
 | Window capture | Upstream (image copy) | upstream + urayde | upstream | Upstream | urayde has cursor-session rework; compare before porting. |
 | Cursor capture | Upstream | urayde | urayde | Planned | ext-image-copy cursor session refinements. |
-| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Partial | `org_kde_kwin_blur`, KDE output order and colorpicker integrated; KDE screenshot2 pending. |
+| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Partial | `org_kde_kwin_blur`, KDE output order, colorpicker and the `org.kde.kwin.Screenshot` interface (fullscreen/area/window/interactive, saved-path replies) integrated. |
 | Spectacle support | Absent | kde-niri | kde-niri | Planned | Through KDE screenshot D-Bus. |
 | PipeWire | Upstream | upstream | upstream | Upstream | |
 | DMA-BUF → SHM fallback | Upstream | upstream | upstream | Upstream | niri-elite's fallback was merged upstream. |
