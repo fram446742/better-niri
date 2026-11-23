@@ -2978,6 +2978,88 @@ impl<W: LayoutElement> Monitor<W> {
         );
     }
 
+    /// Render this monitor's full overview (all workspaces stacked) at a fixed `zoom`,
+    /// ignoring its inherited overview zoom. Elements are positioned in this monitor's own view
+    /// space; the caller relocates/crops them onto the host output. Used by the consolidated
+    /// carousel lens.
+    pub fn render_overview_at_zoom<R: NiriRenderer>(
+        &self,
+        mut ctx: RenderCtx<R>,
+        zoom: f64,
+        focus_ring: bool,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let _span = tracy_client::span!("Monitor::render_overview_at_zoom");
+
+        let scale = self.scale.fractional_scale();
+        // Ceil the height in physical pixels.
+        let height = (self.view_size.h * scale).ceil() as i32;
+
+        // Crop the elements to prevent them overflowing, currently visible during a workspace
+        // switch.
+        //
+        // HACK: crop to infinite bounds at least horizontally where we know there's no workspace
+        // joining or monitor bounds, otherwise it will cut pixel shaders and mess up the
+        // coordinate space. There's also a damage tracking bug which causes glitched rendering
+        // for maximized GTK windows.
+        //
+        // FIXME: use proper bounds after fixing the Crop element.
+        let crop_bounds = if self.workspace_switch.is_some() || self.overview_progress.is_some() {
+            Rectangle::new(
+                Point::from((-i32::MAX / 2, 0)),
+                Size::from((i32::MAX, height)),
+            )
+        } else {
+            Rectangle::new(
+                Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                Size::from((i32::MAX, i32::MAX)),
+            )
+        };
+
+        let insert_hint_render_loc = self
+            .insert_hint_render_loc
+            .filter(|_| !self.options.layout.insert_hint.off);
+
+        let scale_relocate = move |geo: Rectangle<f64, Logical>, elem| {
+            let elem = OverviewRescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
+            RelocateRenderElement::from_element(
+                elem,
+                // The offset from workspaces_with_render_geo() is in logical space; convert it
+                // to physical so it lines up with the rest of the render path.
+                geo.loc.to_physical_precise_round(scale),
+                Relocate::Relative,
+            )
+        };
+
+        for (ws, geo) in self.workspaces_with_render_geo_at_zoom(zoom) {
+            // Macro instead of closure because ws and insert hint have different elem types.
+            macro_rules! push {
+                () => {{
+                    &mut |elem| {
+                        let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
+                        if let Some(elem) = elem {
+                            let elem = MonitorInnerRenderElement::from(elem);
+                            push(scale_relocate(geo, elem));
+                        }
+                    }
+                }};
+            }
+
+            let xray_pos = XrayPos::new(geo.loc, zoom);
+
+            ws.render_floating(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
+
+            if let Some(loc) = insert_hint_render_loc {
+                if loc.workspace == InsertWorkspace::Existing(ws.id()) {
+                    self.insert_hint_element
+                        .render(ctx.renderer, loc.location, push!());
+                }
+            }
+
+            ws.render_scrolling(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
+        }
+    }
+
     pub fn render_workspace_shadows<R: NiriRenderer>(
         &self,
         renderer: &mut R,

@@ -3615,7 +3615,20 @@ impl<W: LayoutElement> Layout<W> {
         let Some(mon) = self.active_monitor_ref() else {
             return false;
         };
-        self.overview_open && mon.overview_zoom() <= cc.activation_zoom
+        let zoom = mon.overview_zoom();
+        self.overview_open && zoom <= cc.activation_zoom && zoom > cc.expand_zoom
+    }
+
+    /// Whether the carousel has zoomed past the carousel band into the lens: the centered
+    /// output's full overview fills the host.
+    pub fn in_carousel_lens(&self) -> bool {
+        let Some(cc) = self.options.overview.consolidated_carousel else {
+            return false;
+        };
+        let Some(mon) = self.active_monitor_ref() else {
+            return false;
+        };
+        self.overview_open && mon.overview_zoom() <= cc.expand_zoom
     }
 
     #[cfg(test)]
