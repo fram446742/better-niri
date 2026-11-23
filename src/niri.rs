@@ -1775,7 +1775,15 @@ impl State {
     }
 
     fn load_xkb_file(&mut self) {
-        let xkb_file = self.niri.config.borrow().input.fallback_keyboard().xkb.file.clone();
+        let xkb_file = self
+            .niri
+            .config
+            .borrow()
+            .input
+            .fallback_keyboard()
+            .xkb
+            .file
+            .clone();
         if let Some(XkbFile(Some(keymap))) = xkb_file {
             if let Err(err) = self.set_xkb_file_content(keymap) {
                 warn!("error loading xkb_file: {err:?}");
