@@ -101,6 +101,7 @@ Verified on this branch:
 | `cargo check --workspace` | pass |
 | `cargo test --workspace` | pass, 788 tests (1 order-dependent EGL golden test ignored) |
 | `cargo check --workspace --no-default-features` | pass |
+| `cargo test --workspace --no-default-features` | pass, 788 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -155,18 +156,20 @@ picked up without re-auditing.
    axis; large).
 4. **Vulkan renderer on the niri side** — better-smithay has the Vulkan
    renderer; niri still wires only GLES.
-5. **KDE screenshot2** — `kde/main` `src/dbus/kwin_screenshot2.rs` needs
-   Naxdy's capture abstraction; colour picker and output order are already
-   integrated.
+5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
+   `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
+   interactive) on top of niri's capture pipeline, alongside the colour picker
+   and output order.
 6. **Ecosystem** — `better-portal` (separate daemon), `better-companion`
    (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
    `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
    Companion repos start only after Phase 1.
-7. **Remaining built-in module features** — `effects`, `navigation` and
-   `vulkan` Cargo features. `kde` and `cursor` are done (the latter gates SVG
-   cursors and shake, dropping `resvg`/`usvg` in minimal builds). `effects`
-   (global/region/window/focus-ring shader engine) and `navigation`
-   (grid/magnifier/carousel) still need cfg gating across the render path and
-   layout/input entry points.
+7. **Remaining built-in module features** — `navigation` and `vulkan` Cargo
+   features. `kde`, `cursor` and `effects` are done. `effects` gates the
+   global/region/output/window shader engine and decoration light (render
+   path, reload hooks, continuous-redraw gates, backend pass registration and
+   decoration-light damage ordering), so a minimal build compiles them out.
+   `navigation` (grid/magnifier/carousel) still needs cfg gating across
+   layout/monitor/input.
 8. **Multi-action binds** — deferred cross-cutting refactor touching ~59
    bind/config/IPC/UI conflict points; DWT is already integrated separately.

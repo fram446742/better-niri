@@ -2622,6 +2622,7 @@ impl<W: LayoutElement> Monitor<W> {
             });
     }
 
+    #[cfg(feature = "effects")]
     fn decoration_light_ids(&self) -> Vec<Id> {
         self.workspaces
             .iter()
@@ -2642,7 +2643,10 @@ impl<W: LayoutElement> Monitor<W> {
 
         // Render lists are front-to-back. Emit light first, then preserve the exact
         // relative order of every normal element. IDs survive crop/scale wrappers.
+        #[cfg(feature = "effects")]
         let light_ids = self.decoration_light_ids();
+        #[cfg(not(feature = "effects"))]
+        let light_ids: Vec<Id> = Vec::new();
         let mut deferred = Vec::new();
         let output = push;
         let mut push = |elem: MonitorRenderElement<R>| {

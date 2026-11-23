@@ -35,9 +35,11 @@ pub mod capture;
 pub mod clipped_surface;
 pub mod damage;
 pub mod debug;
+#[cfg(feature = "effects")]
 pub mod decoration_light;
 pub mod effect_buffer;
 pub mod framebuffer_effect;
+#[cfg(feature = "effects")]
 pub mod global_shader_element;
 pub mod gradient_fade_texture;
 pub mod liquid_glass;
@@ -51,6 +53,7 @@ pub mod render_elements;
 pub mod renderer;
 pub mod resize;
 pub mod resources;
+#[cfg(feature = "effects")]
 pub mod scoped_shader_element;
 pub mod shader_element;
 pub mod shaders;

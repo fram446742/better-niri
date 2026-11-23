@@ -80,7 +80,9 @@ use super::{
     virtual_output, IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker,
 };
 use crate::frame_clock::FrameClock;
-use crate::niri::{global_shader_pass_sources, Niri, RedrawState, State};
+#[cfg(feature = "effects")]
+use crate::niri::global_shader_pass_sources;
+use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::blend::{self, set_frame_blend, DEFAULT_REFERENCE_LUMINANCE};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
@@ -968,10 +970,12 @@ impl Tty {
             if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
                 shaders::set_custom_open_program(gles_renderer, Some(src));
             }
+            #[cfg(feature = "effects")]
             {
                 let passes = global_shader_pass_sources(&config.global_shader);
                 shaders::set_custom_global_passes(gles_renderer, &passes);
             }
+            #[cfg(feature = "effects")]
             {
                 let chains = crate::niri::scoped_shader_chains(&config);
                 shaders::set_scoped_programs(gles_renderer, &chains);
