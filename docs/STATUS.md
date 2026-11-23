@@ -97,7 +97,7 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 780 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 789 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -141,11 +141,12 @@ picked up without re-auditing.
    multi-monitor (HDR, VRR, tearing, explicit sync, DPCM, multi-GPU,
    screencasting). The running compositor must stay untouched; use the
    headless/visual-test harness.
-2. **Carousel cover-flow redesign** — biri `fbf672f4`…`54887e66`
-   (`carousel_ring`/rotation, damage-gated `PanelSource`s `f8dcd26d`,
-   `0d13d718`, cover-flow stack `bb818388`, concave panels `f0603a62`,
-   pull-back `6d4d5542`, click-to-rotate `38a9513e`, lens focus-jump
-   `54887e66`). The panel shader (`424ec5fb`) is already in place.
+2. **Carousel — done.** Cover-flow redesign, lens, pull-back, click-to-rotate,
+   lens focus-jump, plus the robustness/refinement series (exit/hotplug/refocus
+   `da80bb8a`, `54366b6a`, ring reconciliation `a0428f1e`, sibling progress
+   gating + lens workspace switching `c298638a`, lens workspace/column routing
+   `920551ce`, `b2af6a07`, continuous placement `30dc96e1`, live-zoom/target-scale
+   bake `186f66e9`, generation preservation `82cce136`). Remaining only docs.
 3. **Portrait / vertical main axis** — biri `b30284c7` (rewrites the scrolling
    axis; large).
 4. **Vulkan renderer on the niri side** — better-smithay has the Vulkan
