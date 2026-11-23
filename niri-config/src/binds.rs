@@ -33,9 +33,12 @@ pub struct Bind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BoundAction {
-    Press(Action),
-    Release(Action),
-    Both { press: Action, release: Action },
+    Press(Vec<Action>),
+    Release(Vec<Action>),
+    Both {
+        press: Vec<Action>,
+        release: Vec<Action>,
+    },
 }
 
 impl Bind {
@@ -53,30 +56,46 @@ impl Bind {
         )
     }
 
+    /// All actions that run when the bind is pressed, in source order.
+    pub fn press_actions(&self) -> &[Action] {
+        match &self.action {
+            BoundAction::Press(actions) => actions,
+            BoundAction::Both { press, .. } => press,
+            BoundAction::Release(_) => &[],
+        }
+    }
+
+    /// All actions that run when the bind is released, in source order.
+    pub fn release_actions(&self) -> &[Action] {
+        match &self.action {
+            BoundAction::Release(actions) => actions,
+            BoundAction::Both { release, .. } => release,
+            BoundAction::Press(_) => &[],
+        }
+    }
+
+    /// The first press action, for callers that only need to identify the bind.
     pub fn press_action(&self) -> Option<&Action> {
-        match &self.action {
-            BoundAction::Press(action) => Some(action),
-            BoundAction::Both { press, .. } => Some(press),
-            BoundAction::Release(_) => None,
-        }
+        self.press_actions().first()
     }
 
+    /// The first release action, for callers that only need to identify the bind.
     pub fn release_action(&self) -> Option<&Action> {
-        match &self.action {
-            BoundAction::Release(action) => Some(action),
-            BoundAction::Both { release, .. } => Some(release),
-            BoundAction::Press(_) => None,
-        }
+        self.release_actions().first()
     }
 
-    pub fn into_action(self, pressed: bool) -> Option<Action> {
+    /// Every action in the bind, regardless of phase.
+    pub fn actions(&self) -> impl Iterator<Item = &Action> {
+        self.press_actions().iter().chain(self.release_actions())
+    }
+
+    /// The actions that run for a press or release event, in source order.
+    pub fn into_actions(self, pressed: bool) -> Vec<Action> {
         match (self.action, pressed) {
-            (BoundAction::Press(action), true) | (BoundAction::Release(action), false) => {
-                Some(action)
-            }
-            (BoundAction::Both { press, .. }, true) => Some(press),
-            (BoundAction::Both { release, .. }, false) => Some(release),
-            _ => None,
+            (BoundAction::Press(actions), true) | (BoundAction::Release(actions), false) => actions,
+            (BoundAction::Both { press, .. }, true) => press,
+            (BoundAction::Both { release, .. }, false) => release,
+            _ => Vec::new(),
         }
     }
 }
@@ -1217,7 +1236,7 @@ where
         // even if their contents are not valid.
         let dummy = Self {
             key,
-            action: BoundAction::Press(Action::Spawn(vec![])),
+            action: BoundAction::Press(Vec::new()),
             repeat: true,
             pass_through: None,
             cooldown: None,
@@ -1226,10 +1245,12 @@ where
             hotkey_overlay_title: None,
         };
 
-        // direct_action is an action node that is not wrapped in a press or release section
-        let mut direct_action: Option<Action> = None;
-        let mut press_action: Option<Action> = None;
-        let mut release_action: Option<Action> = None;
+        // Actions not wrapped in a press/release section run on press.
+        let mut direct_actions: Vec<Action> = Vec::new();
+        let mut press_actions: Vec<Action> = Vec::new();
+        let mut release_actions: Vec<Action> = Vec::new();
+        let mut had_press_section = false;
+        let mut had_release_section = false;
 
         let decode_action = |ctx: &mut knuffel::decode::Context<S>,
                              child: &knuffel::ast::SpannedNode<S>| {
@@ -1248,13 +1269,13 @@ where
 
             if child_name == "press" || child_name == "release" {
                 let is_press = child_name == "press";
-                let slot = if is_press {
-                    &mut press_action
+                let (section_seen, slot) = if is_press {
+                    (&mut had_press_section, &mut press_actions)
                 } else {
-                    &mut release_action
+                    (&mut had_release_section, &mut release_actions)
                 };
 
-                if slot.is_some() {
+                if *section_seen {
                     ctx.emit_error(DecodeError::unexpected(
                         &child.node_name,
                         "section",
@@ -1262,8 +1283,9 @@ where
                     ));
                     continue;
                 }
+                *section_seen = true;
 
-                if direct_action.is_some() {
+                if !direct_actions.is_empty() {
                     ctx.emit_error(DecodeError::unexpected(
                         &child.node_name,
                         "section",
@@ -1272,36 +1294,24 @@ where
                     continue;
                 }
 
-                // The action is the section's single child node.
-                let mut children = child.children();
-                let Some(action_child) = children.next() else {
+                let mut children = child.children().peekable();
+                if children.peek().is_none() {
                     ctx.emit_error(DecodeError::missing(
                         child,
                         format!("expected an action for this {child_name} section"),
                     ));
                     continue;
-                };
-
-                for unwanted_child in children {
-                    ctx.emit_error(DecodeError::unexpected(
-                        unwanted_child,
-                        "node",
-                        "only one action is allowed per keybind",
-                    ));
                 }
 
-                *slot = decode_action(ctx, action_child);
+                // Decode every action in source order; a bad one is reported and skipped so
+                // later actions still get decoded.
+                for action_child in children {
+                    if let Some(action) = decode_action(ctx, action_child) {
+                        slot.push(action);
+                    }
+                }
             } else {
-                if direct_action.is_some() {
-                    ctx.emit_error(DecodeError::unexpected(
-                        &child.node_name,
-                        "node",
-                        "only one action is allowed per keybind",
-                    ));
-                    continue;
-                }
-
-                if press_action.is_some() || release_action.is_some() {
+                if had_press_section || had_release_section {
                     ctx.emit_error(DecodeError::unexpected(
                         &child.node_name,
                         "node",
@@ -1310,23 +1320,28 @@ where
                     continue;
                 }
 
-                direct_action = decode_action(ctx, child);
+                if let Some(action) = decode_action(ctx, child) {
+                    direct_actions.push(action);
+                }
             }
         }
 
-        let press_action = press_action.or(direct_action);
+        if !had_press_section {
+            press_actions = direct_actions;
+        }
 
-        if release_action.is_some() && key.trigger.is_scroll() {
+        if !release_actions.is_empty() && key.trigger.is_scroll() {
             ctx.emit_error(DecodeError::unexpected(
                 node,
                 "bind",
                 "release sections are not supported for scroll binds",
             ));
-            release_action = None;
+            release_actions.clear();
+            had_release_section = false;
         }
 
         if let Some(node) = repeat_node {
-            if repeat == Some(true) && press_action.is_none() && release_action.is_some() {
+            if repeat == Some(true) && press_actions.is_empty() && !release_actions.is_empty() {
                 ctx.emit_error(DecodeError::unexpected(
                     node,
                     "property",
@@ -1336,12 +1351,12 @@ where
         }
 
         if let Some(node) = allow_when_locked_node {
-            for action in press_action.iter().chain(release_action.iter()) {
+            for action in press_actions.iter().chain(release_actions.iter()) {
                 if !matches!(action, Action::Spawn(_) | Action::SpawnSh(_)) {
                     ctx.emit_error(DecodeError::unexpected(
                         node,
                         "property",
-                        "allow-when-locked can only be set on spawn binds",
+                        "allow-when-locked can only be set on binds where every action is spawn",
                     ));
                 }
             }
@@ -1349,28 +1364,30 @@ where
 
         // The toggle-inhibit action must always be uninhibitable.
         // Otherwise, it would be impossible to trigger it.
-        if matches!(press_action, Some(Action::ToggleKeyboardShortcutsInhibit))
-            || matches!(release_action, Some(Action::ToggleKeyboardShortcutsInhibit))
+        if press_actions
+            .iter()
+            .chain(release_actions.iter())
+            .any(|a| matches!(a, Action::ToggleKeyboardShortcutsInhibit))
         {
             allow_inhibiting = false;
         }
 
         let repeat = match repeat {
             Some(value) => value,
-            None => release_action.is_none(),
+            None => release_actions.is_empty(),
         };
 
-        let action = match (press_action, release_action) {
-            (Some(press), Some(release)) => BoundAction::Both { press, release },
-            (Some(press), None) => BoundAction::Press(press),
-            (None, Some(release)) => BoundAction::Release(release),
-            (None, None) => {
+        let action = match (press_actions.is_empty(), release_actions.is_empty()) {
+            (false, false) => BoundAction::Both {
+                press: press_actions,
+                release: release_actions,
+            },
+            (false, true) => BoundAction::Press(press_actions),
+            (true, false) => BoundAction::Release(release_actions),
+            (true, true) => {
                 // If a press or release section was present, an error about its missing or
                 // invalid action was already emitted above.
-                let has_section = node.children().any(|child| {
-                    let name = child.node_name.as_ref();
-                    name == "press" || name == "release"
-                });
+                let has_section = had_press_section || had_release_section;
                 if !has_section {
                     ctx.emit_error(DecodeError::missing(
                         node,
@@ -1551,6 +1568,155 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_multiple_actions_in_order() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+G { focus-column-right; consume-or-expel-window-left; }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.binds.0.len(), 1);
+        assert_eq!(
+            config.binds.0[0].action,
+            BoundAction::Press(vec![
+                Action::FocusColumnRight,
+                Action::ConsumeOrExpelWindowLeft,
+            ]),
+        );
+    }
+
+    #[test]
+    fn parse_multiple_press_release_actions() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+G {
+                    press { close-window; focus-column-right; }
+                    release { toggle-overview; focus-window-down; }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.binds.0[0].action,
+            BoundAction::Both {
+                press: vec![Action::CloseWindow, Action::FocusColumnRight],
+                release: vec![Action::ToggleOverview, Action::FocusWindowDown],
+            },
+        );
+    }
+
+    #[test]
+    fn into_actions_returns_phase_actions_in_order() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+G {
+                    press { close-window; focus-column-right; }
+                    release { toggle-overview; focus-window-down; }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let bind = &config.binds.0[0];
+        assert_eq!(
+            bind.clone().into_actions(true),
+            [Action::CloseWindow, Action::FocusColumnRight],
+        );
+        assert_eq!(
+            bind.clone().into_actions(false),
+            [Action::ToggleOverview, Action::FocusWindowDown],
+        );
+    }
+
+    #[test]
+    fn parse_bind_with_no_actions_still_errors() {
+        assert!(crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+G { }
+            }
+            "#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_bad_action_among_several_keeps_the_others() {
+        // A bad action in the middle is reported and skipped, so later actions still decode.
+        use miette::Diagnostic;
+
+        let config_text = r#"
+            binds {
+                Mod+G { focus-column-right; not-a-real-action; close-window; }
+            }
+            "#;
+
+        let err = crate::Config::parse_mem(config_text).unwrap_err();
+
+        let bad_snippets: Vec<&str> = err
+            .related()
+            .into_iter()
+            .flatten()
+            .flat_map(|e| e.labels().into_iter().flatten())
+            .map(|label| &config_text[label.offset()..label.offset() + label.len()])
+            .collect();
+
+        assert!(
+            bad_snippets.contains(&"not-a-real-action"),
+            "expected a label pointing at `not-a-real-action`, got: {bad_snippets:?}"
+        );
+    }
+
+    #[test]
+    fn allow_when_locked_rejected_on_mixed_bind() {
+        assert!(crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+X allow-when-locked=true { spawn "foo"; quit; }
+            }
+            "#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn allow_when_locked_accepted_on_all_spawn_bind() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+X allow-when-locked=true { spawn "foo"; spawn-sh "bar"; }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.binds.0[0].allow_when_locked);
+        assert_eq!(config.binds.0[0].press_actions().len(), 2);
+    }
+
+    #[test]
+    fn toggle_inhibit_anywhere_in_list_forces_allow_inhibiting_false() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+Escape { close-window; toggle-keyboard-shortcuts-inhibit; }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.binds.0[0].allow_inhibiting);
+    }
+
+    #[test]
     fn parse_window_shader_actions() {
         let config = crate::Config::parse_mem(
             r#"
@@ -1565,8 +1731,8 @@ mod tests {
         assert_eq!(
             actions,
             [
-                BoundAction::Press(Action::ToggleWindowShader),
-                BoundAction::Press(Action::CycleWindowShader),
+                BoundAction::Press(vec![Action::ToggleWindowShader]),
+                BoundAction::Press(vec![Action::CycleWindowShader]),
             ]
         );
 

@@ -146,7 +146,7 @@ impl From<MruBind> for Bind {
     fn from(x: MruBind) -> Self {
         Self {
             key: x.key,
-            action: BoundAction::Press(Action::from(x.action)),
+            action: BoundAction::Press(vec![Action::from(x.action)]),
             repeat: true,
             pass_through: None,
             cooldown: None,

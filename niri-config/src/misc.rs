@@ -266,7 +266,7 @@ impl From<MagnifierBind> for Bind {
     fn from(x: MagnifierBind) -> Self {
         Self {
             key: x.key,
-            action: BoundAction::Press(Action::from(x.action)),
+            action: BoundAction::Press(vec![Action::from(x.action)]),
             // Key repeat replays the bind, so a repeating toggle would turn the magnifier back on.
             repeat: x
                 .repeat

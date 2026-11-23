@@ -99,9 +99,9 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 788 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 807 tests (1 order-dependent EGL golden test ignored) |
 | `cargo check --workspace --no-default-features` | pass |
-| `cargo test --workspace --no-default-features` | pass, 788 tests |
+| `cargo test --workspace --no-default-features` | pass, 807 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -171,5 +171,10 @@ picked up without re-auditing.
    decoration-light damage ordering), so a minimal build compiles them out.
    `navigation` (grid/magnifier/carousel) still needs cfg gating across
    layout/monitor/input.
-8. **Multi-action binds** — deferred cross-cutting refactor touching ~59
-   bind/config/IPC/UI conflict points; DWT is already integrated separately.
+8. **Multi-action binds — done.** Binds hold ordered action lists per phase
+   (`press`/`release` sections included), the parser reports and skips a bad
+   action while keeping the rest, `allow-when-locked` requires every action to
+   be `spawn`/`spawn-sh`, and the hotkey overlay, MRU and screenshot UI consume
+   all actions. `niri msg actions` and `Request::Actions` run a batch validated
+   up front and executed in one idle callback. DWT was already integrated
+   separately.

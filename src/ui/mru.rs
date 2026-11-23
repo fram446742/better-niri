@@ -1866,7 +1866,7 @@ fn make_preset_opened_binds() -> Vec<Bind> {
                 // The modifier is filled dynamically.
                 modifiers: Modifiers::empty(),
             },
-            action: BoundAction::Press(action),
+            action: BoundAction::Press(vec![action]),
             repeat: true,
             pass_through: None,
             cooldown: None,
@@ -1915,9 +1915,9 @@ fn make_dynamic_opened_binds(config: &Config) -> Vec<Bind> {
     let mut binds: HashMap<Trigger, Vec<Bind>> = HashMap::new();
 
     for bind in &config.binds.0 {
-        let Some(press_action) = bind.press_action() else {
+        if bind.press_actions().is_empty() {
             continue;
-        };
+        }
 
         // The idea with dynamic binds is that their modifiers are ignored
         // (set to whatever the user is currently holding). This idea does not
@@ -1927,34 +1927,38 @@ fn make_dynamic_opened_binds(config: &Config) -> Vec<Bind> {
             continue;
         }
 
-        let action = match press_action {
-            Action::FocusColumnRight
-            | Action::FocusColumnRightOrFirst
-            | Action::FocusColumnOrMonitorRight
-            | Action::FocusWindowDownOrColumnRight => Action::MruAdvance {
-                direction: MruDirection::Forward,
-                scope: None,
-                filter: None,
-            },
-            Action::FocusColumnLeft
-            | Action::FocusColumnLeftOrLast
-            | Action::FocusColumnOrMonitorLeft
-            | Action::FocusWindowUpOrColumnLeft => Action::MruAdvance {
-                direction: MruDirection::Backward,
-                scope: None,
-                filter: None,
-            },
-            Action::FocusColumnFirst => Action::MruFirst,
-            Action::FocusColumnLast => Action::MruLast,
-            Action::CloseWindow => Action::MruCloseCurrentWindow,
-            x @ Action::Screenshot(_, _) => x.clone(),
-            _ => continue,
-        };
+        // A multi-action bind contributes one MRU bind per action that maps to an MRU
+        // action, instead of only looking at the first one.
+        for press_action in bind.press_actions() {
+            let action = match press_action {
+                Action::FocusColumnRight
+                | Action::FocusColumnRightOrFirst
+                | Action::FocusColumnOrMonitorRight
+                | Action::FocusWindowDownOrColumnRight => Action::MruAdvance {
+                    direction: MruDirection::Forward,
+                    scope: None,
+                    filter: None,
+                },
+                Action::FocusColumnLeft
+                | Action::FocusColumnLeftOrLast
+                | Action::FocusColumnOrMonitorLeft
+                | Action::FocusWindowUpOrColumnLeft => Action::MruAdvance {
+                    direction: MruDirection::Backward,
+                    scope: None,
+                    filter: None,
+                },
+                Action::FocusColumnFirst => Action::MruFirst,
+                Action::FocusColumnLast => Action::MruLast,
+                Action::CloseWindow => Action::MruCloseCurrentWindow,
+                x @ Action::Screenshot(_, _) => x.clone(),
+                _ => continue,
+            };
 
-        binds.entry(bind.key.trigger).or_default().push(Bind {
-            action: BoundAction::Press(action),
-            ..bind.clone()
-        });
+            binds.entry(bind.key.trigger).or_default().push(Bind {
+                action: BoundAction::Press(vec![action]),
+                ..bind.clone()
+            });
+        }
     }
 
     let mut rv = Vec::new();

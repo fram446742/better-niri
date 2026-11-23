@@ -32,6 +32,20 @@ Niri returns a `Screenshot` response with base64-encoded PNG data:
 > If you're getting parsing errors from `niri msg` after upgrading niri, make sure that you've restarted niri itself.
 > You might be trying to run a newer `niri msg` against an older `niri` compositor.
 
+### Atomic Action Batches
+
+`niri msg actions` runs several actions as one atomic sequence: all of them are
+validated first (an invalid action rejects the whole batch), then they run in
+order with nothing else running in between. Pass one action per argument
+(shell-quoted as needed), or pipe one action per line on stdin:
+
+```sh
+niri msg actions "focus-column-right" "close-window"
+printf 'focus-column-right\nclose-window\n' | niri msg actions
+```
+
+Over the raw IPC socket this is `Request::Actions`, a JSON array of actions.
+
 ### Event Stream
 
 <sup>Since: 0.1.9</sup>

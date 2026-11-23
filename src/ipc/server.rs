@@ -431,6 +431,34 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let _ = rx.recv().await;
             Response::Handled
         }
+        Request::Actions(actions) => {
+            // Validate everything up front: an invalid action anywhere rejects the whole
+            // batch, so a partial sequence never runs.
+            for (idx, action) in actions.iter().enumerate() {
+                validate_action(action).map_err(|err| format!("action {}: {err}", idx + 1))?;
+            }
+
+            let (tx, rx) = async_channel::bounded(1);
+
+            let actions: Vec<niri_config::Action> =
+                actions.into_iter().map(niri_config::Action::from).collect();
+            // One idle callback for the whole batch. This is the point of the request:
+            // nothing can interleave between the actions.
+            ctx.event_loop.insert_idle(move |state| {
+                // Make sure some logic like workspace clean-up has a chance to run before
+                // doing actions.
+                state.niri.advance_animations();
+                // These actions didn't come from an input, so just use the current time.
+                let time = InputTime::now();
+                state.do_actions(actions, false, time);
+                let _ = tx.send_blocking(());
+            });
+
+            // Wait until the actions have been processed before returning, for the same
+            // reason as the single-action request.
+            let _ = rx.recv().await;
+            Response::Handled
+        }
         Request::Output { output, action } => {
             action.validate()?;
 
@@ -1249,4 +1277,54 @@ fn ipc_active_window_id(ws: &crate::layout::workspace::Workspace<Mapped>) -> Opt
         }
     }
     ws.active_window().map(|win| win.id().get())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_action_passes_validation() {
+        assert!(validate_action(&Action::FocusColumnRight {}).is_ok());
+    }
+
+    #[test]
+    fn relative_screenshot_path_is_rejected() {
+        let action = Action::Screenshot {
+            show_pointer: true,
+            path: Some("relative/path.png".to_owned()),
+            stdout: false,
+        };
+        let err = validate_action(&action).unwrap_err();
+        assert!(
+            err.contains("must be absolute"),
+            "error should mention the path must be absolute: {err}"
+        );
+    }
+
+    #[test]
+    fn batch_error_names_the_one_based_index_of_the_bad_action() {
+        let actions = [
+            Action::FocusColumnRight {},
+            Action::Screenshot {
+                show_pointer: true,
+                path: Some("relative/path.png".to_owned()),
+                stdout: false,
+            },
+        ];
+
+        let mut result = Ok(());
+        for (idx, action) in actions.iter().enumerate() {
+            if let Err(err) = validate_action(action) {
+                result = Err(format!("action {}: {err}", idx + 1));
+                break;
+            }
+        }
+
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("action 2"),
+            "error should name action 2 (1-based): {err}"
+        );
+    }
 }

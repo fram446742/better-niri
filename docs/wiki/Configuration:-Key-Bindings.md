@@ -5,7 +5,7 @@ Key bindings are declared in the `binds {}` section of the config.
 > [!NOTE]
 > This is one of the few sections that *does not* get automatically filled with defaults if you omit it, so make sure to copy it from the default config.
 
-Each bind is a hotkey followed by one action enclosed in curly brackets.
+Each bind is a hotkey followed by one or more actions enclosed in curly brackets.
 For example:
 
 ```kdl
@@ -14,6 +14,22 @@ binds {
     Super+Alt+L { spawn "swaylock"; }
 }
 ```
+
+A bind can run several actions, in source order:
+
+```kdl
+binds {
+    Mod+G {
+        focus-column-right;
+        consume-or-expel-window-left;
+    }
+}
+```
+
+All of a bind's actions run as one sequence on that key press or release, with
+nothing else running in between. For a bind with `allow-when-locked`, every
+action must be `spawn` or `spawn-sh`. A malformed action is reported and skipped
+so the remaining actions still run.
 
 The hotkey consists of modifiers separated by `+` signs, followed by a trigger key in the end.
 The trigger key can be either an XKB key name or <sup>Since: next release</sup> a modifier.
@@ -131,7 +147,8 @@ This is mostly useful for the scroll bindings.
 
 Binds can be set to trigger on key press, on key release, or both.
 By default, binds trigger on key press.
-You can change it using `press {}` and `release {}` blocks:
+You can change it using `press {}` and `release {}` blocks, and either block may
+contain several actions:
 
 ```kdl
 binds {
