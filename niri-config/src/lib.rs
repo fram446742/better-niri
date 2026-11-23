@@ -41,6 +41,7 @@ pub mod layout;
 pub mod misc;
 pub mod output;
 pub mod recent_windows;
+pub mod region_shader;
 pub mod screen_cast_picker;
 pub mod utils;
 pub mod window_rule;
@@ -52,7 +53,7 @@ pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
-pub use crate::global_shader::{GlobalShader, GlobalShaderCaps, GlobalShaderPart};
+pub use crate::global_shader::{GlobalShader, GlobalShaderCaps, GlobalShaderPart, RedrawMode};
 pub use crate::input::{
     Input, Keyboard, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb,
 };
@@ -62,11 +63,12 @@ pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
+pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::screen_cast_picker::ScreenCastPicker;
 pub use crate::utils::FloatOrInt;
 use crate::utils::{expand_home_path, Flag, MergeWith as _};
 pub use crate::window_rule::{
-    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules,
+    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, ShaderRule,
     TearingContentType, WindowRule,
 };
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
@@ -104,6 +106,7 @@ pub struct Config {
     pub workspaces: Vec<Workspace>,
     pub recent_windows: RecentWindows,
     pub screen_cast_picker: ScreenCastPicker,
+    pub region_shaders: Vec<RegionShader>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +184,7 @@ where
                     | "window-rule"
                     | "layer-rule"
                     | "workspace"
+                    | "region-shader"
                     | "include"
             ) && !seen.insert(name)
             {
@@ -235,6 +239,10 @@ where
                 "window-rule" => m_push!(window_rules),
                 "layer-rule" => m_push!(layer_rules),
                 "workspace" => m_push!(workspaces),
+                "region-shader" => {
+                    let part = RegionShaderPart::decode_node(node, ctx)?;
+                    config.borrow_mut().region_shaders.push(part.into());
+                }
 
                 // Single-part sections.
                 "binds" => {
@@ -2947,6 +2955,7 @@ mod tests {
                         saturation: None,
                         liquid_glass: None,
                     },
+                    shader: None,
                     popups: PopupsRule {
                         opacity: None,
                         geometry_corner_radius: None,
@@ -3578,6 +3587,7 @@ mod tests {
                 },
                 corner_radius: 16.0,
             },
+            region_shaders: [],
         }
         "#);
     }
