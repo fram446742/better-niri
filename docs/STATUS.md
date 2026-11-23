@@ -82,13 +82,19 @@ Added on top of the elite base after the initial merge:
 - `kde` Cargo feature (default on) gating all KDE interop.
 - Headless/virtual outputs compile configured global and scoped shaders at
   startup.
+- Consolidated multi-monitor carousel, phases 1-2: `overview.consolidated-carousel`
+  config, focused-output overview scoping, centered-output state and rotation,
+  participant selection, card geometry with host clamping, scale-normalized
+  rotating sibling rendering with edge fades, arrow/shift-scroll rotation, and
+  the `reveal/expand` zoom bands. The lens/cover-flow panel stack (phase 3) is
+  still pending.
 
 Verified on this branch:
 
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 742 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 752 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
