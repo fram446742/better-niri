@@ -31,6 +31,10 @@ pub fn build_registry_with_parking(
     ));
     registry.register(companion_niri::Compositor::from_env());
     registry.register(companion_rules::Rules::from_state_dir(parking.clone())?);
+    registry.register(companion_niri::Swallow::from_state_dir(
+        parking.clone(),
+        companion_niri::Compositor::from_env(),
+    )?);
     for adapter in companion_adapters::default_adapters()? {
         registry.register(adapter);
     }
@@ -137,6 +141,7 @@ mod tests {
                 assert!(contexts.contains_key("monitor"));
                 assert!(contexts.contains_key("audio"));
                 assert!(contexts.contains_key("wallpaper"));
+                assert!(contexts.contains_key("swallow"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -176,6 +181,7 @@ mod tests {
                 "parking",
                 "rules",
                 "session",
+                "swallow",
                 "system",
                 "wallpaper",
                 "windows",

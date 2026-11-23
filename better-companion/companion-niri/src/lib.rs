@@ -24,8 +24,10 @@ use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
 use serde_json::{json, Value};
 
 mod parker;
+mod swallow;
 mod windows;
 pub use parker::{Parker, DEFAULT_LOT};
+pub use swallow::{proc_parent, Swallow, SWALLOW_LOT};
 pub use windows::Windows;
 
 pub struct Compositor {
@@ -134,11 +136,19 @@ impl Context for Compositor {
 pub struct Tracker {
     workspaces: BTreeMap<u64, Workspace>,
     windows: BTreeMap<u64, Window>,
+    swallow: Option<Swallow>,
 }
 
 impl Tracker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_swallow(swallow: Swallow) -> Self {
+        Self {
+            swallow: Some(swallow),
+            ..Self::default()
+        }
     }
 
     /// Applies one event and rewrites the auto-parking lots.
@@ -218,7 +228,20 @@ impl Tracker {
             _ => return Ok(()),
         }
 
-        self.snapshot(parking)
+        self.snapshot(parking)?;
+
+        if let Some(swallow) = &self.swallow {
+            let result = match event {
+                Event::WindowOpenedOrChanged { window } => swallow.maybe_swallow(window),
+                Event::WindowClosed { id } => swallow.on_window_closed(*id),
+                _ => Ok(()),
+            };
+            if let Err(err) = result {
+                eprintln!("better-companion: swallow error: {err}");
+            }
+        }
+
+        Ok(())
     }
 
     fn snapshot(&self, parking: &Parking) -> Result<(), String> {
@@ -284,8 +307,8 @@ pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io
 }
 
 /// Reconnecting loop used by the daemon.
-pub fn run_tracker(path: PathBuf, parking: Parking) {
-    let mut tracker = Tracker::new();
+pub fn run_tracker(path: PathBuf, parking: Parking, swallow: Swallow) {
+    let mut tracker = Tracker::with_swallow(swallow);
     loop {
         if let Err(err) = track_stream(&path, &parking, &mut tracker) {
             eprintln!("better-companion: event stream {}: {err}", path.display());
@@ -352,6 +375,56 @@ mod tests {
             "focus_timestamp": null
         }))
         .unwrap()
+    }
+
+    fn window_full(
+        id: u64,
+        workspace_id: u64,
+        focused: bool,
+        pid: i32,
+        app_id: &str,
+        minimized: bool,
+    ) -> Window {
+        serde_json::from_value(json!({
+            "id": id,
+            "title": format!("win-{id}"),
+            "app_id": app_id,
+            "pid": pid,
+            "workspace_id": workspace_id,
+            "is_focused": focused,
+            "is_floating": false,
+            "is_sticky": false,
+            "is_urgent": false,
+            "is_minimized": minimized,
+            "layout": {
+                "pos_in_scrolling_layout": [1, 1],
+                "tile_size": [100.0, 100.0],
+                "window_size": [100, 100],
+                "tile_pos_in_workspace_view": [0.0, 0.0],
+                "window_offset_in_tile": [0.0, 0.0]
+            },
+            "focus_timestamp": null
+        }))
+        .unwrap()
+    }
+
+    /// Accepts `expected` one-request connections and records the requests.
+    fn fake_actions(path: &PathBuf, expected: usize) -> std::thread::JoinHandle<Vec<Request>> {
+        let listener = UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..expected {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                requests.push(serde_json::from_str(line.trim()).unwrap());
+                let mut stream = stream;
+                stream.write_all(b"{\"Ok\":\"Handled\"}\n").unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        })
     }
 
     fn parking(name: &str) -> Parking {
@@ -549,5 +622,64 @@ mod tests {
             .unwrap();
         assert_eq!(value["handled"], true);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn swallowed_terminal_is_minimized_and_restored() {
+        use std::sync::Arc;
+
+        let dir = temp_path("swallow");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 2);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        let parent: Arc<dyn Fn(i32) -> Option<i32> + Send + Sync> = Arc::new(|pid| match pid {
+            200 => Some(100),
+            100 => Some(1),
+            _ => None,
+        });
+        let swallow = Swallow::load_with_parent(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+            parent,
+        )
+        .unwrap();
+        swallow.call("enable", &serde_json::Value::Null).unwrap();
+
+        let mut tracker = Tracker::with_swallow(swallow);
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![window_full(1, 1, false, 100, "alacritty", false)],
+                },
+            )
+            .unwrap();
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowOpenedOrChanged {
+                    window: window_full(2, 1, false, 200, "myapp", false),
+                },
+            )
+            .unwrap();
+
+        let entries = parking.lot(super::SWALLOW_LOT);
+        assert_eq!(entries["child:2"]["parent"], 1);
+
+        tracker
+            .apply_event(&parking, &Event::WindowClosed { id: 2 })
+            .unwrap();
+        assert!(parking.lot(super::SWALLOW_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[0],
+            Request::Action(Action::MinimizeWindow { id: Some(1) })
+        ));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::UnminimizeWindow { id: Some(1) })
+        ));
     }
 }

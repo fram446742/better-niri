@@ -395,6 +395,9 @@ niri's Cargo workspace):
   `run` executes the rule steps through the registry.
 - `windows.*` in `companion-niri`: `run-or-raise`/`singleton` focus an existing
   match or spawn the configured command; `find` returns matches.
+- `swallow.*` in `companion-niri`: opt-in terminal swallowing. A new window
+  whose `/proc` parent chain reaches an allowlisted terminal minimizes the
+  terminal; closing the child restores it. Pairs persist in the `swallow` lot.
 - `companion-adapters`: optional Phase C namespaces `session.*`, `monitor.*`,
   `audio.*`, `wallpaper.*` for better-session/monitor/audio/wallpaper. Each
   stores explicit commands and event hooks; only the explicit `dispatch`
@@ -411,10 +414,10 @@ niri's Cargo workspace):
 - `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
 - `companionctl`: list/status/call client.
 
-Phase B is started: `rules.*` and `windows.run-or-raise`/`singleton` are in.
-Phase C adapters are in: `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`
-store commands/hooks and execute only on explicit dispatch. Not yet: richer
-swallowing rules and the companion apps themselves; parking means minimizing.
+Phase B is in: `rules.*`, `windows.run-or-raise`/`singleton` and terminal
+`swallow.*`. Phase C adapters are in: `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`
+store commands/hooks and execute only on explicit dispatch. Not yet: the
+companion apps themselves; parking means minimizing.
 
 ## 9. Roadmap
 

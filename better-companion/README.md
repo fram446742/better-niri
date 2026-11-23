@@ -18,6 +18,7 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-system` | `system.*` | Ping, status and paths |
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
 | `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` | Optional Phase C ecosystem adapters (commands + event hooks) |
+| `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
 | `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore and run-or-raise/singleton |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
@@ -115,6 +116,25 @@ companionctl call audio status
 
 Adapters are disabled by default. `dispatch` is the only action that executes
 a command; hooks just store/resolve them.
+
+## Terminal swallowing
+
+`swallow.*` is opt-in. When enabled, a newly opened window whose process is a
+descendant of an allowlisted terminal window minimizes that terminal; closing
+the child restores it.
+
+```sh
+companionctl call swallow enable
+companionctl call swallow status
+companionctl call swallow add-terminal '{"app_id":"myterm"}'
+companionctl call swallow list
+companionctl call swallow restore '{"child":42}'
+```
+
+The parent chain is read from `/proc/<pid>/status`; the default terminal
+allowlist covers Alacritty, foot, kitty, WezTerm, Ghostty, Konsole,
+gnome-terminal and xterm. Swallowed pairs are stored in the `swallow` parking
+lot and restored when the child closes.
 
 ## Contexts
 
