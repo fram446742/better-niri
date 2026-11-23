@@ -41,34 +41,33 @@ on windows, workspaces and automation.
 
 Start with internal modules; extract crates only when the boundary is stable.
 
+Decision: use a Cargo workspace from day one, but group crates by **bounded
+context** instead of one crate per tiny module. This keeps compile times and
+ownership clear without a dozen near-empty crates.
+
 ```
 better-companion/
-  src/
-    main.rs              daemon
-    bin/companionctl.rs  CLI
-    core/
-      niri.rs            single IPC client + reconnect
-      state.rs           windows, workspaces, outputs, focus
-      events.rs          typed event bus
-      config.rs          TOML + hot reload + validation
-      api.rs             versioned UDS API
-      modules.rs         registry, ordering, lifecycle
-    modules/
-      sticky/            sticky primitive + fallback
-      stage/             staged windows
-      scratchpad/        scratchpad stacks
-      rules/             window/workspace rules
-      run_or_raise/
-      singleton/
-      swallow/
-      hooks/             session/monitor/workspace hooks
-      idle/              candidate (Stasis-like)
-      rotate/            candidate (iio-niri-like)
+  Cargo.toml                 workspace
+  crates/
+    companion-core/          IPC client, state, event bus, config, action registry,
+                             override pipeline, permissions, UDS API, diagnostics
+    companion-parking/       modules: sticky, stage, scratchpad
+    companion-automation/    modules: rules, launch, singleton, swallow
+    companion-hooks/         module: hooks (workspace/output/session events)
+    companion-system/        modules: idle, orientation (candidates)
+    companionctl/            CLI
+    better-companion/        daemon binary
 ```
 
-If compile times or tests justify it, `core` and the larger modules become
-workspace crates (`companion-core`, `companion-sticky`, ...). Do not start with
-a dozen crates and a plugin framework.
+Rules:
+
+- `companion-core` has no dependency on feature crates; feature crates depend on
+  core, never the reverse.
+- Each crate exposes one or more action categories; the registry still enforces
+  one owner per action prefix.
+- A module can be moved to its own crate later without changing its action
+  names or config.
+- Do not create a crate for a feature that has no independent state or tests.
 
 ## 4. Module contract
 
@@ -115,12 +114,12 @@ duplicates at startup.
 | `stage.*` | `stage` | add, remove, toggle, list, restore, add-all, remove-all | staged windows, stage workspace |
 | `scratchpad.*` | `scratchpad` | add, restore, toggle, list, set workspace | LIFO stacks, parking areas |
 | `rules.*` | `rules` | reload, validate, explain, dry-run, set priority | rule set |
-| `run-or-raise.*` | `run-or-raise` | focus-or-spawn, cycle, list matches | app match cache |
+| `launch.*` | `launch` | focus-or-spawn, cycle, list matches | app match cache |
 | `singleton.*` | `singleton` | ensure, focus-existing, spawn-policy | instance tracking |
 | `swallow.*` | `swallow` | enable, disable, associate, status | parent/child map |
-| `workspace-hooks.*` | `hooks` | on-enter, on-leave, run, list | hook table |
+| `hooks.*` | `hooks` | workspace/output/session enter/leave, run, list | hook table |
 | `idle.*` | `idle` (candidate) | inhibit, release, set profile, status | idle state |
-| `rotate.*` | `rotate` (candidate) | enable, disable, set orientation, status | sensor state |
+| `orientation.*` | `orientation` (candidate) | enable, disable, set orientation, status | sensor state |
 
 Core, not module-owned:
 
@@ -186,6 +185,43 @@ Third parties do not load `.so` modules. They can:
 If a third-party action category becomes broadly useful, it can be absorbed as a
 compiled module.
 
+## 4.2 Override pipeline (clean, debuggable overrides)
+
+`rules` may override actions, but only through an explicit pipeline. Ownership
+and override are compatible:
+
+```
+request (CLI/UDS/rule) 
+  → resolve owner
+  → interceptors (rules, explicit priority)
+  → owner handler
+  → result
+```
+
+An interceptor can:
+
+- **pass** — continue to the owner;
+- **block** — deny with a reason (shown to the caller and logged);
+- **rewrite** — replace action/arguments once (loop detection + depth limit);
+- **before/after** — enqueue additional actions around the owner call.
+
+Rules:
+
+1. Only `rules` (or an explicitly permissioned module) may register
+   interceptors. Modules cannot silently override each other.
+2. Order is deterministic: explicit priority, then rule specificity, then
+   registration order. No hash-map iteration order.
+3. Every rewrite/block is recorded. `companionctl explain <action> --args ...`
+   prints the chain: matching rules, rewrites, final owner, result.
+4. Loop protection: max rewrite depth and `(action, args)` cycle detection.
+5. Overrides apply to external requests by default. Internal calls from a module
+   can opt in; core safety actions (config, permissions, shutdown) cannot be
+   overridden.
+6. Dry-run (`rules.dry_run`) evaluates the chain without executing.
+7. Tests cover pass, block, rewrite, ordering, loop protection and permissions.
+
+This gives the power of overrides without losing a single owner per action.
+
 ## 5. Shared core vs modules
 
 Core owns:
@@ -245,14 +281,75 @@ input = false
 - Input injection is off by default and requires explicit permission.
 - Every external request is validated; sockets are `0600`.
 
-## 8. Piri reuse
+## 8. Extension models (explained)
 
-- Fork Piri preserving history, authorship and licence.
-- Keep its event subscription, state sync, reconnection and rule ideas.
-- Flatten its extension model into compiled modules unless the audit shows a
-  compelling reason to keep its plugin API.
-- Do not run two sticky systems: Piri's sticky and nsticky's sticky merge into
-  one `sticky` module with nsticky's semantics as the base.
+Piri (MIT, `fdfa170`) is **not** a dynamic plugin host. Its plugins are Rust
+modules implementing a `Plugin` trait (`src/plugins/mod.rs`), registered through
+a macro, with one Niri event listener, event-interest filtering, config hot
+reload and IPC command handling. That is exactly the compiled-module model we
+want.
+
+### A. Compiled modules (Piri model) — recommended
+
+- The module is a Rust crate linked into the daemon; full type safety and access
+  to core state; no ABI; predictable performance.
+- Adding a third-party module requires rebuilding/forking the daemon or shipping
+  it as a distro patch.
+- Best for first-party features and anything on the event hot path.
+
+### B. Keep Piri's plugin API
+
+- Meaningful if we fork Piri: we keep its `Plugin` trait and registry as the
+  internal contract, then extend it with action categories, override pipeline,
+  permissions and diagnostics.
+- Existing Piri plugins are compiled-in; they cannot be installed as binaries.
+- Recommended only as the **internal** model, not as a public binary ABI.
+
+### C. External services over UDS — recommended complement
+
+- A separate process exposes versioned JSON actions/events over a Unix socket.
+- Language-agnostic, crash-isolated, independently releasable, permissioned.
+- Not suitable for per-frame or very high-frequency events; schema/versioning and
+  state reconciliation cost real work.
+- Best for integrations (audio, monitor, wallpaper, session, third-party tools).
+
+### D. WASM / Lua plugins
+
+- Sandboxed, runtime-loadable, language-flexible.
+- Adds a runtime, host API, async/event bridging, debugging and a large security
+  surface; WASM is not free and Lua/Luau is already the Noctalia plugin language.
+- Reconsider only if there is real third-party demand and a stable host API.
+
+### E. Dynamic `.so` Rust plugins
+
+- Rejected: no stable Rust ABI; modules are tied to the exact compiler, crate
+  versions and `State` layout; unsafe and unmaintainable across upstream merges.
+
+**Recommendation:** Piri's compiled `Plugin` model for first-party modules, plus
+the versioned UDS API for external services. No WASM/Lua or `.so` in the first
+iteration.
+
+## 8.1 Idle and orientation: module or repository?
+
+### As companion modules
+
+- Reuse the single IPC client, state manager, config and permissions.
+- No extra daemon, packaging or reconnect logic.
+- Coupled to companion's lifecycle; companion must run.
+- Idle policy needs session/app events, which companion already has.
+- Orientation needs sensor/DBus access; still a small module.
+
+### As separate services
+
+- Independent lifecycle and release; works without companion.
+- Better isolation for system permissions (inhibit, sensors).
+- But duplicates niri IPC/state or depends on companion anyway; another service
+  to package and supervise.
+
+**Recommendation:** start both as `companion-system` modules (`idle`,
+`orientation`). Split into `better-idle`/`better-rotate` only if one needs
+independent system permissions, runs without companion, or grows its own UI/
+release cycle. The action names and config can stay compatible if split later.
 
 ## 9. Roadmap
 
@@ -275,16 +372,21 @@ input = false
 
 ### Phase D — optional helpers
 
-- idle/rotate modules or separate services, decided by scope.
+- idle/orientation modules in `companion-system`; split only if justified.
 
 ## 10. Open questions
 
-1. Internal Rust modules first, or workspace crates from day one?
-   (Recommendation: internal modules; extract when stable.)
-2. Keep any of Piri's plugin/extension API for third parties, or expose only the
-   versioned UDS API and compiled modules? (Recommendation: UDS + compiled
-   modules; no `.so`.)
-3. Are idle and auto-rotate better-companion modules or independent services?
-   (Recommendation: modules first.)
-4. Does better-companion need a GUI, or only CLI + UDS + Noctalia plugins?
-   (Recommendation: no GUI; better-settings covers configuration.)
+Resolved:
+
+- workspace crates from day one, grouped by bounded context;
+- one daemon with internal category modules;
+- clean override pipeline with deterministic ordering and explain/dry-run;
+- Piri's compiled `Plugin` model as the internal base;
+- UDS for external services;
+- idle/orientation start as modules.
+
+Remaining:
+
+- one crate per category or grouped crates (current proposal: grouped);
+- whether to expose a WASM/Lua extension host later (not in v1);
+- GUI: none in companion; better-settings owns configuration.
