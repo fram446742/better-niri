@@ -1094,11 +1094,15 @@ impl State {
             }
         }
 
-        let Some(action) = bind.into_action(pressed) else {
-            return;
-        };
+        let actions = bind.into_actions(pressed);
+        self.do_actions(actions, allowed_when_locked, time);
+    }
 
-        self.do_action(action, allowed_when_locked, time);
+    /// Runs several actions in order, as one atomic sequence.
+    pub fn do_actions(&mut self, actions: Vec<Action>, allow_when_locked: bool, time: InputTime) {
+        for action in actions {
+            self.do_action(action, allow_when_locked, time);
+        }
     }
 
     /// Forgets all held inputs, running the release actions of anything that was still held.
@@ -4552,41 +4556,42 @@ impl State {
                 let horizontal = horizontal_amount_v120.unwrap_or(0.);
                 let ticks = self.niri.horizontal_wheel_tracker.accumulate(horizontal);
                 if ticks != 0 {
-                    let (bind_left, bind_right) =
-                        if should_handle_in_overview && modifiers.is_empty() {
-                            let bind_left = Some(Bind {
-                                key: Key {
-                                    trigger: Trigger::WheelScrollLeft,
-                                    modifiers: Modifiers::empty(),
-                                },
-                                action: BoundAction::Press(Action::FocusColumnLeftUnderMouse),
-                                repeat: true,
-                                cooldown: None,
-                                allow_when_locked: false,
-                                allow_inhibiting: false,
-                                hotkey_overlay_title: None,
-                                pass_through: None,
-                            });
-                            let bind_right = Some(Bind {
-                                key: Key {
-                                    trigger: Trigger::WheelScrollRight,
-                                    modifiers: Modifiers::empty(),
-                                },
-                                action: BoundAction::Press(Action::FocusColumnRightUnderMouse),
-                                repeat: true,
-                                cooldown: None,
-                                allow_when_locked: false,
-                                allow_inhibiting: false,
-                                hotkey_overlay_title: None,
-                                pass_through: None,
-                            });
-                            (bind_left, bind_right)
-                        } else {
-                            (
-                                self.find_pointer_bind(mod_key, Trigger::WheelScrollLeft, mods),
-                                self.find_pointer_bind(mod_key, Trigger::WheelScrollRight, mods),
-                            )
-                        };
+                    let (bind_left, bind_right) = if should_handle_in_overview
+                        && modifiers.is_empty()
+                    {
+                        let bind_left = Some(Bind {
+                            key: Key {
+                                trigger: Trigger::WheelScrollLeft,
+                                modifiers: Modifiers::empty(),
+                            },
+                            action: BoundAction::Press(vec![Action::FocusColumnLeftUnderMouse]),
+                            repeat: true,
+                            cooldown: None,
+                            allow_when_locked: false,
+                            allow_inhibiting: false,
+                            hotkey_overlay_title: None,
+                            pass_through: None,
+                        });
+                        let bind_right = Some(Bind {
+                            key: Key {
+                                trigger: Trigger::WheelScrollRight,
+                                modifiers: Modifiers::empty(),
+                            },
+                            action: BoundAction::Press(vec![Action::FocusColumnRightUnderMouse]),
+                            repeat: true,
+                            cooldown: None,
+                            allow_when_locked: false,
+                            allow_inhibiting: false,
+                            hotkey_overlay_title: None,
+                            pass_through: None,
+                        });
+                        (bind_left, bind_right)
+                    } else {
+                        (
+                            self.find_pointer_bind(mod_key, Trigger::WheelScrollLeft, mods),
+                            self.find_pointer_bind(mod_key, Trigger::WheelScrollRight, mods),
+                        )
+                    };
 
                     if let Some(right) = bind_right {
                         for _ in 0..ticks {
@@ -4616,7 +4621,7 @@ impl State {
                                 trigger: Trigger::WheelScrollUp,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusWorkspaceUpUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusWorkspaceUpUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -4629,7 +4634,7 @@ impl State {
                                 trigger: Trigger::WheelScrollDown,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusWorkspaceDownUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusWorkspaceDownUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -4644,7 +4649,7 @@ impl State {
                                 trigger: Trigger::WheelScrollUp,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusWorkspaceUpUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusWorkspaceUpUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -4657,7 +4662,7 @@ impl State {
                                 trigger: Trigger::WheelScrollDown,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusWorkspaceDownUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusWorkspaceDownUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -4689,7 +4694,7 @@ impl State {
                                 trigger: Trigger::WheelScrollUp,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusColumnLeftUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusColumnLeftUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -4702,7 +4707,7 @@ impl State {
                                 trigger: Trigger::WheelScrollDown,
                                 modifiers: Modifiers::empty(),
                             },
-                            action: BoundAction::Press(Action::FocusColumnRightUnderMouse),
+                            action: BoundAction::Press(vec![Action::FocusColumnRightUnderMouse]),
                             repeat: true,
                             cooldown: Some(Duration::from_millis(50)),
                             allow_when_locked: false,
@@ -6239,7 +6244,7 @@ fn find_bind<'a, I: Iterator<Item = &'a Bind> + Clone>(
                 trigger: Trigger::Keysym(modified.unwrap()),
                 modifiers: Modifiers::empty(),
             },
-            action: BoundAction::Press(action),
+            action: BoundAction::Press(vec![action]),
             // Repeating VT switches and power off doesn't make sense (and it actually happens on
             // FreeBSD where it doesn't get released and ends up broken).
             repeat: false,
@@ -6381,7 +6386,7 @@ fn default_mod_tap_bind() -> Bind {
             trigger: Trigger::CompositorMod,
             modifiers: Modifiers::COMPOSITOR,
         },
-        action: BoundAction::Release(Action::ToggleGridOverview),
+        action: BoundAction::Release(vec![Action::ToggleGridOverview]),
         repeat: false,
         cooldown: None,
         allow_when_locked: false,
@@ -6522,11 +6527,12 @@ fn bind_allowed_when_locked(bind: &Bind, pressed: bool) -> bool {
         return true;
     }
 
+    let all = |actions: &[Action]| actions.iter().all(allowed_when_locked);
     match &bind.action {
-        BoundAction::Press(action) | BoundAction::Release(action) => allowed_when_locked(action),
+        BoundAction::Press(actions) | BoundAction::Release(actions) => all(actions),
         BoundAction::Both { press, release } => {
             if pressed {
-                allowed_when_locked(press) && allowed_when_locked(release)
+                all(press) && all(release)
             } else {
                 // The press ran, so the release must run too.
                 true
@@ -6721,13 +6727,12 @@ fn hardcoded_grid_or_overview_bind(
 }
 
 fn bind_allowed_during_screenshot(bind: &Bind, pressed: bool) -> bool {
+    let all = |actions: &[Action]| actions.iter().all(allowed_during_screenshot);
     match &bind.action {
-        BoundAction::Press(action) | BoundAction::Release(action) => {
-            allowed_during_screenshot(action)
-        }
+        BoundAction::Press(actions) | BoundAction::Release(actions) => all(actions),
         BoundAction::Both { press, release } => {
             if pressed {
-                allowed_during_screenshot(press) && allowed_during_screenshot(release)
+                all(press) && all(release)
             } else {
                 // The press ran, so the release must run too.
                 true
@@ -6765,7 +6770,7 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
             trigger: Trigger::Keysym(raw),
             modifiers: Modifiers::empty(),
         },
-        action: BoundAction::Press(action),
+        action: BoundAction::Press(vec![action]),
         repeat,
         cooldown: None,
         allow_when_locked: false,
@@ -6794,7 +6799,7 @@ fn hardcoded_grid_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bin
             trigger: Trigger::Keysym(raw),
             modifiers: Modifiers::empty(),
         },
-        action: BoundAction::Press(action),
+        action: BoundAction::Press(vec![action]),
         repeat: true,
         cooldown: None,
         allow_when_locked: false,
@@ -7204,13 +7209,13 @@ fn grab_allows_hot_corner(grab: &(dyn PointerGrab<State> + 'static)) -> bool {
 }
 
 fn hardcoded_overview_binds<'a>() -> impl Iterator<Item = &'a Bind> + Clone {
-    const fn bind(key: Keysym, action: Action, repeat: bool) -> Bind {
+    fn bind(key: Keysym, action: Action, repeat: bool) -> Bind {
         Bind {
             key: Key {
                 trigger: Trigger::Keysym(key),
                 modifiers: Modifiers::empty(),
             },
-            action: BoundAction::Press(action),
+            action: BoundAction::Press(vec![action]),
             repeat,
             cooldown: None,
             allow_when_locked: false,
@@ -7220,14 +7225,16 @@ fn hardcoded_overview_binds<'a>() -> impl Iterator<Item = &'a Bind> + Clone {
         }
     }
 
-    const BINDS: &[Bind] = &[
-        bind(Keysym::Escape, Action::ToggleOverview, false),
-        bind(Keysym::Return, Action::ToggleOverview, false),
-        bind(Keysym::Left, Action::FocusColumnLeft, true),
-        bind(Keysym::Right, Action::FocusColumnRight, true),
-        bind(Keysym::Up, Action::FocusWindowOrWorkspaceUp, true),
-        bind(Keysym::Down, Action::FocusWindowOrWorkspaceDown, true),
-    ];
+    static BINDS: std::sync::LazyLock<Vec<Bind>> = std::sync::LazyLock::new(|| {
+        vec![
+            bind(Keysym::Escape, Action::ToggleOverview, false),
+            bind(Keysym::Return, Action::ToggleOverview, false),
+            bind(Keysym::Left, Action::FocusColumnLeft, true),
+            bind(Keysym::Right, Action::FocusColumnRight, true),
+            bind(Keysym::Up, Action::FocusWindowOrWorkspaceUp, true),
+            bind(Keysym::Down, Action::FocusWindowOrWorkspaceDown, true),
+        ]
+    });
 
     BINDS.iter()
 }
@@ -7261,15 +7268,15 @@ impl MagnifierBindsFilter {
     fn allows(self, bind: &Bind) -> bool {
         match self {
             Self::None => false,
-            Self::NoMove => !matches!(
-                bind.press_action(),
-                Some(
+            Self::NoMove => !bind.press_actions().iter().any(|action| {
+                matches!(
+                    action,
                     Action::MoveMagnifierLeft
                         | Action::MoveMagnifierRight
                         | Action::MoveMagnifierUp
                         | Action::MoveMagnifierDown
                 )
-            ),
+            }),
             Self::All => true,
         }
     }
@@ -7757,10 +7764,10 @@ mod tests {
     }
 
     macro_rules! assert_matches {
-        ($expression:expr, $pattern:pat) => {
+        ($expression:expr, $pattern:pat $(if $guard:expr)?) => {
             let value = $expression;
             assert!(
-                matches!(value, $pattern),
+                matches!(&value, $pattern $(if $guard)?),
                 "Expected {:?} to match {}",
                 value,
                 stringify!($pattern)
@@ -7774,32 +7781,32 @@ mod tests {
             bind(
                 Trigger::Keysym(Keysym::q),
                 Modifiers::COMPOSITOR,
-                BoundAction::Press(Action::CloseWindow),
+                BoundAction::Press(vec![Action::CloseWindow]),
             ),
             bind(
                 Trigger::Keysym(Keysym::h),
                 Modifiers::SUPER,
-                BoundAction::Press(Action::FocusColumnLeft),
+                BoundAction::Press(vec![Action::FocusColumnLeft]),
             ),
             bind(
                 Trigger::Keysym(Keysym::j),
                 Modifiers::empty(),
-                BoundAction::Press(Action::FocusWindowDown),
+                BoundAction::Press(vec![Action::FocusWindowDown]),
             ),
             bind(
                 Trigger::Keysym(Keysym::k),
                 Modifiers::COMPOSITOR | Modifiers::SUPER,
-                BoundAction::Press(Action::FocusWindowUp),
+                BoundAction::Press(vec![Action::FocusWindowUp]),
             ),
             bind(
                 Trigger::Keysym(Keysym::l),
                 Modifiers::SUPER | Modifiers::ALT,
-                BoundAction::Press(Action::FocusColumnRight),
+                BoundAction::Press(vec![Action::FocusColumnRight]),
             ),
             bind(
                 Trigger::Keysym(Keysym::Super_L),
                 Modifiers::empty(),
-                BoundAction::Release(Action::ToggleOverview),
+                BoundAction::Release(vec![Action::ToggleOverview]),
             ),
         ]);
 
@@ -7940,7 +7947,12 @@ mod tests {
     fn bind_allowed_when_locked_requires_both_actions_of_a_both_bind() {
         // A press could start something that its release would never undo, so both actions must be
         // allowed while locked.
-        let both = |press, release| close_bind(BoundAction::Both { press, release });
+        let both = |press, release| {
+            close_bind(BoundAction::Both {
+                press: vec![press],
+                release: vec![release],
+            })
+        };
         assert!(!bind_allowed_when_locked(
             &both(Action::Suspend, Action::CloseWindow),
             true
@@ -7958,19 +7970,19 @@ mod tests {
     #[test]
     fn bind_allowed_when_locked_requires_only_the_single_action() {
         assert!(bind_allowed_when_locked(
-            &close_bind(BoundAction::Press(Action::Suspend)),
+            &close_bind(BoundAction::Press(vec![Action::Suspend])),
             true
         ));
         assert!(!bind_allowed_when_locked(
-            &close_bind(BoundAction::Press(Action::CloseWindow)),
+            &close_bind(BoundAction::Press(vec![Action::CloseWindow])),
             true
         ));
         assert!(bind_allowed_when_locked(
-            &close_bind(BoundAction::Release(Action::Suspend)),
+            &close_bind(BoundAction::Release(vec![Action::Suspend])),
             false
         ));
         assert!(!bind_allowed_when_locked(
-            &close_bind(BoundAction::Release(Action::CloseWindow)),
+            &close_bind(BoundAction::Release(vec![Action::CloseWindow])),
             false
         ));
     }
@@ -7980,8 +7992,8 @@ mod tests {
         // The release only happens if its press ran, and the press required both actions to be
         // allowed, so the release is never blocked separately.
         let both = close_bind(BoundAction::Both {
-            press: Action::Suspend,
-            release: Action::CloseWindow,
+            press: vec![Action::Suspend],
+            release: vec![Action::CloseWindow],
         });
         assert!(bind_allowed_when_locked(&both, false));
     }
@@ -7993,17 +8005,17 @@ mod tests {
             ..close_bind(action)
         };
         assert!(bind_allowed_when_locked(
-            &bind(BoundAction::Press(Action::CloseWindow)),
+            &bind(BoundAction::Press(vec![Action::CloseWindow])),
             true
         ));
         assert!(bind_allowed_when_locked(
-            &bind(BoundAction::Release(Action::CloseWindow)),
+            &bind(BoundAction::Release(vec![Action::CloseWindow])),
             false
         ));
 
         let both = bind(BoundAction::Both {
-            press: Action::CloseWindow,
-            release: Action::CenterColumn,
+            press: vec![Action::CloseWindow],
+            release: vec![Action::CenterColumn],
         });
         assert!(bind_allowed_when_locked(&both, true));
         assert!(bind_allowed_when_locked(&both, false));
@@ -8014,8 +8026,8 @@ mod tests {
         // `Mod+Q { press { suspend; } release { close-window; } }`: the press is allowed while
         // locked but the release isn't, so the press must not run, since nothing could undo it.
         let bindings = Binds(vec![close_bind(BoundAction::Both {
-            press: Action::Suspend,
-            release: Action::CloseWindow,
+            press: vec![Action::Suspend],
+            release: vec![Action::CloseWindow],
         })]);
 
         let mut state = TestState {
@@ -8037,8 +8049,8 @@ mod tests {
         // Its press action ran while unlocked, so the release must run later even if the screen got
         // locked in between.
         let bindings = Binds(vec![close_bind(BoundAction::Both {
-            press: Action::Suspend,
-            release: Action::CloseWindow,
+            press: vec![Action::Suspend],
+            release: vec![Action::CloseWindow],
         })]);
 
         let mut state = create_test_state();
@@ -8051,19 +8063,18 @@ mod tests {
         assert_matches!(
             result,
             ShouldInterceptResult::InterceptAndHandle(Bind {
-                action: BoundAction::Both {
-                    release: Action::CloseWindow,
-                    ..
-                },
+                action: BoundAction::Both { release: actions, .. },
                 ..
-            })
+            }) if actions[..] == [Action::CloseWindow]
         );
         assert!(state.pending_release_binds.is_empty());
     }
 
     #[test]
     fn release_only_bind_is_recorded_on_press_and_runs_on_release() {
-        let bindings = Binds(vec![close_bind(BoundAction::Release(Action::CloseWindow))]);
+        let bindings = Binds(vec![close_bind(BoundAction::Release(vec![
+            Action::CloseWindow,
+        ]))]);
 
         let mut state = create_test_state();
         let result = press_close_key(&mut state, &bindings, Modifiers::SUPER);
@@ -8074,9 +8085,9 @@ mod tests {
         assert_matches!(
             result,
             ShouldInterceptResult::ForwardAndHandle(Bind {
-                action: BoundAction::Release(Action::CloseWindow),
+                action: BoundAction::Release(actions),
                 ..
-            })
+            }) if actions[..] == [Action::CloseWindow]
         );
         assert!(state.pending_release_binds.is_empty());
     }
@@ -8085,7 +8096,7 @@ mod tests {
     fn release_only_bind_allowed_while_locked_is_recorded_and_runs_while_locked() {
         let bindings = Binds(vec![Bind {
             allow_when_locked: true,
-            ..close_bind(BoundAction::Release(Action::CloseWindow))
+            ..close_bind(BoundAction::Release(vec![Action::CloseWindow]))
         }]);
 
         let mut state = TestState {
@@ -8100,16 +8111,18 @@ mod tests {
         assert_matches!(
             result,
             ShouldInterceptResult::ForwardAndHandle(Bind {
-                action: BoundAction::Release(Action::CloseWindow),
+                action: BoundAction::Release(actions),
                 ..
-            })
+            }) if actions[..] == [Action::CloseWindow]
         );
         assert!(state.pending_release_binds.is_empty());
     }
 
     #[test]
     fn release_only_bind_not_allowed_while_locked_is_not_recorded_while_locked() {
-        let bindings = Binds(vec![close_bind(BoundAction::Release(Action::CloseWindow))]);
+        let bindings = Binds(vec![close_bind(BoundAction::Release(vec![
+            Action::CloseWindow,
+        ]))]);
 
         let mut state = TestState {
             is_locked: true,
@@ -8128,7 +8141,12 @@ mod tests {
     fn bind_allowed_during_screenshot_requires_both_actions_of_a_both_bind() {
         // A press could start something that its release would never undo, so both actions must be
         // allowed while the screenshot UI is open.
-        let both = |press, release| close_bind(BoundAction::Both { press, release });
+        let both = |press, release| {
+            close_bind(BoundAction::Both {
+                press: vec![press],
+                release: vec![release],
+            })
+        };
         assert!(!bind_allowed_during_screenshot(
             &both(Action::MoveColumnLeft(true), Action::CloseWindow),
             true
@@ -8146,11 +8164,11 @@ mod tests {
     #[test]
     fn bind_allowed_during_screenshot_requires_only_the_single_action() {
         assert!(bind_allowed_during_screenshot(
-            &close_bind(BoundAction::Press(Action::MoveColumnLeft(true))),
+            &close_bind(BoundAction::Press(vec![Action::MoveColumnLeft(true)])),
             true
         ));
         assert!(!bind_allowed_during_screenshot(
-            &close_bind(BoundAction::Press(Action::CloseWindow)),
+            &close_bind(BoundAction::Press(vec![Action::CloseWindow])),
             true
         ));
     }
@@ -8159,7 +8177,12 @@ mod tests {
     fn bind_allowed_during_screenshot_always_allows_a_both_bind_release() {
         // The release only happens if its press ran, so the screenshot UI opening in between must
         // not block it.
-        let both = |press, release| close_bind(BoundAction::Both { press, release });
+        let both = |press, release| {
+            close_bind(BoundAction::Both {
+                press: vec![press],
+                release: vec![release],
+            })
+        };
         assert!(bind_allowed_during_screenshot(
             &both(Action::MoveColumnLeft(true), Action::CloseWindow),
             false
@@ -8171,11 +8194,11 @@ mod tests {
 
         // A release-only bind has no press to undo, so its own action must be allowed.
         assert!(bind_allowed_during_screenshot(
-            &close_bind(BoundAction::Release(Action::MoveColumnLeft(true))),
+            &close_bind(BoundAction::Release(vec![Action::MoveColumnLeft(true)])),
             false
         ));
         assert!(!bind_allowed_during_screenshot(
-            &close_bind(BoundAction::Release(Action::CloseWindow)),
+            &close_bind(BoundAction::Release(vec![Action::CloseWindow])),
             false
         ));
     }

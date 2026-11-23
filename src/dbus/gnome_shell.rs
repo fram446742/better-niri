@@ -62,15 +62,15 @@ impl GlobalShortcutsPortalBinds {
     pub fn ungrab_accelerators(&mut self, actions: &[ActionId]) -> bool {
         let mut unbound = false;
         self.binds.retain(|bind| {
-            let BoundAction::Both {
-                press: Action::GlobalShortcutActivateAction(bound_action),
-                ..
-            } = bind.action
-            else {
+            let BoundAction::Both { press, .. } = &bind.action else {
                 // We only ever create this pattern of Bind in `binds`.
                 unreachable!()
             };
-            if actions.contains(&bound_action) {
+            let [Action::GlobalShortcutActivateAction(bound_action)] = &press[..] else {
+                // We only ever create this pattern of Bind in `binds`.
+                unreachable!()
+            };
+            if actions.contains(bound_action) {
                 unbound = true;
                 false
             } else {
@@ -124,8 +124,8 @@ impl GlobalShortcutsPortalBinds {
         self.binds.push(Bind {
             key,
             action: BoundAction::Both {
-                press: Action::GlobalShortcutActivateAction(action),
-                release: Action::GlobalShortcutDeactivateAction(action),
+                press: vec![Action::GlobalShortcutActivateAction(action)],
+                release: vec![Action::GlobalShortcutDeactivateAction(action)],
             },
             repeat: false,
             pass_through: None,

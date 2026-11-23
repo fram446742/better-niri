@@ -97,11 +97,18 @@ fn set_up(config: &str) -> (Fixture, ClientId, WlSurface) {
 
     for bind in &mut config.binds.0 {
         let actions = match &mut bind.action {
-            BoundAction::Press(press) => [Some(press), None],
-            BoundAction::Release(release) => [None, Some(release)],
-            BoundAction::Both { press, release } => [Some(press), Some(release)],
+            BoundAction::Press(actions) | BoundAction::Release(actions) => actions.as_mut_slice(),
+            BoundAction::Both { press, release } => {
+                for action in press.iter_mut().chain(release.iter_mut()) {
+                    // knuffel doesn't understand #[cfg(test)]...
+                    if !matches!(action, Action::Screenshot(_, _)) {
+                        *action = Action::TestAction;
+                    }
+                }
+                continue;
+            }
         };
-        for action in actions.into_iter().flatten() {
+        for action in actions {
             // knuffel doesn't understand #[cfg(test)]...
             if !matches!(action, Action::Screenshot(_, _)) {
                 *action = Action::TestAction;
@@ -229,6 +236,39 @@ fn run_f(f: &mut Fixture, id: ClientId, surface: &WlSurface, input: &str) -> Str
 fn run(config: &str, input: &str) -> String {
     let (mut f, id, surface) = set_up(config);
     run_f(&mut f, id, &surface, input)
+}
+
+#[test]
+fn multiple_actions_in_one_bind_run_in_order() {
+    let c = r#"
+    binds {
+        Mod+Ctrl+Q { close-window; center-column; }
+    }
+    "#;
+    let output = run(c, "+LWIN +LCTL +LatQ -LatQ -LCTL -LWIN");
+    assert_eq!(
+        output.matches("niri test-action").count(),
+        2,
+        "both actions must run for one press:\n{output}"
+    );
+}
+
+#[test]
+fn multiple_actions_per_press_and_release_section() {
+    let c = r#"
+    binds {
+        Mod+Ctrl+Q {
+            press { close-window; center-column; }
+            release { close-window; center-column; }
+        }
+    }
+    "#;
+    let output = run(c, "+LWIN +LCTL +LatQ -LatQ -LCTL -LWIN");
+    assert_eq!(
+        output.matches("niri test-action").count(),
+        4,
+        "both press and both release actions must run:\n{output}"
+    );
 }
 
 #[test]

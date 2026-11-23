@@ -5,7 +5,7 @@ use std::f64::consts::TAU;
 use std::iter::zip;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
@@ -804,10 +804,10 @@ impl ScreenshotUi {
     }
 
     pub fn binds(&self) -> impl Iterator<Item = &Bind> + Clone {
-        const fn bind(key: Key, action: Action) -> Bind {
+        fn bind(key: Key, action: Action) -> Bind {
             Bind {
                 key,
-                action: BoundAction::Press(action),
+                action: BoundAction::Press(vec![action]),
                 repeat: false, // Not useful for these actions.
                 pass_through: None,
                 cooldown: None,
@@ -817,50 +817,54 @@ impl ScreenshotUi {
             }
         }
 
-        const BINDS: &[Bind] = &[
-            bind(
+        static BINDS: LazyLock<Vec<Bind>> = LazyLock::new(|| {
+            vec![
+                bind(
+                    Key {
+                        trigger: Trigger::Keysym(Keysym::Escape),
+                        modifiers: Modifiers::empty(),
+                    },
+                    Action::CancelScreenshot,
+                ),
+                bind(
+                    Key {
+                        trigger: Trigger::Keysym(Keysym::Return),
+                        modifiers: Modifiers::empty(),
+                    },
+                    Action::ConfirmScreenshot {
+                        write_to_disk: true,
+                    },
+                ),
+                bind(
+                    Key {
+                        trigger: Trigger::Keysym(Keysym::c),
+                        modifiers: Modifiers::CTRL,
+                    },
+                    Action::ConfirmScreenshot {
+                        write_to_disk: false,
+                    },
+                ),
+                bind(
+                    Key {
+                        trigger: Trigger::Keysym(Keysym::p),
+                        modifiers: Modifiers::empty(),
+                    },
+                    Action::ScreenshotTogglePointer,
+                ),
+            ]
+        });
+
+        static SPACE: LazyLock<Vec<Bind>> = LazyLock::new(|| {
+            vec![bind(
                 Key {
-                    trigger: Trigger::Keysym(Keysym::Escape),
-                    modifiers: Modifiers::empty(),
-                },
-                Action::CancelScreenshot,
-            ),
-            bind(
-                Key {
-                    trigger: Trigger::Keysym(Keysym::Return),
+                    trigger: Trigger::Keysym(Keysym::space),
                     modifiers: Modifiers::empty(),
                 },
                 Action::ConfirmScreenshot {
                     write_to_disk: true,
                 },
-            ),
-            bind(
-                Key {
-                    trigger: Trigger::Keysym(Keysym::c),
-                    modifiers: Modifiers::CTRL,
-                },
-                Action::ConfirmScreenshot {
-                    write_to_disk: false,
-                },
-            ),
-            bind(
-                Key {
-                    trigger: Trigger::Keysym(Keysym::p),
-                    modifiers: Modifiers::empty(),
-                },
-                Action::ScreenshotTogglePointer,
-            ),
-        ];
-
-        const SPACE: &[Bind] = &[bind(
-            Key {
-                trigger: Trigger::Keysym(Keysym::space),
-                modifiers: Modifiers::empty(),
-            },
-            Action::ConfirmScreenshot {
-                write_to_disk: true,
-            },
-        )];
+            )]
+        });
 
         // A bit of gymnastics to return an iterator over constant &Bind values.
         let Self::Open { button, .. } = self else {
@@ -871,10 +875,10 @@ impl ScreenshotUi {
         let space: &[Bind] = if matches!(button, Button::Down { .. }) {
             &[]
         } else {
-            SPACE
+            SPACE.as_slice()
         };
 
-        space.iter().chain(BINDS)
+        space.iter().chain(BINDS.iter())
     }
 
     pub fn selection_output(&self) -> Option<&Output> {

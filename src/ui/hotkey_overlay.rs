@@ -154,12 +154,12 @@ impl HotkeyOverlay {
 
 /// Returns the actions that a bind triggers.
 fn bind_actions(bind: &Bind) -> impl Iterator<Item = &Action> {
-    bind.press_action().into_iter().chain(bind.release_action())
+    bind.press_actions().iter().chain(bind.release_actions())
 }
 
 /// Whether the bind triggers the action, on press or on release.
 fn bind_triggers(bind: &Bind, action: &Action) -> bool {
-    bind.press_action() == Some(action) || bind.release_action() == Some(action)
+    bind.actions().any(|a| a == action)
 }
 
 /// Returns the first action in `actions` that can be triggered by a bind in `binds`.
