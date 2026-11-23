@@ -393,12 +393,14 @@ niri's Cargo workspace):
 - `companion-system`: ping/status/paths.
 - `companion-niri`: `compositor.*` bridge over the niri IPC socket — perform a
   typed `Action`, and query version/outputs/workspaces/windows/focused window.
+  It also consumes niri's event stream into two auto-tracked parking lots
+  (`auto:workspaces`, `auto:windows`), so activation/focus/close/minimize/urgency
+  events keep a queryable snapshot without polling.
 - `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
 - `companionctl`: list/status/call client.
 
-Not yet: parking/sticky auto-tracking from compositor events (the bridge can
-already drive actions and query state), Phase B `rules`/`run_or_raise` and the
-optional adapters/companions.
+Not yet: compositor-side actions that consume the auto lots (park/restore), Phase
+B `rules`/`run_or_raise` and the optional adapters/companions.
 
 ## 9. Roadmap
 

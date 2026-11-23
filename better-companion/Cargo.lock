@@ -46,6 +46,7 @@ name = "companion-niri"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "companion-parking",
  "niri-ipc",
  "serde",
  "serde_json",

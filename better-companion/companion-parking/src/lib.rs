@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use companion_core::{load_json, save_json, ActionInfo, Context};
 use serde::{Deserialize, Serialize};
@@ -21,9 +21,10 @@ struct State {
     lots: Lots,
 }
 
+#[derive(Clone)]
 pub struct Parking {
-    path: PathBuf,
-    state: Mutex<State>,
+    path: Arc<PathBuf>,
+    state: Arc<Mutex<State>>,
 }
 
 impl Parking {
@@ -32,8 +33,8 @@ impl Parking {
         let path = path.into();
         let state: State = load_json(&path)?;
         Ok(Self {
-            path,
-            state: Mutex::new(state),
+            path: Arc::new(path),
+            state: Arc::new(Mutex::new(state)),
         })
     }
 
@@ -43,7 +44,31 @@ impl Parking {
     }
 
     fn save(&self, state: &State) -> Result<(), String> {
-        save_json(&self.path, state).map_err(|err| format!("cannot save parking state: {err}"))
+        save_json(self.path.as_path(), state)
+            .map_err(|err| format!("cannot save parking state: {err}"))
+    }
+
+    /// Replaces one lot with `entries`, removing the lot when empty.
+    pub fn replace_lot(&self, lot: &str, entries: Lot) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "parking state lock poisoned".to_owned())?;
+        if entries.is_empty() {
+            state.lots.remove(lot);
+        } else {
+            state.lots.insert(lot.to_owned(), entries);
+        }
+        self.save(&state)
+    }
+
+    /// Returns a copy of one lot.
+    pub fn lot(&self, lot: &str) -> Lot {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.lots.get(lot).cloned())
+            .unwrap_or_default()
     }
 
     fn lot_name(params: &Value) -> String {

@@ -1,18 +1,20 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use companion_daemon::{bind, build_registry, serve_stream, socket_default};
+use companion_daemon::{bind, build_registry_with_parking, serve_stream, socket_default};
 
 fn usage() -> &'static str {
     "better-companion [--socket PATH] [--once] [--help]\n\n\
      One daemon serving the parking, automation, hooks and system namespaces over a Unix socket.\n\
      --socket PATH  Override the socket path (default: $XDG_RUNTIME_DIR/better-companion.sock)\n\
-     --once         Serve a single connection and exit (useful for tests)\n"
+     --once         Serve a single connection and exit (useful for tests)\n\
+     --no-track     Do not subscribe to the niri event stream\n"
 }
 
 fn main() -> ExitCode {
     let mut socket: Option<PathBuf> = None;
     let mut once = false;
+    let mut track = true;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -25,6 +27,7 @@ fn main() -> ExitCode {
                 }
             },
             "--once" => once = true,
+            "--no-track" => track = false,
             "--help" | "-h" => {
                 print!("{}", usage());
                 return ExitCode::SUCCESS;
@@ -37,7 +40,7 @@ fn main() -> ExitCode {
     }
 
     let socket = socket.unwrap_or_else(socket_default);
-    match run(&socket, once) {
+    match run(&socket, once, track) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("better-companion: {err}");
@@ -46,8 +49,15 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(socket: &std::path::Path, once: bool) -> std::io::Result<()> {
-    let registry = std::sync::Arc::new(build_registry(socket)?);
+fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()> {
+    let (registry, parking) = build_registry_with_parking(socket)?;
+    if track {
+        if let Some(niri_socket) = companion_niri::socket_from_env() {
+            let parking = parking.clone();
+            std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking));
+        }
+    }
+    let registry = std::sync::Arc::new(registry);
     let listener = bind(socket)?;
     eprintln!(
         "better-companion {} listening on {}",
