@@ -39,6 +39,12 @@ Brings in the full niri-elite feature set:
 - input bind extensions (press/release, bare modifiers, raw/ASCII keysyms);
 - per-feature visual tests merged with upstream's tests.
 
+Added on top of the elite base:
+
+- per-keyboard configuration (core input): named `keyboard "device" { ... }`
+  blocks, inheritance from the unnamed block, keymap/repeat/Num Lock/locale1/IPC
+  updates on device switches, with headless tests.
+
 Reconciled with upstream `02ee0585`:
 
 - focus flags on move actions, `pass_through` binds, DPMS frame-callback guards;
@@ -51,7 +57,7 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 652 tests |
+| `cargo test --workspace` | pass, 661 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
