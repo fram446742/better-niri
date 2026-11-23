@@ -24,15 +24,15 @@ needless_bool = "allow"
 too_many_arguments = "allow"
 
 [workspace.dependencies]
-anyhow = "1.0.104"
-bitflags = "2.13"
-clap = { version = "4.6.6", features = ["derive"] }
-insta = "1.48.0"
+anyhow = "1.0.105"
+bitflags = "2.13.2"
+clap = { version = "4.6.9", features = ["derive"] }
+insta = "1.49.0"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-tracy-client = { version = "0.18.5", default-features = false }
+tracy-client = { version = "0.19.0", default-features = false }
 
 # better-smithay is our single Smithay fork. It starts from upstream Smithay at
 # the revision niri upstream pinned, and carries our reviewed feature commits on
@@ -70,43 +70,43 @@ readme = "README.md"
 keywords = ["wayland", "compositor", "tiling", "smithay", "wm"]
 
 [dependencies]
-accesskit = { version = "0.25", optional = true }
-accesskit_unix = { version = "0.23", optional = true }
+accesskit = { version = "0.25.2", optional = true }
+accesskit_unix = { version = "0.24.1", optional = true }
 anyhow.workspace = true
 arrayvec = "0.7.8"
 async-channel = "2.5.0"
 async-io = { version = "2.6.0", optional = true }
 atomic = "0.6.1"
-base64 = "0.22.1"
+base64 = "0.23.1"
 bitflags.workspace = true
 bytemuck = { version = "1.25.2", features = ["derive"] }
 calloop = { version = "0.14.5", features = ["executor", "futures-io", "signals"] }
 clap = { workspace = true, features = ["string"] }
-clap_complete = "4.6"
-clap_complete_nushell = "4.6"
+clap_complete = "4.6.12"
+clap_complete_nushell = "4.6.3"
 directories = "6.0.0"
 drm-ffi = "0.9.1"
 fastrand = "2.5.0"
-futures-util = { version = "0.3", default-features = false, features = ["std", "io"] }
-getrandom = { version = "0.3.4", optional = true }
+futures-util = { version = "0.3.34", default-features = false, features = ["std", "io"] }
+getrandom = { version = "0.4.3", optional = true }
 git-version = "0.3.9"
 glam = "0.33"
 input = { version = "0.10.0", features = ["libinput_1_21"] }
 keyframe = { version = "1.1.1", default-features = false }
-libc = "0.2.189"
+libc = "0.2.191"
 libdisplay-info = { version = "0.3.0", features = ["v0_2"] }
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4.35", features = ["max_level_trace", "release_max_level_debug"] }
 niri-config = { version = "26.4.0-elite", path = "niri-config" }
 niri-ipc = { version = "26.4.0-elite", path = "niri-ipc", features = ["clap"] }
-ordered-float = "5"
-pango = { version = "0.21.5", features = ["v1_44"] }
-pangocairo = "0.21.5"
-pipewire = { version = "0.10", optional = true, features = ["v0_3_33"] }
+ordered-float = "5.5.1"
+pango = { version = "0.22.9", features = ["v1_44"] }
+pangocairo = "0.22.9"
+pipewire = { version = "0.10.1", optional = true, features = ["v0_3_33"] }
 png = "0.18.1"
-portable-atomic = "1"
+portable-atomic = "1.15.0"
 profiling = "1.0.18"
-resvg = "0.44"
-usvg = "0.44"
+resvg = "0.50.0"
+usvg = "0.50.0"
 sd-notify = "0.5.0"
 serde.workspace = true
 serde_json.workspace = true
@@ -114,8 +114,8 @@ smithay-drm-extras.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 tracy-client.workspace = true
-wayland-backend = "0.3.16"
-wayland-protocols-plasma = { version = "0.3.11", features = ["server"], optional = true }
+wayland-backend = "0.3.17"
+wayland-protocols-plasma = { version = "0.3.12", features = ["server"], optional = true }
 wayland-scanner = "0.31.11"
 wayland-server = "0.31.14"
 xcursor = "0.3.11"
@@ -143,14 +143,14 @@ features = [
 approx = "0.5.1"
 calloop-wayland-source = "0.4.1"
 insta.workspace = true
-proptest = "1.11.0"
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
+proptest = "1.12.0"
+proptest-derive = { version = "0.9.0", features = ["boxed_union"] }
 rayon = "1.12.0"
 wayland-client = "0.31.15"
 xshell = "0.2.7"
 
 [build-dependencies]
-pkg-config = "0.3"
+pkg-config = "0.3.34"
 
 [features]
 default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde"]
