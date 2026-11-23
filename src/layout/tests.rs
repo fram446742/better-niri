@@ -12589,6 +12589,102 @@ fn carousel_reveal_tracks_zoom_threshold() {
 
     layout.set_overview_zoom_for_test(0.05);
     assert_eq!(layout.carousel_reveal(), 1.);
+
+    // The assembled gallery is the terminal state of the zoom-out gesture:
+    // the zoom target itself must clamp at assembled_zoom, so the live host
+    // strip can't keep shrinking under the frozen gallery (the 2026-08-04
+    // hardware finding, screenshot -5).
+    assert_eq!(
+        layout.active_monitor_ref().unwrap().overview_zoom_target(),
+        0.15,
+        "zoom target clamps at assembled_zoom in consolidated mode"
+    );
+}
+
+#[test]
+fn overview_zoom_persists_across_close() {
+    // PR #2 port: the zoom target survives close (the close animation scales
+    // from it, and the next open resumes at the parked zoom); only the preset
+    // cycling index resets.
+    let mut layout = Layout::<TestWindow>::default();
+
+    let output = Output::new(
+        "out".to_owned(),
+        PhysicalProperties {
+            size: Size::from((1280, 720)),
+            subpixel: Subpixel::Unknown,
+            make: String::new(),
+            model: String::new(),
+            serial_number: String::new(),
+        },
+    );
+    output.change_current_state(
+        Some(Mode {
+            size: Size::from((1280, 720)),
+            refresh: 60000,
+        }),
+        None,
+        None,
+        None,
+    );
+    output.user_data().insert_if_missing(|| OutputName {
+        connector: "out".to_owned(),
+        make: None,
+        model: None,
+        serial: None,
+    });
+    layout.add_output(output, None, false);
+
+    layout.toggle_overview();
+    layout.set_overview_zoom_for_test(0.3);
+    layout.toggle_overview(); // close
+    layout.toggle_overview(); // reopen
+
+    assert_eq!(
+        layout.active_monitor_ref().unwrap().overview_zoom_target(),
+        0.3,
+        "parked zoom survives close/reopen"
+    );
+}
+
+#[test]
+fn zoom_target_unclamped_without_consolidated_carousel() {
+    let mut layout = Layout::<TestWindow>::default();
+
+    let output = Output::new(
+        "out".to_owned(),
+        PhysicalProperties {
+            size: Size::from((1280, 720)),
+            subpixel: Subpixel::Unknown,
+            make: String::new(),
+            model: String::new(),
+            serial_number: String::new(),
+        },
+    );
+    output.change_current_state(
+        Some(Mode {
+            size: Size::from((1280, 720)),
+            refresh: 60000,
+        }),
+        None,
+        None,
+        None,
+    );
+    output.user_data().insert_if_missing(|| OutputName {
+        connector: "out".to_owned(),
+        make: None,
+        model: None,
+        serial: None,
+    });
+    layout.add_output(output, None, false);
+
+    layout.toggle_overview();
+    layout.set_overview_zoom_for_test(0.05);
+    assert_eq!(
+        layout.active_monitor_ref().unwrap().overview_zoom_target(),
+        0.05,
+        "no clamp when the carousel isn't configured"
+    );
 }
 
 #[test]
