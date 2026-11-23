@@ -17,6 +17,7 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
 | `companion-system` | `system.*` | Ping, status and paths |
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
+| `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` | Optional Phase C ecosystem adapters (commands + event hooks) |
 | `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore and run-or-raise/singleton |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
@@ -103,7 +104,17 @@ companionctl call rules set '{
 companionctl call rules explain '{"window":10}'
 companionctl call rules apply '{"window":10}'
 companionctl call rules run '{"window":10}'   # registry executes the steps
+
+# Phase C adapters: explicit commands and event hooks, no hard dependency.
+companionctl call session enable
+companionctl call session set '{"name":"lock","command":"loginctl lock-session"}'
+companionctl call session dispatch '{"name":"lock"}'   # only runs when explicit
+companionctl call monitor set-hook '{"event":"workspace-activated","command":"waybar reload"}'
+companionctl call audio status
 ```
+
+Adapters are disabled by default. `dispatch` is the only action that executes
+a command; hooks just store/resolve them.
 
 ## Contexts
 

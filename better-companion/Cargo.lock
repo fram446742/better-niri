@@ -3,6 +3,15 @@
 version = 3
 
 [[package]]
+name = "companion-adapters"
+version = "0.1.0"
+dependencies = [
+ "companion-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "companion-automation"
 version = "0.1.0"
 dependencies = [
@@ -23,6 +32,7 @@ dependencies = [
 name = "companion-daemon"
 version = "0.1.0"
 dependencies = [
+ "companion-adapters",
  "companion-automation",
  "companion-core",
  "companion-hooks",

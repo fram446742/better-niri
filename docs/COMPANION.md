@@ -395,6 +395,10 @@ niri's Cargo workspace):
   `run` executes the rule steps through the registry.
 - `windows.*` in `companion-niri`: `run-or-raise`/`singleton` focus an existing
   match or spawn the configured command; `find` returns matches.
+- `companion-adapters`: optional Phase C namespaces `session.*`, `monitor.*`,
+  `audio.*`, `wallpaper.*` for better-session/monitor/audio/wallpaper. Each
+  stores explicit commands and event hooks; only the explicit `dispatch`
+  action runs a command. Disabled by default.
 - `companion-system`: ping/status/paths.
 - `companion-niri`: `compositor.*` bridge over the niri IPC socket — perform a
   typed `Action`, and query version/outputs/workspaces/windows/focused window.
@@ -408,8 +412,9 @@ niri's Cargo workspace):
 - `companionctl`: list/status/call client.
 
 Phase B is started: `rules.*` and `windows.run-or-raise`/`singleton` are in.
-Not yet: Phase B adapters, richer swallowing rules and the optional
-adapters/companions; parking currently means minimizing.
+Phase C adapters are in: `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`
+store commands/hooks and execute only on explicit dispatch. Not yet: richer
+swallowing rules and the companion apps themselves; parking means minimizing.
 
 ## 9. Roadmap
 

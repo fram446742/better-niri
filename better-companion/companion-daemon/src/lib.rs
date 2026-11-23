@@ -31,6 +31,9 @@ pub fn build_registry_with_parking(
     ));
     registry.register(companion_niri::Compositor::from_env());
     registry.register(companion_rules::Rules::from_state_dir(parking.clone())?);
+    for adapter in companion_adapters::default_adapters()? {
+        registry.register(adapter);
+    }
     Ok((registry, parking))
 }
 
@@ -130,6 +133,10 @@ mod tests {
                 assert!(contexts.contains_key("parker"));
                 assert!(contexts.contains_key("rules"));
                 assert!(contexts.contains_key("windows"));
+                assert!(contexts.contains_key("session"));
+                assert!(contexts.contains_key("monitor"));
+                assert!(contexts.contains_key("audio"));
+                assert!(contexts.contains_key("wallpaper"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -160,13 +167,17 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "audio",
                 "automation",
                 "compositor",
                 "hooks",
+                "monitor",
                 "parker",
                 "parking",
                 "rules",
+                "session",
                 "system",
+                "wallpaper",
                 "windows",
             ]
         );
