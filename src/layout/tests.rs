@@ -12423,6 +12423,9 @@ fn decoration_redraw_visibility(custom: bool, light: bool) {
 
 #[test]
 fn egl_decoration_light_precedes_floating_and_tiled_content() {
+    let _egl = crate::EGL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     use smithay::backend::egl::native::EGLSurfacelessDisplay;
     use smithay::backend::egl::{EGLContext, EGLDisplay};
     use smithay::backend::renderer::element::{Element as _, Id};

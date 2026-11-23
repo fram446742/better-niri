@@ -30,3 +30,9 @@ pub mod window;
 
 #[cfg(test)]
 mod tests;
+
+/// Serializes tests that create raw EGL/GLES contexts. The GPU driver and EGL state are global to
+/// the test process, so running these tests in parallel makes them interfere (and fail
+/// intermittently) even though each one creates its own context.
+#[cfg(test)]
+pub(crate) static EGL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
