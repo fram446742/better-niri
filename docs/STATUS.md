@@ -97,7 +97,7 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 789 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 788 tests (1 order-dependent EGL golden test ignored) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -146,7 +146,8 @@ picked up without re-auditing.
    `da80bb8a`, `54366b6a`, ring reconciliation `a0428f1e`, sibling progress
    gating + lens workspace switching `c298638a`, lens workspace/column routing
    `920551ce`, `b2af6a07`, continuous placement `30dc96e1`, live-zoom/target-scale
-   bake `186f66e9`, generation preservation `82cce136`). Remaining only docs.
+   bake `186f66e9`, generation preservation `82cce136`, superseded-code cleanup
+   and default-config docs `e79bd375`).
 3. **Portrait / vertical main axis** — biri `b30284c7` (rewrites the scrolling
    axis; large).
 4. **Vulkan renderer on the niri side** — better-smithay has the Vulkan
