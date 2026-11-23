@@ -90,6 +90,7 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
+pub mod axis;
 #[cfg(feature = "navigation")]
 pub mod carousel;
 pub mod closing_window;
@@ -8172,6 +8173,13 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn is_overview_open(&self) -> bool {
         self.overview_open
+    }
+
+    /// Main axis of the active workspace's scrolling layout.
+    pub fn active_main_axis(&self) -> niri_config::MainAxis {
+        self.active_workspace()
+            .map(|ws| ws.axis().main_axis())
+            .unwrap_or(self.options.layout.main_axis)
     }
 
     #[cfg(feature = "navigation")]
