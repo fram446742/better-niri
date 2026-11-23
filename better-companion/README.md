@@ -54,6 +54,20 @@ companionctl call compositor action '{"action":{"FocusColumnRight":{}}}'
 `compositor.*` connects to the running niri IPC socket (`$NIRI_SOCKET`, or
 `--socket` on the daemon if it was started with a different environment).
 
+## Auto-tracked lots
+
+When `$NIRI_SOCKET` is set, the daemon subscribes to niri's event stream and
+maintains two ordinary parking lots:
+
+- `auto:workspaces` — every workspace keyed by stable id (name, output,
+  active/focused/urgent/hidden, active window).
+- `auto:windows` — every open window keyed by stable id (title, app id,
+  workspace, focus, floating/sticky/minimized/urgent, layout).
+
+Window closes remove entries; activation/focus/minimize/urgency events update
+them. Use `companionctl call parking list '{"lot":"auto:windows"}'`. Start the
+daemon with `--no-track` to disable the subscription.
+
 ## Contexts
 
 - `parking.park|unpark|list|lots|clear`: parked values keyed by lot and id.

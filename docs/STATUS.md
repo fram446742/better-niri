@@ -169,9 +169,11 @@ picked up without re-auditing.
    `companion-automation` (registry-dispatched sequences),
    `companion-hooks`, `companion-system`, the `better-companion` daemon and
    `companionctl`; `companion-niri` adds a `compositor.*` bridge that performs
-   typed niri actions and queries outputs/workspaces/windows over IPC.
-   Remaining: parking/sticky auto-tracking from compositor events, Phase B/C
-   rules and adapters, and the companion apps from `ECOSYSTEM.md`.
+   typed niri actions and queries outputs/workspaces/windows over IPC, and
+   subscribes to the event stream to auto-track `auto:workspaces` /
+   `auto:windows` parking lots (activation, focus, close, minimize, urgency).
+   Remaining: compositor-side actions consuming those lots, Phase B/C rules
+   and adapters, and the companion apps from `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,

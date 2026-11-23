@@ -9,13 +9,21 @@ use std::path::{Path, PathBuf};
 use companion_core::{Registry, Request, Response};
 
 pub fn build_registry(socket: &Path) -> io::Result<Registry> {
+    Ok(build_registry_with_parking(socket)?.0)
+}
+
+/// Builds the registry and returns the parking handle for event tracking.
+pub fn build_registry_with_parking(
+    socket: &Path,
+) -> io::Result<(Registry, companion_parking::Parking)> {
     let mut registry = Registry::with_socket(socket);
-    registry.register(companion_parking::Parking::from_state_dir()?);
+    let parking = companion_parking::Parking::from_state_dir()?;
+    registry.register(parking.clone());
     registry.register(companion_automation::Automation::from_state_dir()?);
     registry.register(companion_hooks::Hooks::from_state_dir()?);
     registry.register(companion_system::System::new(socket));
     registry.register(companion_niri::Compositor::from_env());
-    Ok(registry)
+    Ok((registry, parking))
 }
 
 /// Binds the socket, replacing a stale socket file.
