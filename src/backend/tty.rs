@@ -2000,7 +2000,10 @@ impl Tty {
             .global_space
             .outputs()
             .find(|output| {
-                let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                // Virtual outputs live in the global space without a TTY state.
+                let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+                    return false;
+                };
                 tty_state.node == node && tty_state.crtc == crtc
             })
             .cloned();
@@ -2080,7 +2083,10 @@ impl Tty {
             .global_space
             .outputs()
             .find(|output| {
-                let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                // Virtual outputs live in the global space without a TTY state.
+                let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+                    return false;
+                };
                 tty_state.node == node && tty_state.crtc == crtc
             })
             .cloned()
@@ -2785,7 +2791,10 @@ impl Tty {
                     .global_space
                     .outputs()
                     .find(|output| {
-                        let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                        // Virtual outputs live in the global space without a TTY state.
+                        let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+                            return false;
+                        };
                         tty_state.node == *node && tty_state.crtc == crtc
                     })
                     .map(logical_output);
@@ -3044,7 +3053,9 @@ impl Tty {
         }
         for (&node, device) in self.devices.iter_mut() {
             for (&crtc, surface) in device.surfaces.iter_mut() {
-                let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+                    return;
+                };
                 if tty_state.node == node && tty_state.crtc == crtc {
                     let word = if enable_vrr { "enabling" } else { "disabling" };
                     if let Err(err) = surface.compositor.use_vrr(enable_vrr) {
@@ -3232,7 +3243,10 @@ impl Tty {
                     .global_space
                     .outputs()
                     .find(|output| {
-                        let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                        // Virtual outputs live in the global space without a TTY state.
+                        let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+                            return false;
+                        };
                         tty_state.node == node && tty_state.crtc == crtc
                     })
                     .cloned();
