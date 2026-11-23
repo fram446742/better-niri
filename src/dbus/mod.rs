@@ -15,6 +15,7 @@ pub mod freedesktop_screensaver;
 pub mod gnome_shell;
 pub mod gnome_shell_introspect;
 pub mod gnome_shell_screenshot;
+pub mod kwin_colorpicker;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
 
@@ -42,6 +43,7 @@ pub struct DBusServers {
     pub conn_display_config: Option<Connection>,
     pub conn_screen_saver: Option<Connection>,
     pub conn_screen_shot: Option<Connection>,
+    pub conn_kde_colorpicker: Option<Connection>,
     pub conn_gnome_shell: Option<Connection>,
     pub conn_introspect: Option<Connection>,
     #[cfg(feature = "xdp-gnome-screencast")]
@@ -115,6 +117,18 @@ impl DBusServers {
                 .unwrap();
             let screenshot = gnome_shell_screenshot::Screenshot::new(to_niri);
             dbus.conn_screen_shot = try_start(screenshot, is_session_instance);
+
+            let (to_niri, from_colorpicker) = calloop::channel::channel();
+            niri.event_loop
+                .insert_source(from_colorpicker, move |event, _, state| match event {
+                    calloop::channel::Event::Msg(
+                        kwin_colorpicker::KwinColorpickerToNiri::PickColor(tx),
+                    ) => state.handle_pick_color(tx, false),
+                    calloop::channel::Event::Closed => (),
+                })
+                .unwrap();
+            let colorpicker = kwin_colorpicker::KwinColorpicker::new(to_niri);
+            dbus.conn_kde_colorpicker = try_start(colorpicker, is_session_instance);
 
             let (to_niri, from_gnome_shell) = calloop::channel::channel();
             niri.event_loop
