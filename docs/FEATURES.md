@@ -30,8 +30,8 @@ This table is the integration contract, not a claim of completion.
 | GPU format probing | Partial | niri-spicy, niri-elite | niri-spicy | Planned | niri already has a 10-bit scanout format list; HDR needs per-plane colour probing. |
 | 10-bit output | Partial | niri-spicy | niri-spicy | Planned | Upstream lists `Abgr2101010`; no HDR colour pipeline. |
 | Direct scanout | Upstream | upstream | upstream | Upstream | Must survive effects-disabled paths. |
-| Shader pipeline (GLSL) | Absent | biri | biri | Planned | Global/region/window/output/focus-ring, multipass, feedback. |
-| Multipass + frame history | Absent | biri | biri | Planned | `niri_prev`, `global_buffer`, per-pass chains. |
+| Shader pipeline (GLSL) | Absent | biri | biri | Partial | Global + `region-shader` + per-window-rule scoped chains, multipass, feedback; per-output presets and focus-ring shaders pending. |
+| Multipass + frame history | Absent | biri | biri | Integrated | `niri_prev`, `niri_buffer`, `niri_screen`, `niri_source`, per-pass chains, black-seeded feedback. |
 | Blur | Upstream | upstream | upstream | Upstream | `passes`, `offset`, `noise`, `saturation`, `xray`; `ext-background-effect-v1`. |
 | KDE blur protocol | Absent | kde-niri | kde-niri | Planned | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
 | Liquid glass / refraction / lens / edge light | Absent | zaroutt/Niri-glass via niri-elite | niri-elite port | Planned | Implement as a background-effect shader, not a second engine. |

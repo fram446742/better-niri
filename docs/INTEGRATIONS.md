@@ -187,7 +187,8 @@ commits. This is the lowest-risk large integration today.
 | `float-above-fullscreen` | `fd841547` |
 | Per-keyboard configuration | `7fdbd5ec`, `526e6d2b`, `d893c811`, `0b5cdcc1`, `e2909102`, `88152e2c` |
 | Vertical main axis | `f20e14a7`…`0f3860a8` |
-| Global shader | `f948f557`…`3774b4c9` |
+| Global shader | `f948f557`…`2c2591c0` |
+| Scoped/region/window shaders | `31cc5af9`…`f0f0ce01` |
 | Region/window/focus-ring shaders | `f4b5c4b9`…`0cb779d1` |
 | Per-output shader presets | `fde00905`…`3774b4c9` |
 | `toggle-dwt` | `54d1770c` |
