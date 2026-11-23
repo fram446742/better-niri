@@ -420,7 +420,6 @@ pub struct Layout<W: LayoutElement> {
     /// Which output the consolidated carousel is centered on. Initialized to 0;
     /// Phase 2 sets it to the centered output when entering the carousel regime.
     /// Meaningful only while in the carousel regime.
-    ///
     carousel_centered_output_idx: usize,
     /// Configurable properties of the layout.
     options: Rc<Options>,

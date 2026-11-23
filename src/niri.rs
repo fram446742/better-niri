@@ -19,8 +19,8 @@ use niri_config::input::XkbFile;
 use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
-    Bind, Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
-    WorkspaceReference, Xkb,
+    Bind, Config, CornerRadius, FloatOrInt, GradientInterpolation, Key, Modifiers, OutputName,
+    TrackLayout, WarpMouseToFocusMode, WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{InputTime, Keycode};
@@ -189,6 +189,7 @@ use crate::render_helpers::blend::{
     set_sdr_capture_blend, BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE,
 };
 use crate::render_helpers::blur::BlurOptions;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
@@ -7748,9 +7749,9 @@ impl Niri {
                     // order to have their non-xray framebuffer effects separated from each other.
                     //
                     // This doesn't have to correspond exactly to workspace id or idx, the only
-                    // requirement is that there's only one framebuffer effect element with a given id +
-                    // namespace on the frame at once. Id + namespace is used as the cache key in the
-                    // damage tracker.
+                    // requirement is that there's only one framebuffer effect element with a given
+                    // id + namespace on the frame at once. Id + namespace is used as the cache key
+                    // in the damage tracker.
                     let ns = Some(ws.id().get() as usize);
                     let xray_pos = XrayPos::new(geo.loc, zoom);
                     push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
@@ -11551,6 +11552,8 @@ niri_render_elements! {
         CarouselCard = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
             MonitorRenderElement<R>
         >>>,
+        // Consolidated carousel: gradient strip fading a card's horizontal edge.
+        CarouselFade = BorderRenderElement,
     }
 }
 
