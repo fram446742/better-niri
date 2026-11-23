@@ -2521,6 +2521,7 @@ impl Tty {
                 // Global post-process shader ping-pong: the element wrote each pass's captured
                 // result into the shared handles during render_frame; move them into prev for the
                 // next frame. Per-pass for the chain; the screen capture is frame-level.
+                #[cfg(feature = "effects")]
                 if let Some(output_state) = niri.output_state.get_mut(output) {
                     let chain = output_state.global_shader_chain.get_mut();
                     for i in 0..chain.result.len() {

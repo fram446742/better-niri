@@ -46,6 +46,7 @@ use smithay::wayland::shell::wlr_layer::{self, Layer};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardDevice;
 use touch_overview_grab::TouchOverviewGrab;
 
+#[cfg(feature = "navigation")]
 use self::magnifier_center_grab::MagnifierCenterGrab;
 use self::move_grab::MoveGrab;
 use self::pick_color_grab::PickColorGrab;
@@ -68,6 +69,7 @@ use crate::window::Mapped;
 
 pub mod backend_ext;
 pub mod click_grab;
+#[cfg(feature = "navigation")]
 pub mod magnifier_center_grab;
 pub mod move_grab;
 pub mod pick_color_grab;
@@ -3053,25 +3055,43 @@ impl State {
             Action::StopCast(session_id) => {
                 self.niri.stop_cast(CastSessionId::from(session_id));
             }
+            #[cfg(feature = "navigation")]
             Action::ToggleMagnifier => {
                 self.niri.toggle_magnifier();
                 self.niri.queue_redraw_all();
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::ToggleMagnifier => {}
+            #[cfg(feature = "navigation")]
             Action::AdjustMagnifierZoom(delta) => {
                 self.niri.adjust_magnifier_zoom(delta);
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::AdjustMagnifierZoom(_) => {}
+            #[cfg(feature = "navigation")]
             Action::MoveMagnifierLeft => {
                 self.niri.move_magnifier_center(-1., 0.);
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::MoveMagnifierLeft => {}
+            #[cfg(feature = "navigation")]
             Action::MoveMagnifierRight => {
                 self.niri.move_magnifier_center(1., 0.);
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::MoveMagnifierRight => {}
+            #[cfg(feature = "navigation")]
             Action::MoveMagnifierUp => {
                 self.niri.move_magnifier_center(0., -1.);
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::MoveMagnifierUp => {}
+            #[cfg(feature = "navigation")]
             Action::MoveMagnifierDown => {
                 self.niri.move_magnifier_center(0., 1.);
             }
+            #[cfg(not(feature = "navigation"))]
+            Action::MoveMagnifierDown => {}
             Action::ToggleOverview => {
                 self.niri.layout.toggle_overview();
                 self.niri.queue_redraw_all();
@@ -4049,7 +4069,10 @@ impl State {
                     .window_is_in_open_grid_overview(&mapped.window)
             });
 
+            #[cfg(feature = "navigation")]
             let magnifier_can_drag = self.niri.can_drag_magnifier_center();
+            #[cfg(not(feature = "navigation"))]
+            let magnifier_can_drag = false;
 
             if should_close_window_on_middle_click(
                 button,
@@ -4151,6 +4174,7 @@ impl State {
                 }
             }
 
+            #[cfg(feature = "navigation")]
             if button == Some(MouseButton::Middle)
                 && !pointer.is_grabbed()
                 && !mod_down
@@ -5998,7 +6022,7 @@ impl State {
 
         grab.is::<PickWindowGrab>()
             || grab.is::<PickColorGrab>()
-            || grab.is::<MagnifierCenterGrab>()
+            || is_magnifier_grab(grab)
             || Self::is_dnd_grab(grab)
     }
 
@@ -7180,6 +7204,16 @@ pub fn mods_with_tablet_stylus_binds(mod_key: ModKey, binds: &Binds) -> HashSet<
     )
 }
 
+#[cfg(feature = "navigation")]
+fn is_magnifier_grab(grab: &dyn std::any::Any) -> bool {
+    grab.is::<MagnifierCenterGrab>()
+}
+
+#[cfg(not(feature = "navigation"))]
+fn is_magnifier_grab(_grab: &dyn std::any::Any) -> bool {
+    false
+}
+
 fn grab_allows_hot_corner(grab: &(dyn PointerGrab<State> + 'static)) -> bool {
     let grab = grab.as_any();
 
@@ -7191,10 +7225,7 @@ fn grab_allows_hot_corner(grab: &(dyn PointerGrab<State> + 'static)) -> bool {
     // - DnDGrab allows hot corner to DnD across workspaces.
     // - ClickGrab keeps pointer focus on the window, so the hot corner doesn't trigger.
     // - Touch grabs: touch doesn't trigger the hot corner.
-    if grab.is::<ResizeGrab>()
-        || grab.is::<SpatialMovementGrab>()
-        || grab.is::<MagnifierCenterGrab>()
-    {
+    if grab.is::<ResizeGrab>() || grab.is::<SpatialMovementGrab>() || is_magnifier_grab(grab) {
         return false;
     }
 
@@ -7254,6 +7285,7 @@ enum MagnifierBindsFilter {
 }
 
 impl MagnifierBindsFilter {
+    #[cfg(feature = "navigation")]
     fn new(niri: &Niri) -> Self {
         // The screenshot UI and the lock screen handle keys on their own.
         if !niri.magnifier_active || niri.screenshot_ui.is_open() || niri.is_locked() {
@@ -7263,6 +7295,11 @@ impl MagnifierBindsFilter {
         } else {
             Self::NoMove
         }
+    }
+
+    #[cfg(not(feature = "navigation"))]
+    fn new(_niri: &Niri) -> Self {
+        Self::None
     }
 
     fn allows(self, bind: &Bind) -> bool {
@@ -7343,6 +7380,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "navigation")]
     fn magnifier_binds_take_precedence_only_while_they_apply() {
         let config = Config::parse_mem(
             r#"

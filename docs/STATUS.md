@@ -100,8 +100,11 @@ Verified on this branch:
 | --- | --- |
 | `cargo check --workspace` | pass |
 | `cargo test --workspace` | pass, 807 tests (1 order-dependent EGL golden test ignored) |
-| `cargo check --workspace --no-default-features` | pass |
+| `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
 | `cargo test --workspace --no-default-features` | pass, 807 tests |
+| `cargo check -p niri --no-default-features` | pass (true minimal build) |
+| `cargo test -p niri --no-default-features` | pass, 629 tests (effects/navigation tests compiled out) |
+| `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -164,13 +167,18 @@ picked up without re-auditing.
    (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
    `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
    Companion repos start only after Phase 1.
-7. **Remaining built-in module features** — `navigation` and `vulkan` Cargo
-   features. `kde`, `cursor` and `effects` are done. `effects` gates the
-   global/region/output/window shader engine and decoration light (render
-   path, reload hooks, continuous-redraw gates, backend pass registration and
-   decoration-light damage ordering), so a minimal build compiles them out.
-   `navigation` (grid/magnifier/carousel) still needs cfg gating across
-   layout/monitor/input.
+7. **Remaining built-in module features** — `vulkan`, and the grid/carousel
+   half of `navigation`. `kde`, `cursor` and `effects` are done. `effects`
+   gates the global/region/output/window shader engine and decoration light
+   (render path, reload hooks, continuous-redraw gates, backend pass
+   registration, decoration-light damage ordering, and the tty ping-pong
+   handoff). `navigation` is now a real feature that gates the screen
+   magnifier end to end (actions, drag grab, center animation, cursor
+   pre-transform, render pass, capture suppression, screencast mapping);
+   grid overview and carousel still need cfg gating across
+   layout/monitor/input. The true minimal build is verified per package with
+   `cargo check -p niri --no-default-features`, since workspace builds unify
+   defaults from other members.
 8. **Multi-action binds — done.** Binds hold ordered action lists per phase
    (`press`/`release` sections included), the parser reports and skips a bad
    action while keeping the rest, `allow-when-locked` requires every action to

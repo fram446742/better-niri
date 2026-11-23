@@ -366,14 +366,20 @@ pub struct Niri {
     pub pointer_grow_zoom: f64,
 
     // Magnifier
+    #[cfg(feature = "navigation")]
     pub magnifier_active: bool,
+    #[cfg(feature = "navigation")]
     pub magnifier_zoom: f64,
+    #[cfg(feature = "navigation")]
     pub magnifier_animation: Option<crate::animation::Animation>,
+    #[cfg(feature = "navigation")]
     pub magnifier_capture: Cell<bool>,
     /// Set while capturing the screen for the color picker magnifier, to leave it out.
     pub pick_color_capture: Cell<bool>,
+    #[cfg(feature = "navigation")]
     pub magnifier_center: RefCell<Option<(WeakOutput, Point<i32, Physical>)>>,
     /// Movement of the shown magnifier center towards `magnifier_center`.
+    #[cfg(feature = "navigation")]
     pub magnifier_center_anim: Option<MagnifierCenterAnim>,
 
     /// Output capture sessions. Kept out of the protocol state because each one needs a damage
@@ -1112,6 +1118,7 @@ pub struct PendingMruCommit {
 }
 
 /// Animated movement of the locked magnifier center.
+#[cfg(feature = "navigation")]
 #[derive(Debug)]
 pub struct MagnifierCenterAnim {
     output: WeakOutput,
@@ -1119,6 +1126,7 @@ pub struct MagnifierCenterAnim {
     y: Animation,
 }
 
+#[cfg(feature = "navigation")]
 impl MagnifierCenterAnim {
     /// Whether this animation moves the center of `output` towards `target`.
     ///
@@ -2573,7 +2581,9 @@ impl State {
             xwls_changed = true;
         }
 
+        #[cfg(feature = "navigation")]
         let old_magnifier_off = old_config.magnifier.off;
+        #[cfg(feature = "navigation")]
         let old_magnifier_zoom = old_config.magnifier.zoom_factor;
         #[cfg(feature = "cursor")]
         let old_shake_off = old_config
@@ -2582,7 +2592,9 @@ impl State {
             .as_ref()
             .is_none_or(|s| s.off);
 
+        #[cfg(feature = "navigation")]
         let new_magnifier_off = config.magnifier.off;
+        #[cfg(feature = "navigation")]
         let new_magnifier_zoom = config.magnifier.zoom_factor;
         #[cfg(feature = "cursor")]
         let new_shake_off = config
@@ -2600,6 +2612,7 @@ impl State {
         // Release the borrow.
         drop(old_config);
 
+        #[cfg(feature = "navigation")]
         self.niri.reconcile_magnifier_config(
             old_magnifier_off,
             old_magnifier_zoom,
@@ -4449,6 +4462,7 @@ impl Niri {
             )
             .unwrap();
 
+        #[cfg(feature = "navigation")]
         let magnifier_zoom_factor = config_.magnifier.zoom_factor;
         drop(config_);
         let mut niri = Self {
@@ -4501,12 +4515,18 @@ impl Niri {
             pointer_scale_animation: None,
             pointer_grow_zoom: 1.0,
 
+            #[cfg(feature = "navigation")]
             magnifier_active: false,
+            #[cfg(feature = "navigation")]
             magnifier_zoom: magnifier_zoom_factor,
+            #[cfg(feature = "navigation")]
             magnifier_animation: None,
+            #[cfg(feature = "navigation")]
             magnifier_capture: Cell::new(false),
             pick_color_capture: Cell::new(false),
+            #[cfg(feature = "navigation")]
             magnifier_center: RefCell::new(None),
+            #[cfg(feature = "navigation")]
             magnifier_center_anim: None,
 
             compositor_state,
@@ -6121,6 +6141,7 @@ impl Niri {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn toggle_magnifier(&mut self) {
         let (off, zoom_factor, anim_config) = {
             let config = self.config.borrow();
@@ -6164,6 +6185,7 @@ impl Niri {
         self.queue_redraw_all();
     }
 
+    #[cfg(feature = "navigation")]
     pub fn update_magnifier_animation(&mut self) {
         if let Some(anim) = &self.magnifier_animation {
             if anim.is_done() {
@@ -6177,6 +6199,7 @@ impl Niri {
         }
     }
 
+    #[cfg(feature = "navigation")]
     pub fn adjust_magnifier_zoom(&mut self, delta: f64) {
         let off = {
             let config = self.config.borrow();
@@ -6202,6 +6225,7 @@ impl Niri {
         self.queue_redraw_all();
     }
 
+    #[cfg(feature = "navigation")]
     pub fn can_drag_magnifier_center(&self) -> bool {
         let config = self.config.borrow();
         self.magnifier_active
@@ -6211,6 +6235,7 @@ impl Niri {
             && self.magnifier_zoom > 1.0
     }
 
+    #[cfg(feature = "navigation")]
     pub fn begin_magnifier_center_drag(
         &mut self,
         location: Point<f64, Logical>,
@@ -6245,6 +6270,7 @@ impl Niri {
         Some((output, center))
     }
 
+    #[cfg(feature = "navigation")]
     pub fn set_magnifier_center(&mut self, output: &Output, center: Point<i32, Physical>) -> bool {
         if !self.can_drag_magnifier_center() {
             return false;
@@ -6258,6 +6284,7 @@ impl Niri {
     }
 
     /// Moves the locked magnifier center by `dx` and `dy` steps.
+    #[cfg(feature = "navigation")]
     pub fn move_magnifier_center(&mut self, dx: f64, dy: f64) {
         if !self.can_drag_magnifier_center() {
             return;
@@ -6318,6 +6345,7 @@ impl Niri {
 
     /// Returns where the magnifier shows the locked `center` of `output`, which differs from it
     /// while the center is moving.
+    #[cfg(feature = "navigation")]
     fn shown_magnifier_center(
         &self,
         output: &Output,
@@ -6330,6 +6358,7 @@ impl Niri {
         self.clamp_magnifier_center_to_output(output, shown)
     }
 
+    #[cfg(feature = "navigation")]
     fn clamp_magnifier_center_to_output(
         &self,
         output: &Output,
@@ -6343,6 +6372,7 @@ impl Niri {
         Point::from((center.x.clamp(0, max_x), center.y.clamp(0, max_y)))
     }
 
+    #[cfg(feature = "navigation")]
     fn reconcile_magnifier_config(
         &mut self,
         was_off: bool,
@@ -6482,6 +6512,7 @@ impl Niri {
         // When magnifier's scale-cursor is disabled, pre-transform the cursor
         // position so it moves correctly without RescaleElement wrapping.
         // Skip when capturing screenshots (magnifier is disabled for the capture).
+        #[cfg(feature = "navigation")]
         {
             let config = self.config.borrow();
             if !config.magnifier.scale_cursor
@@ -7247,6 +7278,7 @@ impl Niri {
         self.screen_cast_picker.mark_display_previews_refreshed();
     }
 
+    #[cfg(feature = "navigation")]
     pub fn compute_magnifier_params(&self, output: &Output) -> Option<(f64, Point<i32, Physical>)> {
         if self.magnifier_capture.get() {
             return None;
@@ -7410,7 +7442,11 @@ impl Niri {
         let state = self.output_state.get(output).unwrap();
         ctx.xray = Some(&state.xray);
 
-        if let Some((zoom, pivot)) = self.compute_magnifier_params(output) {
+        #[cfg(feature = "navigation")]
+        let magnifier_params = self.compute_magnifier_params(output);
+        #[cfg(not(feature = "navigation"))]
+        let magnifier_params: Option<(f64, Point<i32, Physical>)> = None;
+        if let Some((zoom, pivot)) = magnifier_params {
             let scale_cursor = self.config.borrow().magnifier.scale_cursor;
             let mut magnifier_push = |elem| {
                 if !scale_cursor {
@@ -7858,7 +7894,11 @@ impl Niri {
 
         // If the screenshot UI is open, draw it.
         if self.screenshot_ui.is_open() {
-            if self.compute_magnifier_params(output).is_some() {
+            #[cfg(feature = "navigation")]
+            let magnified = self.compute_magnifier_params(output).is_some();
+            #[cfg(not(feature = "navigation"))]
+            let magnified = false;
+            if magnified {
                 // When the magnifier is active, render all screenshot UI elements
                 // to a single texture first. This avoids per-element rounding gaps
                 // that RescaleRenderElement::geometry() creates with to_i32_round().
@@ -8652,6 +8692,7 @@ impl Niri {
         if output_active {
             // Check if shake-to-enlarge hold duration expired and update animation.
             self.update_pointer_scale_animation(false);
+            #[cfg(feature = "navigation")]
             self.update_magnifier_animation();
             let pointer_anim_ongoing = self
                 .pointer_scale_animation
@@ -8662,15 +8703,21 @@ impl Niri {
                     .pointer_enlarged_until
                     .map(|t| std::time::Instant::now() < t)
                     .unwrap_or(false);
+            #[cfg(feature = "navigation")]
             let magnifier_anim_ongoing = self
                 .magnifier_animation
                 .as_ref()
                 .map(|a| !a.is_done())
                 .unwrap_or(false);
+            #[cfg(not(feature = "navigation"))]
+            let magnifier_anim_ongoing = false;
+            #[cfg(feature = "navigation")]
             let magnifier_center_anim_ongoing = self
                 .magnifier_center_anim
                 .as_ref()
                 .is_some_and(|a| a.output.upgrade().as_ref() == Some(output) && !a.is_done());
+            #[cfg(not(feature = "navigation"))]
+            let magnifier_center_anim_ongoing = false;
 
             // Decide whether a time/feedback-driven global shader needs continuous redraws.
             #[cfg(feature = "effects")]
@@ -10603,6 +10650,8 @@ impl Niri {
                     xray: None,
                     shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                 };
+                #[cfg(feature = "navigation")]
+                #[cfg(feature = "navigation")]
                 let was_magnifier_capture = self.magnifier_capture.replace(true);
                 let elements = self.render_to_vec(ctx, &output, false);
                 let elements = elements.iter().rev();
@@ -10629,6 +10678,8 @@ impl Niri {
                     self.render_pointer(renderer, &output, &mut |elem| pointer.push(elem));
                 }
 
+                #[cfg(feature = "navigation")]
+                #[cfg(feature = "navigation")]
                 self.magnifier_capture.set(was_magnifier_capture);
 
                 let res_pointer = if pointer.is_empty() {
@@ -10801,6 +10852,7 @@ impl Niri {
 
         let _span = tracy_client::span!("Niri::screenshot_window");
 
+        #[cfg(feature = "navigation")]
         let was_magnifier_capture = self.magnifier_capture.replace(true);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
@@ -10859,6 +10911,7 @@ impl Niri {
             elements,
         )?;
 
+        #[cfg(feature = "navigation")]
         self.magnifier_capture.set(was_magnifier_capture);
 
         self.save_screenshot_with_replies(
@@ -12363,6 +12416,7 @@ impl<'render>
 /// The magnifier center is the zoom pivot rather than the middle of the view: moving it by `d`
 /// moves the view by `d * (1 - 1 / zoom)`. Dividing by that keeps a step at the same fraction of
 /// the visible area at any zoom level.
+#[cfg(feature = "navigation")]
 fn magnifier_move_step(size: i32, zoom: f64, step: f64) -> f64 {
     let visible = f64::from(size) / zoom;
     visible * step / (1. - 1. / zoom)
@@ -12415,6 +12469,7 @@ mod screen_cast_picker_preview_tests {
 }
 
 #[cfg(test)]
+#[cfg(feature = "navigation")]
 mod magnifier_tests {
     use super::*;
 

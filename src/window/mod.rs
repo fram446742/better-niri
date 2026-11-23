@@ -74,13 +74,21 @@ pub fn resolve_window_shader_preset(
     name: &str,
     config: &niri_config::Config,
 ) -> Option<ResolvedShader> {
-    let preset = config.window_shaders.iter().find(|p| p.name == name)?;
-    let passes = preset.pass_sources(crate::niri::read_scoped_shader_path);
-    if passes.is_empty() {
-        return None;
+    #[cfg(feature = "effects")]
+    {
+        let preset = config.window_shaders.iter().find(|p| p.name == name)?;
+        let passes = preset.pass_sources(crate::niri::read_scoped_shader_path);
+        if passes.is_empty() {
+            return None;
+        }
+        let key = crate::render_helpers::shaders::scoped_key(&passes);
+        Some(ResolvedShader { passes, key })
     }
-    let key = crate::render_helpers::shaders::scoped_key(&passes);
-    Some(ResolvedShader { passes, key })
+    #[cfg(not(feature = "effects"))]
+    {
+        let _ = (name, config);
+        None
+    }
 }
 
 /// Rules fully resolved for a window.
@@ -437,6 +445,7 @@ impl ResolvedWindowRules {
 
                 resolved.popups.merge_with(&rule.popups);
 
+                #[cfg(feature = "effects")]
                 if let Some(shader_rule) = &rule.shader {
                     let passes = shader_rule.pass_sources(crate::niri::read_scoped_shader_path);
                     resolved.shader = if passes.is_empty() {
@@ -678,6 +687,7 @@ mod shader_state_tests {
     }
 
     #[test]
+    #[cfg(feature = "effects")]
     fn resolve_preset_by_name() {
         let config = niri_config::Config::parse_mem(
             r##"

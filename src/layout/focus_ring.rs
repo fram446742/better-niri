@@ -440,10 +440,13 @@ impl FocusRing {
 
     /// Outward extent including the fixed envelope for animated bulges.
     pub fn render_outset(&self) -> f64 {
-        -self.locations[0].y
-            + self
-                .light_config()
-                .map_or(0., |light| light.spread.0 * 2. + 8.)
+        #[cfg(feature = "effects")]
+        let light_outset = self
+            .light_config()
+            .map_or(0., |light| light.spread.0 * 2. + 8.);
+        #[cfg(not(feature = "effects"))]
+        let light_outset = 0.;
+        -self.locations[0].y + light_outset
     }
 
     pub fn is_off(&self) -> bool {

@@ -592,6 +592,7 @@ impl Niri {
                     if output_geo.contains(pointer_loc) {
                         pointer_pos = pointer_loc - output_geo.loc;
                         let mut visual_pointer_pos = pointer_pos;
+                        #[cfg(feature = "navigation")]
                         if let Some((zoom, center)) = self.compute_magnifier_params(output) {
                             let output_scale_f = output.current_scale().fractional_scale();
                             let center_logical = center.to_f64().to_logical(output_scale_f);
@@ -602,8 +603,17 @@ impl Niri {
                         }
 
                         self.render_pointer(renderer, output, &mut |elem| {
+                            #[cfg(feature = "navigation")]
                             let magnifier_params = self.compute_magnifier_params(output);
+                            #[cfg(not(feature = "navigation"))]
+                            let magnifier_params: Option<(
+                                f64,
+                                smithay::utils::Point<i32, smithay::utils::Physical>,
+                            )> = None;
+                            #[cfg(feature = "navigation")]
                             let scale_cursor = self.config.borrow().magnifier.scale_cursor;
+                            #[cfg(not(feature = "navigation"))]
+                            let scale_cursor = false;
 
                             if let Some((zoom, center)) = magnifier_params {
                                 if scale_cursor {
@@ -666,6 +676,7 @@ impl Niri {
     ) {
         let _span = tracy_client::span!("Niri::render_windows_for_screen_cast");
 
+        #[cfg(feature = "navigation")]
         let was_magnifier_capture = self.magnifier_capture.replace(true);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
@@ -756,6 +767,7 @@ impl Niri {
             self.stop_cast(id);
         }
 
+        #[cfg(feature = "navigation")]
         self.magnifier_capture.set(was_magnifier_capture);
     }
 

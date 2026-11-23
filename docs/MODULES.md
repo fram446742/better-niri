@@ -306,4 +306,9 @@ compositor IPC fallback.
   continuous-redraw hooks, and the decoration-light element out; core
   rendering (shadows, borders, blur, HDR, open/close/resize animations) is
   unaffected.
+- `navigation` (default on): currently the screen magnifier — toggle/zoom
+  actions, the locked-center drag grab, move binds and center animation,
+  cursor pre-transform, magnifier render pass, screenshot-capture suppression
+  and screencast pointer mapping. Grid overview and carousel gating under the
+  same feature is still pending.
 - `agent` (off by default): the automation seat.
