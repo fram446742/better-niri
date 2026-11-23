@@ -14,8 +14,8 @@ use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as 
 use anyhow::{bail, ensure, Context};
 use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
-use niri_config::input::XkbFile;
 use niri_config::gestures::HotCornerAction;
+use niri_config::input::XkbFile;
 use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
@@ -64,6 +64,7 @@ use smithay::reexports::calloop::{
     Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
 };
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1;
+use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
 use smithay::reexports::wayland_protocols::wp::tearing_control::v1::server::wp_tearing_control_v1::PresentationHint;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
@@ -79,11 +80,16 @@ use smithay::utils::{
     Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
+use smithay::wayland::color::management::{
+    ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
+    Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
+    TransferFunction as CmTransferFunction,
+};
 use smithay::wayland::compositor::{
     get_parent, with_states, with_surface_tree_downward, Barrier, CompositorClientState,
-    CompositorHandler,
-    CompositorState, HookId, SurfaceData, TraversalAction,
+    CompositorHandler, CompositorState, HookId, SurfaceData, TraversalAction,
 };
+use smithay::wayland::content_type::{ContentTypeState, ContentTypeSurfaceCachedState};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
@@ -120,8 +126,6 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::tablet_manager::TabletManagerState;
-use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
-use smithay::wayland::content_type::{ContentTypeState, ContentTypeSurfaceCachedState};
 use smithay::wayland::tearing_control::{TearingControlState, TearingControlSurfaceCachedState};
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
@@ -173,11 +177,6 @@ use crate::layout::{
 use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
-use smithay::wayland::color::management::{
-    ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
-    Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
-    TransferFunction as CmTransferFunction,
-};
 use crate::protocols::gamma_control::GammaControlManagerState;
 use crate::protocols::kde_blur::KdeBlurState;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
@@ -3750,11 +3749,12 @@ impl Niri {
             GammaControlManagerState::new::<State, _>(&display_handle, move |client| {
                 is_tty && !client.get_data::<ClientState>().unwrap().restricted
             });
-        // Advertise color management only when at least one output opts into HDR in the config. This
-        // keeps HDR fully opt-in and off by default — with no `hdr` config, niri behaves exactly as
-        // before. Actual HDR signalling is additionally restricted to the TTY backend (it lives in
-        // `Tty::render`), so advertising on winit/headless is harmless. (Snapshot taken at startup;
-        // toggling `hdr` in the config needs a restart to (un)advertise the global.)
+        // Advertise color management only when at least one output opts into HDR in the config.
+        // This keeps HDR fully opt-in and off by default — with no `hdr` config, niri behaves
+        // exactly as before. Actual HDR signalling is additionally restricted to the TTY backend
+        // (it lives in `Tty::render`), so advertising on winit/headless is harmless. (Snapshot
+        // taken at startup; toggling `hdr` in the config needs a restart to (un)advertise the
+        // global.)
         let advertise_color_management = config.borrow().outputs.0.iter().any(|o| o.hdr.is_some());
         let color_management_state = ColorManagementState::new::<State, _>(
             &display_handle,
@@ -10521,9 +10521,9 @@ mod magnifier_tests {
 
 /// Decide whether tearing may be enabled for a window.
 ///
-/// `explicit` is the `allow-tearing` rule, `types` is `allow-tearing-content-type`, `client_hint` is
-/// the window's `wp_tearing_control` async request and `content_type` is what the window declared
-/// with `wp_content_type_v1`.
+/// `explicit` is the `allow-tearing` rule, `types` is `allow-tearing-content-type`, `client_hint`
+/// is the window's `wp_tearing_control` async request and `content_type` is what the window
+/// declared with `wp_content_type_v1`.
 fn tearing_allowed(
     explicit: Option<bool>,
     types: Option<&[niri_config::TearingContentType]>,
@@ -10539,7 +10539,10 @@ fn tearing_allowed(
 
     // Then a declared content type the rule accepts.
     if let Some(types) = types {
-        if types.iter().any(|ty| content_type_allowed(*ty, content_type)) {
+        if types
+            .iter()
+            .any(|ty| content_type_allowed(*ty, content_type))
+        {
             return true;
         }
     }
@@ -10572,14 +10575,20 @@ fn content_type_allowed(rule: niri_config::TearingContentType, declared: Content
 
 #[cfg(test)]
 mod tearing_tests {
-    use super::tearing_allowed;
     use niri_config::TearingContentType;
     use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
+
+    use super::tearing_allowed;
 
     #[test]
     fn explicit_rules_win_over_content_type() {
         let types = [TearingContentType::Game];
-        assert!(!tearing_allowed(Some(false), Some(&types), true, ContentType::Game));
+        assert!(!tearing_allowed(
+            Some(false),
+            Some(&types),
+            true,
+            ContentType::Game
+        ));
         assert!(tearing_allowed(Some(true), None, false, ContentType::None));
     }
 
@@ -10587,11 +10596,31 @@ mod tearing_tests {
     fn content_types_allow_tearing_independently_of_the_bool() {
         let types = [TearingContentType::Game, TearingContentType::Video];
         // No allow-tearing, but a game or video declaration.
-        assert!(tearing_allowed(None, Some(&types), false, ContentType::Game));
-        assert!(tearing_allowed(None, Some(&types), false, ContentType::Video));
+        assert!(tearing_allowed(
+            None,
+            Some(&types),
+            false,
+            ContentType::Game
+        ));
+        assert!(tearing_allowed(
+            None,
+            Some(&types),
+            false,
+            ContentType::Video
+        ));
         // Declared types the rule does not list, or no declaration at all.
-        assert!(!tearing_allowed(None, Some(&types), false, ContentType::Photo));
-        assert!(!tearing_allowed(None, Some(&types), false, ContentType::None));
+        assert!(!tearing_allowed(
+            None,
+            Some(&types),
+            false,
+            ContentType::Photo
+        ));
+        assert!(!tearing_allowed(
+            None,
+            Some(&types),
+            false,
+            ContentType::None
+        ));
         // The client hint still works on its own.
         assert!(tearing_allowed(None, None, true, ContentType::None));
         assert!(!tearing_allowed(None, None, false, ContentType::Game));

@@ -78,6 +78,7 @@ pub struct DebugPart {
     pub disable_10bit_output: Option<Flag>,
     #[knuffel(child)]
     pub nested_show_host_cursor: Option<Flag>,
+    #[knuffel(child)]
     pub force_tearing: Option<Flag>,
 }
 

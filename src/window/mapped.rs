@@ -38,9 +38,7 @@ use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{
-    background_effect, BakedBuffer, RenderCtx, RenderIntent, RenderTarget,
-};
+use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
@@ -563,14 +561,9 @@ impl Mapped {
             WindowCastRenderElements::from(elem)
         };
 
-        self.render(
-            ctx,
-            location,
-            scale,
-            1.,
-            XrayPos::default(),
-            &mut |elem| push(use_border(elem)),
-        );
+        self.render(ctx, location, scale, 1., XrayPos::default(), &mut |elem| {
+            push(use_border(elem))
+        });
     }
 
     pub fn get_focus_timestamp(&self) -> Option<Duration> {

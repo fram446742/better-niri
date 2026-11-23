@@ -198,7 +198,8 @@ impl BackgroundEffect {
             // background buffer. Use original window geometry for correct SDF.
             // Undo the xray_pos offset that render_for_tile added for expanded geometry.
             let expansion_offset = params.geometry.loc - params.original_geometry.loc;
-            let xray_xray_pos = xray_pos.offset(Point::new(-expansion_offset.x, -expansion_offset.y));
+            let xray_xray_pos =
+                xray_pos.offset(Point::new(-expansion_offset.x, -expansion_offset.y));
             params.geometry = params.original_geometry;
 
             push(damage.into());
@@ -218,9 +219,15 @@ impl BackgroundEffect {
                 "liquid glass on the non-xray path, padding_pixels={padding_pixels}, options={:?}",
                 self.options.liquid_glass
             );
-            let elem = self
-                .nonxray
-                .render(ns, params, blur_options, noise, saturation, self.options.liquid_glass, padding_pixels);
+            let elem = self.nonxray.render(
+                ns,
+                params,
+                blur_options,
+                noise,
+                saturation,
+                self.options.liquid_glass,
+                padding_pixels,
+            );
             push(elem.into());
         }
     }

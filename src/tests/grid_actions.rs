@@ -1,8 +1,8 @@
 use client::ClientId;
-use smithay::backend::input::InputTime;
 use niri_config::input::FocusFollowsMouse;
 use niri_config::{Action, Config};
 use niri_ipc::SizeChange;
+use smithay::backend::input::InputTime;
 use smithay::desktop::Window;
 use smithay::utils::Point;
 
@@ -68,8 +68,11 @@ fn expand_column_in_grid_expands_the_selected_column() {
         .unwrap()
         .column_width();
 
-    f.niri_state()
-        .do_action(Action::ExpandColumnToAvailableWidth, false, InputTime::now());
+    f.niri_state().do_action(
+        Action::ExpandColumnToAvailableWidth,
+        false,
+        InputTime::now(),
+    );
 
     // It used to expand the column of the window active before the grid opened, then activate
     // the selected one.

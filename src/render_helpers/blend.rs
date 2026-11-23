@@ -14,14 +14,12 @@ use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
-use smithay::backend::renderer::Color32F;
+use smithay::backend::renderer::{Color32F, ImportAll, Renderer};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Transform};
 use smithay::wayland::color::management::{
     ImageDescription, Primaries as CmPrimaries, TransferFunction as CmTransferFunction,
 };
-
-use smithay::backend::renderer::{ImportAll, Renderer};
 
 use super::renderer::AsGlesFrame as _;
 use super::shaders::Shaders;

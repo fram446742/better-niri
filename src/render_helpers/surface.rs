@@ -5,9 +5,8 @@ use smithay::backend::renderer::utils::{import_surface, RendererSurfaceStateUser
 use smithay::backend::renderer::{ImportAll, Renderer};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Scale};
-use smithay::wayland::compositor::{with_surface_tree_downward, TraversalAction};
-
 use smithay::wayland::color::management::ColorManagementSurfaceCachedState;
+use smithay::wayland::compositor::{with_surface_tree_downward, TraversalAction};
 
 use super::blend::{BlendSurfaceRenderElement, ContentColor};
 use super::texture::TextureBuffer;

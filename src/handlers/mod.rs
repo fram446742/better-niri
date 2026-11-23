@@ -5,7 +5,6 @@ mod layer_shell;
 pub mod virtual_keyboard;
 mod xdg_shell;
 
-
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;

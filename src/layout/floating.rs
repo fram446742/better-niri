@@ -1162,7 +1162,6 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         }
 
-        let active = self.active_window_id.clone();
         for (tile, tile_pos) in self.tiles_with_render_positions() {
             // Skip tiles belonging to a different render layer, and minimized tiles.
             if layer.is_normal() == tile.is_moving_between_workspaces()

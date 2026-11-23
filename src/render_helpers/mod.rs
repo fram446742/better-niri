@@ -31,13 +31,13 @@ pub mod background_effect;
 pub mod blend;
 pub mod blur;
 pub mod border;
-pub mod liquid_glass;
 pub mod clipped_surface;
 pub mod damage;
 pub mod debug;
 pub mod effect_buffer;
 pub mod framebuffer_effect;
 pub mod gradient_fade_texture;
+pub mod liquid_glass;
 pub mod memory;
 pub mod offscreen;
 pub mod overview_rescale;
@@ -510,14 +510,27 @@ impl CaptureBuffer {
     ) -> anyhow::Result<SyncPoint> {
         match self {
             CaptureBuffer::Dma(dmabuf) => {
-                let sync =
-                    render_to_dmabuf(renderer, damage_tracker, dmabuf.clone(), elements, states, DEFAULT_REFERENCE_LUMINANCE)
-                        .context("error rendering to screencopy dmabuf")?;
+                let sync = render_to_dmabuf(
+                    renderer,
+                    damage_tracker,
+                    dmabuf.clone(),
+                    elements,
+                    states,
+                    DEFAULT_REFERENCE_LUMINANCE,
+                )
+                .context("error rendering to screencopy dmabuf")?;
                 Ok(sync)
             }
             CaptureBuffer::Shm(wl_buffer) => {
-                render_to_shm(renderer, damage_tracker, wl_buffer, elements, states, DEFAULT_REFERENCE_LUMINANCE)
-                    .context("error rendering to screencopy shm buffer")?;
+                render_to_shm(
+                    renderer,
+                    damage_tracker,
+                    wl_buffer,
+                    elements,
+                    states,
+                    DEFAULT_REFERENCE_LUMINANCE,
+                )
+                .context("error rendering to screencopy shm buffer")?;
                 Ok(SyncPoint::signaled())
             }
         }

@@ -62,6 +62,10 @@ use smithay::reexports::wayland_protocols;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Client;
 use smithay::utils::{DeviceFd, Transform};
+use smithay::wayland::color::management::{
+    Chromaticities, ImageDescription, Primaries as CmPrimaries,
+    PrimariesOption as CmPrimariesOption, TransferFunction as CmTransferFunction,
+};
 use smithay::wayland::compositor::Barrier;
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal};
 use smithay::wayland::drm_lease::{
@@ -75,14 +79,8 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use super::{IpcOutputMap, OutputHdrCaps, RenderResult};
 use crate::backend::OutputId;
 use crate::frame_clock::FrameClock;
-use smithay::wayland::color::management::{
-    Chromaticities, ImageDescription, Primaries as CmPrimaries,
-    PrimariesOption as CmPrimariesOption, TransferFunction as CmTransferFunction,
-};
-
-use crate::render_helpers::blend::{self, set_frame_blend, DEFAULT_REFERENCE_LUMINANCE};
-
 use crate::niri::{Niri, RedrawState, State};
+use crate::render_helpers::blend::{self, set_frame_blend, DEFAULT_REFERENCE_LUMINANCE};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
@@ -92,7 +90,6 @@ use crate::utils::{get_monotonic_time, is_laptop_panel, logical_output, PanelOri
 // it only understands X/Abgr and not X/Argb.
 const SUPPORTED_COLOR_FORMATS_10BIT: [Fourcc; 3] =
     [Fourcc::Abgr2101010, Fourcc::Argb8888, Fourcc::Abgr8888];
-
 
 /// Scanout formats offered on SDR outputs: 8-bit only, matching upstream niri. Requesting a 10-bit
 /// framebuffer is not free — some drivers (notably nvidia) hang the initial modeset when asked to
@@ -1596,8 +1593,8 @@ impl Tty {
         //
         // Diagnostic escape hatch: NIRI_HDR_FORCE_8BIT keeps an 8-bit framebuffer even on HDR
         // outputs, while still emitting the HDR colorspace/metadata signalling. This isolates a
-        // driver that hangs on 10-bit scanout (set the var -> boots fine) from one that hangs on the
-        // HDR infoframe commit itself (still hangs). Remove once HDR on nvidia is understood.
+        // driver that hangs on 10-bit scanout (set the var -> boots fine) from one that hangs on
+        // the HDR infoframe commit itself (still hangs). Remove once HDR on nvidia is understood.
         let force_8bit = std::env::var_os("NIRI_HDR_FORCE_8BIT").is_some();
         let mut using_10bit_formats = config.hdr.is_some() && hdr_supported && !force_8bit;
         let mut hdr_color_formats = Vec::new();
@@ -1780,7 +1777,8 @@ impl Tty {
 
         // Do one throwaway `render_frame` — the exact path that would fail — and, if it errors,
         // recreate the compositor with 8-bit formats. HDR signalling still works on an 8-bit
-        // framebuffer, just with banding. Only runs for 10-bit HDR outputs, once per connector at setup.
+        // framebuffer, just with banding. Only runs for 10-bit HDR outputs, once per connector at
+        // setup.
         if using_10bit_formats {
             let trial_ok = match self.gpu_manager.renderer(
                 &self.primary_render_node,
@@ -4205,7 +4203,6 @@ mod tests {
     use insta::assert_debug_snapshot;
     use niri_config::output::Modeline;
     use niri_ipc::{HSyncPolarity, VSyncPolarity};
-
     use smithay::wayland::color::management::ImageDescription;
 
     use crate::backend::tty::{

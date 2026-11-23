@@ -490,6 +490,9 @@ enum Op {
     AddWindow {
         params: TestWindowParams,
     },
+    AddWindowWithDefaultWidth {
+        params: TestWindowParams,
+    },
     AddWindowNextTo {
         params: TestWindowParams,
         #[proptest(strategy = "1..=5usize")]
@@ -1024,6 +1027,19 @@ impl Op {
                 }
 
                 let is_floating = params.is_floating;
+                let win = TestWindow::new(params);
+                layout.add_window(
+                    win,
+                    AddWindowTarget::Auto,
+                    None,
+                    None,
+                    false,
+                    is_floating,
+                    ActivateWindow::default(),
+                );
+            }
+            Op::AddWindowWithDefaultWidth { params } => {
+                let is_floating = params.is_floating;
                 let width = layout
                     .active_workspace()
                     .and_then(|ws| ws.resolve_default_width(None, false));
@@ -1094,8 +1110,6 @@ impl Op {
                     return;
                 }
 
-                let width = workspace.and_then(|ws| ws.resolve_default_width(None, false));
-
                 if let Some(parent_id) = params.parent_id {
                     if parent_id_causes_loop(layout, params.id, parent_id) {
                         params.parent_id = None;
@@ -1107,7 +1121,7 @@ impl Op {
                 layout.add_window(
                     win,
                     AddWindowTarget::NextTo(&next_to_id),
-                    width,
+                    None,
                     None,
                     false,
                     is_floating,
@@ -1177,16 +1191,11 @@ impl Op {
                 }
 
                 let is_floating = params.is_floating;
-                let width = layout
-                    .workspaces()
-                    .find_map(|(_, _, ws)| (ws.id() == ws_id).then_some(ws))
-                    .and_then(|ws| ws.resolve_default_width(None, false));
-
                 let win = TestWindow::new(params);
                 layout.add_window(
                     win,
                     AddWindowTarget::Workspace(ws_id),
-                    width,
+                    None,
                     None,
                     false,
                     is_floating,
@@ -4016,7 +4025,7 @@ fn preset_column_width_reset_after_set_width() {
 fn preset_column_width_matches_for_new_window() {
     let ops = [
         Op::AddOutput(0),
-        Op::AddWindow {
+        Op::AddWindowWithDefaultWidth {
             params: TestWindowParams {
                 // The max size is smaller than our 0.5 default proportion.
                 min_max_size: (Size::default(), Size::new(100, 100)),
@@ -9867,21 +9876,6 @@ fn removing_rightmost_column_preserves_centering_mode() {
             ],
         );
 
-        eprintln!(
-            "mode={:?} actual focus={:?} view={} cols={} | expected focus={:?} view={} cols={}",
-            mode,
-            layout.focus().map(|w| *w.id()),
-            scrolling_view_pos(&layout),
-            layout.active_workspace().unwrap().scrolling().columns().count(),
-            expected.focus().map(|w| *w.id()),
-            scrolling_view_pos(&expected),
-            expected.active_workspace().unwrap().scrolling().columns().count(),
-        );
-        eprintln!(
-            "centering actual={} expected={}",
-            layout.active_workspace().unwrap().scrolling().is_centering_focused_column(),
-            expected.active_workspace().unwrap().scrolling().is_centering_focused_column(),
-        );
         approx::assert_abs_diff_eq!(
             scrolling_view_pos(&layout),
             scrolling_view_pos(&expected),
@@ -10928,7 +10922,13 @@ fn grid_move_column_to_first_and_index_count_minimized_cells() {
     check_ops_on_layout(&mut layout, [Op::MoveColumnToFirst { focus: true }]);
     assert_window_order(&layout, [3, 1, 2]);
 
-    check_ops_on_layout(&mut layout, [Op::MoveColumnToIndex { index: 2, focus: true }]);
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveColumnToIndex {
+            index: 2,
+            focus: true,
+        }],
+    );
     assert_window_order(&layout, [1, 3, 2]);
 
     check_ops_on_layout(&mut layout, [Op::MoveColumnToLast { focus: true }]);
@@ -10983,7 +10983,10 @@ fn grid_moving_minimized_cell_keeps_it_minimized() {
     assert!(layout.is_window_minimized(&2));
 
     // There is nothing above or below a minimized window inside its own column.
-    check_ops_on_layout(&mut layout, [Op::MoveWindowUp(true), Op::MoveWindowDown(true)]);
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowUp(true), Op::MoveWindowDown(true)],
+    );
     assert_window_order(&layout, [1, 3, 2]);
     assert!(layout.is_window_minimized(&2));
 }

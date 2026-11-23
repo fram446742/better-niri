@@ -2782,7 +2782,8 @@ impl<W: LayoutElement> Workspace<W> {
             return;
         }
         let targets = self.move_targets();
-        self.scrolling.swap_window_in_direction(direction, focus, targets);
+        self.scrolling
+            .swap_window_in_direction(direction, focus, targets);
     }
 
     pub fn toggle_column_tabbed_display(&mut self) {
@@ -3988,7 +3989,8 @@ impl<W: LayoutElement> Workspace<W> {
             let view_rect = Rectangle::new(Point::from((0., 0.)), self.view_size);
             if self.is_floating_visible() {
                 for closing in self.floating.closing_windows() {
-                    if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale)) {
+                    if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale))
+                    {
                         let elem: FloatingSpaceRenderElement<R> = elem.into();
                         push(elem.into());
                     }

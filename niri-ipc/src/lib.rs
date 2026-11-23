@@ -1775,6 +1775,7 @@ pub enum ContentType {
     Photo,
 }
 
+/// A point in time, relative to an unspecified epoch.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct Timestamp {

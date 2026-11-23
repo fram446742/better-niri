@@ -1308,7 +1308,7 @@ impl Cast {
                         states,
                         reference_luminance,
                     )
-                        .map(|x| (x, SharingBuf::Dma))
+                    .map(|x| (x, SharingBuf::Dma))
                 }
                 x if x == DataType::MemFd.as_raw() => {
                     let shmbuf = &inner_.shmbufs[&fd];
@@ -1319,14 +1319,7 @@ impl Cast {
                         Fourcc::Xrgb8888
                     };
 
-                    render_to_shmbuf(
-                        renderer,
-                        damage_tracker,
-                        shmbuf,
-                        fourcc,
-                        elements,
-                        states,
-                    )
+                    render_to_shmbuf(renderer, damage_tracker, shmbuf, fourcc, elements, states)
                         .map(|()| (SyncPoint::signaled(), SharingBuf::Shm(shmbuf.layout)))
                 }
                 _ => Err(anyhow::anyhow!(

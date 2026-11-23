@@ -2901,7 +2901,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         new_col.tiles[0].animate_move_from(offset);
     }
 
-    pub fn swap_window_in_direction(&mut self, direction: ScrollDirection, focus: bool, targets: MoveTargets) {
+    pub fn swap_window_in_direction(
+        &mut self,
+        direction: ScrollDirection,
+        focus: bool,
+        targets: MoveTargets,
+    ) {
         if self.columns.is_empty() {
             return;
         }
@@ -4218,7 +4223,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let target_view_offset = end_pos + gesture.delta_from_tracker;
 
         let active_col_x = self.column_x(self.active_column_idx);
-        let current_view_pos = active_col_x + current_view_offset;
         let target_view_pos = active_col_x + target_view_offset;
 
         // Compute the snapping points. These are where the view aligns with column boundaries on
@@ -4330,7 +4334,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                         (left, right)
                     }
                 };
-
 
             // The first column's left snap and the last column's right snap, for restricting the
             // view gesture from easily going past them (since that is generally annoying).

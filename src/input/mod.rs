@@ -829,9 +829,9 @@ impl State {
                         this.update_keyboard_focus();
                     }
 
-                    // Tapping the mod key alone toggles the grid overview when no bind takes it, like
-                    // an implicit `Mod { release { toggle-grid-overview; } }` bind. Any other key
-                    // press cancels it through the regular interrupted-release-binds handling.
+                    // Tapping the mod key alone toggles the grid overview when no bind takes it,
+                    // like an implicit `Mod { release { toggle-grid-overview; } }` bind. Any other
+                    // key press cancels it through the regular interrupted-release-binds handling.
                     if pressed
                         && matches!(res, ShouldInterceptResult::Forward)
                         && !this.niri.pending_release_binds.contains_key(&key_code)
@@ -1347,7 +1347,6 @@ impl State {
                     self.niri.layout.set_maximized(&window, false);
                     // FIXME: granular
                     self.niri.queue_redraw_all();
-
                 }
             }
             Action::MinimizeWindow => {
@@ -4090,7 +4089,10 @@ impl State {
                 should_handle_in_overview || is_mru_open || should_handle_grid_workspace_scroll;
 
             if use_builtin_bindings
-                || self.niri.mods_with_horizontal_wheel_binds.contains(&modifiers)
+                || self
+                    .niri
+                    .mods_with_horizontal_wheel_binds
+                    .contains(&modifiers)
                 || should_handle_grid_workspace_scroll
             {
                 let horizontal = horizontal_amount_v120.unwrap_or(0.);
@@ -7292,11 +7294,6 @@ mod tests {
             );
         };
     }
-
-
-
-
-
 
     #[test]
     fn comp_mod_handling() {

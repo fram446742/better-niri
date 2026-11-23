@@ -6,9 +6,9 @@
 //! per step, for looking at them.
 
 use client::ClientId;
-use smithay::backend::input::InputTime;
 use niri_config::{Action, Config};
 use niri_ipc::PositionChange;
+use smithay::backend::input::InputTime;
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Rectangle};
 use wayland_client::protocol::wl_surface::WlSurface;

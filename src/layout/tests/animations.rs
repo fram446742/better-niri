@@ -1212,7 +1212,7 @@ fn move_window_to_new_workspace_below_follows_view() {
     // the same y on screen.
     let mut layout = set_up_for_new_workspace();
     assert_snapshot!(format_monitor_tiles(&layout), @r"
-    1 on ws0 at x:-540 y:   0
+    1 on ws0 at x:   0 y:   0
     2 on ws0 at x: 100 y:   0
     3 on ws1 at x:   0 y: 792
     ");
@@ -1225,7 +1225,7 @@ fn move_window_to_new_workspace_below_follows_view() {
     }
     .apply(&mut layout);
     assert_snapshot!(format_monitor_tiles(&layout), @r"
-    1 on ws0 at x:-540 y:   0
+    1 on ws0 at x:   0 y:   0
     2 on ws1 at x: 100 y:   0
     3 on ws2 at x:   0 y:1584
     ");
@@ -1259,7 +1259,7 @@ fn move_window_to_new_workspace_above_follows_view() {
     }
     .apply(&mut layout);
     assert_snapshot!(format_monitor_tiles(&layout), @r"
-    1 on ws1 at x:-540 y:   0
+    1 on ws1 at x:   0 y:   0
     2 on ws0 at x: 100 y:   0
     3 on ws2 at x:   0 y: 792
     ");
@@ -1292,7 +1292,7 @@ fn move_window_to_new_workspace_below_without_focus() {
     }
     .apply(&mut layout);
     assert_snapshot!(format_monitor_tiles(&layout), @r"
-    1 on ws0 at x:-540 y:   0
+    1 on ws0 at x:   0 y:   0
     2 on ws1 at x: 100 y:   0
     3 on ws2 at x:   0 y:1584
     ");
