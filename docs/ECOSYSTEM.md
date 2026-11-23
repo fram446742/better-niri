@@ -86,7 +86,7 @@ operate the desktop without the shell.
 | --- | --- | --- |
 | better-niri | Compositor, core + built-in modules | active |
 | better-smithay | Wayland/DRM/render infrastructure | active |
-| better-nsticky | Sticky/staged windows, scratchpads, workflow | existing; absorbed into better-companion in Phase 3, kept as compatibility CLI meanwhile |
+| better-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; better-companion absorbs its code and offers compatibility aliases/config |
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
 | better-session | Context/session save/restore | new, high priority |
 | better-sidepanels | Persistent side panels | new, medium |
@@ -95,11 +95,37 @@ operate the desktop without the shell.
 | better-audio | PipeWire routing | new, exploratory |
 | better-wallpaper | Scenes, per-workspace wallpapers | new, medium |
 | better-settings | Unified GTK4 settings frontend | new, medium-high |
-| better-portal | XDG portal backend + picker daemon | new, after Phase 1 |
+| better-portal | XDG portal backend + external layer-shell picker daemon | committed, after Phase 1 |
 | better-noctalia-plugins | Shell integration | new, later |
 
 **Do not create repositories or publish anything without explicit approval.**
 Piri and niri-sidepanels should preserve upstream history/attribution if reused.
+
+### 4.1 Naming rules and candidates
+
+`better-*` repository names are only for **independently installable services or
+applications**. Internal compositor modules do not get a repository:
+
+- internal modules: `effects`, `navigation`, `cursor`, `agent`, `kde`, `vulkan`;
+- companion features that are not yet independent: scratchpads, staging,
+  run-or-raise, singleton, swallow, idle handling, auto-rotate.
+
+Candidate projects, not yet committed:
+
+| Candidate | Purpose | Recommendation |
+| --- | --- | --- |
+| better-idle | idle/suspend policy, game/audio inhibition (Stasis reference) | start as a better-companion module; split only if it needs its own lifecycle |
+| better-rotate | accelerometer-based output rotation (iio-niri reference) | start as a companion module/service |
+| better-desktop | umbrella docs, package profiles, compatibility matrix | documentation only, no runtime dependency |
+| better-noctalia-plugins | Noctalia widgets for the ecosystem | later; shell remains frozen |
+
+Rules:
+
+- Do not create a repository merely to host a small feature.
+- Do not create a shared crate (`better-ipc`, `better-niri-client`) until at
+  least two projects need it.
+- Keep one owner per workflow: sticky/stage/scratchpad in better-companion,
+  sessions in better-session, outputs in better-monitor, capture in better-shot.
 
 ## 5. Interfaces
 
@@ -224,12 +250,23 @@ Resolved:
 7. **Piri**: fork preserving history and attribution.
 8. **Shell**: Noctalia plugins only; no native shell.
 
-Remaining technical questions:
+More resolved:
 
 - **better-companion shape**: one daemon with internal `sticky`, `stage`,
-  `scratchpad`, `rules` modules (recommended), or a Piri core plus a separate
-  nsticky compatibility binary?
-- **nsticky compatibility**: keep the `nsticky` CLI name and config path as
-  aliases (recommended) or migrate everything to `better-companion` commands?
-- **Portal picker**: external layer-shell picker owned by better-portal
-  (recommended to start) or compositor-native picker exposed over IPC?
+  `scratchpad`, `rules` modules, forked from Piri with nsticky's history
+  absorbed. First delivery is the IPC/state base plus nsticky's workflows.
+- **nsticky compatibility**: better-companion accepts `nsticky` CLI/config as
+  aliases. The nsticky repository is **not modified or deprecated**; it remains
+  a standalone option for users who want only sticky/staged windows.
+- **Portal picker**: external layer-shell picker owned by better-portal.
+
+Remaining questions:
+
+- **better-idle / better-rotate**: companion modules first, or independent
+  repositories from the start? (Recommended: companion first.)
+- **better-audio**: audit PWSW and then decide between adapting it and a
+  WirePlumber-native rule engine.
+- **better-shot scope**: screenshots + annotation first, recording/OCR later?
+- **better-portal scope**: ScreenCast + Screenshot first, RemoteDesktop later?
+- **better-settings**: thin GTK4 frontend that delegates to each app's
+  validated config API (recommended) rather than owning configuration itself.
