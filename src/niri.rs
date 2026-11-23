@@ -179,6 +179,7 @@ use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
 use crate::protocols::gamma_control::GammaControlManagerState;
 use crate::protocols::kde_blur::KdeBlurState;
+use crate::protocols::kde_output_order::KdeOutputOrderV1State;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyManagerState};
@@ -425,6 +426,7 @@ pub struct Niri {
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
     pub fifo_manager_state: FifoManagerState,
+    pub kde_output_order_v1_state: KdeOutputOrderV1State,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
     // particular, shaders will need to learn about the single pixel buffer. Also, it must be
@@ -2549,6 +2551,9 @@ impl State {
 
         let new_config = self.backend.ipc_outputs().lock().unwrap().clone();
         self.niri.output_management_state.notify_changes(new_config);
+        self.niri
+            .kde_output_order_v1_state
+            .update_output_order(self.niri.sorted_outputs.clone());
     }
 
     pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>) {
@@ -3896,6 +3901,9 @@ impl Niri {
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
         let fifo_manager_state = FifoManagerState::new::<State>(&display_handle);
 
+        let kde_output_order_v1_state =
+            KdeOutputOrderV1State::new::<State, _>(&display_handle, |_| true);
+
         #[cfg(test)]
         let single_pixel_buffer_state = SinglePixelBufferState::new::<State>(&display_handle);
 
@@ -4156,6 +4164,7 @@ impl Niri {
             activation_state,
             mutter_x11_interop_state,
             fifo_manager_state,
+            kde_output_order_v1_state,
             #[cfg(test)]
             single_pixel_buffer_state,
 

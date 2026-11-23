@@ -86,6 +86,8 @@ use smithay::wayland::color::management::{
 };
 
 use crate::protocols::gamma_control::{GammaControlHandler, GammaControlManagerState};
+use crate::protocols::kde_output_order::KdeOutputOrderV1Handler;
+use crate::delegate_kde_output_order_v1;
 use crate::protocols::mutter_x11_interop::MutterX11InteropHandler;
 use crate::protocols::output_management::{OutputManagementHandler, OutputManagementManagerState};
 use crate::protocols::screencopy::{Screencopy, ScreencopyHandler, ScreencopyManagerState};
@@ -1032,3 +1034,13 @@ impl OutputManagementHandler for State {
 }
 
 impl MutterX11InteropHandler for State {}
+
+impl KdeOutputOrderV1Handler for State {
+    fn kde_output_order_v1_state(
+        &mut self,
+    ) -> &mut crate::protocols::kde_output_order::KdeOutputOrderV1State {
+        &mut self.niri.kde_output_order_v1_state
+    }
+}
+
+delegate_kde_output_order_v1!(State);
