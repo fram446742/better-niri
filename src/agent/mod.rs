@@ -138,7 +138,7 @@ impl AgentState {
         });
 
         // Same layout as the user's keyboard, so key combinations resolve the same way.
-        let keyboard = &config.input.keyboard;
+        let keyboard = config.input.fallback_keyboard();
         let (delay, rate) = (keyboard.repeat_delay.into(), keyboard.repeat_rate.into());
         if let Err(err) = seat.add_keyboard(keyboard.xkb.to_xkb_config(), delay, rate) {
             warn!("error adding agent keyboard with the configured layout: {err:?}");
