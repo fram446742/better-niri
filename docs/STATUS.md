@@ -100,6 +100,7 @@ Verified on this branch:
 | --- | --- |
 | `cargo check --workspace` | pass |
 | `cargo test --workspace` | pass, 788 tests (1 order-dependent EGL golden test ignored) |
+| `cargo check --workspace --no-default-features` | pass |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
@@ -161,9 +162,11 @@ picked up without re-auditing.
    (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
    `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
    Companion repos start only after Phase 1.
-7. **Remaining built-in module features** — Cargo features for `effects`,
-   `navigation`, `cursor` and `vulkan` (the `kde` feature is done), so a
-   minimal build can drop them; the code is currently always compiled with
-   `kde` gated.
+7. **Remaining built-in module features** — `effects`, `navigation` and
+   `vulkan` Cargo features. `kde` and `cursor` are done (the latter gates SVG
+   cursors and shake, dropping `resvg`/`usvg` in minimal builds). `effects`
+   (global/region/window/focus-ring shader engine) and `navigation`
+   (grid/magnifier/carousel) still need cfg gating across the render path and
+   layout/input entry points.
 8. **Multi-action binds** — deferred cross-cutting refactor touching ~59
    bind/config/IPC/UI conflict points; DWT is already integrated separately.

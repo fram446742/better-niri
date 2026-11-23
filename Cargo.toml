@@ -105,8 +105,8 @@ pipewire = { version = "0.10.1", optional = true, features = ["v0_3_33"] }
 png = "0.18.1"
 portable-atomic = "1.15.0"
 profiling = "1.0.18"
-resvg = "0.50.0"
-usvg = "0.50.0"
+resvg = { version = "0.50.0", optional = true }
+usvg = { version = "0.50.0", optional = true }
 sd-notify = "0.5.0"
 serde.workspace = true
 serde_json.workspace = true
@@ -153,12 +153,14 @@ xshell = "0.2.7"
 pkg-config = "0.3.34"
 
 [features]
-default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde"]
+default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor"]
 # Enables the agent seat, a second input seat for automation over IPC.
 agent = []
 # Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1 and the KDE
 # colour-picker D-Bus interface.
 kde = ["dep:wayland-protocols-plasma"]
+# Enables the cursor module: SVG/scalable cursor rendering and shake-to-enlarge.
+cursor = ["dep:resvg", "dep:usvg"]
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).

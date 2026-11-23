@@ -3516,6 +3516,7 @@ impl State {
 
         let mut new_pos = pos + event.delta();
 
+        #[cfg(feature = "cursor")]
         self.niri.pointer_motion_absolute_shake(new_pos);
 
         // We received an event for the regular pointer, so show it now.
@@ -3797,6 +3798,7 @@ impl State {
 
         let pointer = self.niri.seat.get_pointer().unwrap();
 
+        #[cfg(feature = "cursor")]
         self.niri.pointer_motion_absolute_shake(pos);
 
         if let Some(output) = self.niri.screenshot_ui.selection_output() {

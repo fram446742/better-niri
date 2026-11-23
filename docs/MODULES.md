@@ -292,3 +292,12 @@ Resolved:
 Remaining: the exact way better-companion absorbs nsticky (module layout,
 compatibility CLI) and whether the portal picker starts external or gets a
 compositor IPC fallback.
+
+## Cargo features implemented so far
+
+- `kde` (default on): `org_kde_kwin_blur`, `kde_output_order_v1`, the KDE colour
+  picker and `org.kde.kwin.Screenshot`.
+- `cursor` (default on): SVG/scalable cursor rendering (`resvg`/`usvg` are
+  optional dependencies) and shake-to-enlarge. Off builds fall back to XCursor
+  bitmaps and compile the shake path out.
+- `agent` (off by default): the automation seat.

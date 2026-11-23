@@ -58,6 +58,7 @@ pub mod shadow;
 pub mod snapshot;
 pub mod solid_color;
 pub mod surface;
+#[cfg(feature = "cursor")]
 pub mod svg;
 pub mod texture;
 pub mod xray;

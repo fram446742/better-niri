@@ -1,11 +1,14 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Component, Path};
+#[cfg(feature = "cursor")]
+use std::path::Component;
+use std::path::Path;
 use std::rc::Rc;
 use std::{env, fs};
 
 use anyhow::{anyhow, Context};
+#[cfg(feature = "cursor")]
 use serde::Deserialize;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
@@ -21,6 +24,7 @@ static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
 type XCursorCache = HashMap<(CursorIcon, i32), Option<Rc<XCursor>>>;
 
+#[cfg(feature = "cursor")]
 #[derive(Debug, Deserialize)]
 struct SvgCursorFrameMetadata {
     filename: String,
@@ -181,11 +185,14 @@ impl CursorManager {
         file.read_to_end(&mut buf)
             .context("error reading cursor icon file")?;
 
+        #[cfg(feature = "cursor")]
         let mut images = if let Some(svg_images) = Self::load_svg(&path, name, size) {
             svg_images
         } else {
             parse_xcursor(&buf).context("error parsing cursor icon file")?
         };
+        #[cfg(not(feature = "cursor"))]
+        let mut images = parse_xcursor(&buf).context("error parsing cursor icon file")?;
 
         let (width, height) = images
             .iter()
@@ -207,11 +214,13 @@ impl CursorManager {
     ///
     /// First looks for KDE-style scalable cursors in
     /// `cursors_scalable/<name>/metadata.json`, then falls back to simple SVG files.
+    #[cfg(feature = "cursor")]
     fn load_svg(xcursor_path: &Path, name: &str, size: i32) -> Option<Vec<Image>> {
         Self::load_scalable_svg(xcursor_path, name, size)
             .or_else(|| Self::load_simple_svg(xcursor_path, name, size).map(|image| vec![image]))
     }
 
+    #[cfg(feature = "cursor")]
     fn load_scalable_svg(xcursor_path: &Path, name: &str, size: i32) -> Option<Vec<Image>> {
         let theme_dir = xcursor_path.parent()?.parent()?;
         let scalable_dir = theme_dir.join("cursors_scalable").join(name);
@@ -261,6 +270,7 @@ impl CursorManager {
     ///
     /// Looks for `<name>.svg` in the same directory as the XCursor file,
     /// and falls back to `<icon_path>.svg`.
+    #[cfg(feature = "cursor")]
     fn load_simple_svg(xcursor_path: &Path, name: &str, size: i32) -> Option<Image> {
         let dir = xcursor_path.parent()?;
 

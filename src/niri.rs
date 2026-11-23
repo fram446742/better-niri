@@ -355,6 +355,7 @@ pub struct Niri {
     pub touch: HashSet<input::Device>,
 
     // Shake-to-enlarge tracking
+    #[cfg(feature = "cursor")]
     pub pointer_shake_energy: f64,
     pub pointer_last_position: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
     pub pointer_last_time: Option<std::time::Instant>,
@@ -2562,6 +2563,7 @@ impl State {
 
         let old_magnifier_off = old_config.magnifier.off;
         let old_magnifier_zoom = old_config.magnifier.zoom_factor;
+        #[cfg(feature = "cursor")]
         let old_shake_off = old_config
             .cursor
             .shake_to_enlarge
@@ -2570,6 +2572,7 @@ impl State {
 
         let new_magnifier_off = config.magnifier.off;
         let new_magnifier_zoom = config.magnifier.zoom_factor;
+        #[cfg(feature = "cursor")]
         let new_shake_off = config
             .cursor
             .shake_to_enlarge
@@ -2591,6 +2594,7 @@ impl State {
             new_magnifier_off,
             new_magnifier_zoom,
         );
+        #[cfg(feature = "cursor")]
         self.niri
             .reconcile_shake_config(old_shake_off, new_shake_off);
 
@@ -4476,6 +4480,7 @@ impl Niri {
             current_keyboard: default_keyboard,
             keyboard_device_cache: HashMap::new(),
 
+            #[cfg(feature = "cursor")]
             pointer_shake_energy: 0.0,
             pointer_last_position: None,
             pointer_last_time: None,
@@ -5978,6 +5983,7 @@ impl Niri {
         state.lock_surface.as_ref().map(|s| s.wl_surface()).cloned()
     }
 
+    #[cfg(feature = "cursor")]
     pub fn pointer_motion_absolute_shake(
         &mut self,
         pos: smithay::utils::Point<f64, smithay::utils::Logical>,
@@ -6340,6 +6346,7 @@ impl Niri {
         }
     }
 
+    #[cfg(feature = "cursor")]
     fn reconcile_shake_config(&mut self, was_off: bool, now_off: bool) {
         if !was_off && now_off {
             self.pointer_scale_animation = None;
