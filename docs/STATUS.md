@@ -103,7 +103,7 @@ Verified on this branch:
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
 | `cargo test --workspace --no-default-features` | pass, 807 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
-| `cargo test -p niri --no-default-features` | pass, 437 tests (effects/navigation tests compiled out) |
+| `cargo test -p niri --no-default-features` | pass, 393 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
@@ -167,8 +167,8 @@ picked up without re-auditing.
    (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
    `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
    Companion repos start only after Phase 1.
-7. **Remaining built-in module features** — `vulkan`, and the grid/carousel
-   half of `navigation`. `kde`, `cursor` and `effects` are done. `effects`
+7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
+   `effects` and `navigation` are done. `effects`
    gates the global/region/output/window shader engine and decoration light
    (render path, reload hooks, continuous-redraw gates, backend pass
    registration, decoration-light damage ordering, and the tty ping-pong
@@ -179,8 +179,12 @@ picked up without re-auditing.
    H/J/K/L binds), the grid gesture state, the grid focus-ring/tab-indicator/
    minimized-highlight visual updates, the grid renderer, and the whole
    `grid_overview` model plus the `Workspace.grid_overview` field (methods
-   fall back to no-op stubs). The carousel gating remains. The
-   true minimal build is verified per package with
+   fall back to no-op stubs). `navigation` also gates the consolidated
+   carousel: rotation/pullback state and methods, panel content sources and
+   offscreen buffers, per-host panel element caches and click hit geometry,
+   panel rendering, the panel prepasses and the panel render-element
+   variants, with stubs for the helpers the remaining render path queries.
+   The true minimal build is verified per package with
    `cargo check -p niri --no-default-features`, since workspace builds unify
    defaults from other members.
 8. **Multi-action binds — done.** Binds hold ordered action lists per phase

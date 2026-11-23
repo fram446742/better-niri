@@ -90,6 +90,7 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
+#[cfg(feature = "navigation")]
 pub mod carousel;
 pub mod closing_window;
 pub mod floating;
@@ -432,19 +433,23 @@ pub struct Layout<W: LayoutElement> {
     /// Settled target rotation for the consolidated carousel, in ring-position
     /// units (see `carousel::ring_positions`): 0.0 = centered on the host
     /// (active) output. Initialized to 0.
+    #[cfg(feature = "navigation")]
     carousel_rotation: f64,
     /// In-flight animation from the previous rotation target to
     /// `carousel_rotation`. `None` once settled.
+    #[cfg(feature = "navigation")]
     carousel_rotation_anim: Option<Animation>,
     /// In-flight pull-back choreography (zoom out to assembled, rotate,
     /// zoom back in) driven when a rotation is requested while the carousel
     /// hasn't reached the assembled band yet. `None` when idle.
+    #[cfg(feature = "navigation")]
     carousel_pullback: Option<Pullback>,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
 
 /// Phase of an in-flight `Pullback` choreography.
+#[cfg(feature = "navigation")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PullbackPhase {
     /// Zooming the active monitor out to `assembled_zoom` so the whole ring
@@ -459,6 +464,7 @@ enum PullbackPhase {
 /// State for an in-flight carousel pull-back: a rotation requested while
 /// not yet at the assembled zoom band first zooms out, then rotates, then
 /// zooms back in to where the user had parked their zoom.
+#[cfg(feature = "navigation")]
 #[derive(Debug, Clone, Copy)]
 struct Pullback {
     phase: PullbackPhase,
@@ -869,8 +875,11 @@ impl<W: LayoutElement> Layout<W> {
             overview_progress: None,
             #[cfg(feature = "navigation")]
             grid_gesture: None,
+            #[cfg(feature = "navigation")]
             carousel_rotation: 0.,
+            #[cfg(feature = "navigation")]
             carousel_rotation_anim: None,
+            #[cfg(feature = "navigation")]
             carousel_pullback: None,
             options: Rc::new(options),
         }
@@ -900,8 +909,11 @@ impl<W: LayoutElement> Layout<W> {
             overview_progress: None,
             #[cfg(feature = "navigation")]
             grid_gesture: None,
+            #[cfg(feature = "navigation")]
             carousel_rotation: 0.,
+            #[cfg(feature = "navigation")]
             carousel_rotation_anim: None,
+            #[cfg(feature = "navigation")]
             carousel_pullback: None,
             options: opts,
         }
@@ -1170,6 +1182,7 @@ impl<W: LayoutElement> Layout<W> {
         // `carousel_rotation` is a ring-position value left over from
         // before the removal) — snap home rather than try to figure out
         // where the old target landed in the new ring.
+        #[cfg(feature = "navigation")]
         if self.overview_open && self.options.overview.consolidated_carousel.is_some() {
             self.carousel_rotation = 0.;
             self.carousel_rotation_anim = None;
@@ -2336,6 +2349,7 @@ impl<W: LayoutElement> Layout<W> {
 
     /// Every monitor eligible for the carousel — not isolated, non-empty — in layout
     /// order. The HOST is included (this is the full carousel set).
+    #[cfg(feature = "navigation")]
     pub fn carousel_outputs(&self) -> Vec<&Monitor<W>> {
         self.monitors()
             .filter(|m| !m.is_isolated())
@@ -2346,6 +2360,7 @@ impl<W: LayoutElement> Layout<W> {
     /// Current animated rotation value, in ring-position units. Interpolates
     /// while `carousel_rotation_anim` is in flight; equals
     /// `carousel_rotation_target()` once settled.
+    #[cfg(feature = "navigation")]
     pub fn carousel_rotation(&self) -> f64 {
         self.carousel_rotation_anim
             .as_ref()
@@ -2354,6 +2369,7 @@ impl<W: LayoutElement> Layout<W> {
 
     /// Settled rotation target, in ring-position units (0.0 = host/active
     /// output).
+    #[cfg(feature = "navigation")]
     pub fn carousel_rotation_target(&self) -> f64 {
         self.carousel_rotation
     }
@@ -2363,6 +2379,7 @@ impl<W: LayoutElement> Layout<W> {
     /// whether the host's live workspace strip must stay suppressed even
     /// while `carousel_rotation()` is transiently at an integer/zero value
     /// mid-animation.
+    #[cfg(feature = "navigation")]
     pub fn carousel_rotating(&self) -> bool {
         self.carousel_rotation_anim.is_some()
     }
@@ -2372,6 +2389,7 @@ impl<W: LayoutElement> Layout<W> {
     /// are read from `Output::current_location()`; the host is the active
     /// output and always gets ring position 0.0. Empty if there's no active
     /// output or it isn't in `carousel_outputs()`.
+    #[cfg(feature = "navigation")]
     pub fn carousel_ring(&self) -> Vec<(usize, f64)> {
         let outputs = self.carousel_outputs();
         let Some(active) = self.active_output() else {
@@ -2399,6 +2417,7 @@ impl<W: LayoutElement> Layout<W> {
     /// in-flight animation. Called when the carousel/overview opens so it
     /// starts centered on the output the user is looking at. No-op if the
     /// active output isn't in `carousel_outputs()`.
+    #[cfg(feature = "navigation")]
     pub fn reset_carousel_center(&mut self) {
         let Some(active) = self.active_output().cloned() else {
             return;
@@ -2416,6 +2435,7 @@ impl<W: LayoutElement> Layout<W> {
     /// Retargets the carousel rotation by `delta` ring steps, wrapping over
     /// the ring extent (cyclic wrap preserved from the old index-based
     /// semantics). No-op if fewer than 2 outputs are eligible.
+    #[cfg(feature = "navigation")]
     pub fn rotate_carousel(&mut self, delta: isize) {
         let Some(new_target) = self.carousel_rotate_target(delta) else {
             return;
@@ -2428,6 +2448,7 @@ impl<W: LayoutElement> Layout<W> {
     /// fewer than 2 outputs are eligible. Shared by `rotate_carousel` and
     /// the pull-back sequencer, which needs the target before it starts
     /// animating.
+    #[cfg(feature = "navigation")]
     fn carousel_rotate_target(&self, delta: isize) -> Option<f64> {
         let ring = self.carousel_ring();
         if ring.len() < 2 {
@@ -2453,6 +2474,7 @@ impl<W: LayoutElement> Layout<W> {
     /// stepping). No-op if fewer than 2 outputs are eligible. Used by the
     /// pull-back sequencer, which already knows the absolute target it
     /// computed at request time.
+    #[cfg(feature = "navigation")]
     fn rotate_carousel_to(&mut self, target: f64) {
         if self.carousel_ring().len() < 2 {
             return;
@@ -2467,6 +2489,7 @@ impl<W: LayoutElement> Layout<W> {
     /// assembled band, rotate, zoom back in to where the user had parked
     /// their zoom. No-op when the overview is closed, the carousel isn't
     /// configured, or fewer than 2 outputs are eligible.
+    #[cfg(feature = "navigation")]
     pub fn carousel_request_rotate(&mut self, delta: isize) {
         if !self.overview_open || self.options.overview.consolidated_carousel.is_none() {
             return;
@@ -2490,6 +2513,7 @@ impl<W: LayoutElement> Layout<W> {
     /// a specific ring card). Same bypass/pull-back semantics as
     /// `carousel_request_rotate`, but takes the ring-position target
     /// directly rather than a step delta.
+    #[cfg(feature = "navigation")]
     pub fn carousel_request_rotate_to(&mut self, ring_target: f64) {
         if !self.overview_open || self.options.overview.consolidated_carousel.is_none() {
             return;
@@ -2518,6 +2542,7 @@ impl<W: LayoutElement> Layout<W> {
     ///   zoom back out to `assembled_zoom`, otherwise the request would be silently dropped once
     ///   the ZoomIn leg completes.
     /// - `ZoomOut`: already heading the right way; nothing else to do.
+    #[cfg(feature = "navigation")]
     fn start_or_retarget_pullback(&mut self, target: f64) {
         if let Some(pullback) = self.carousel_pullback.as_mut() {
             pullback.target = target;
@@ -2565,6 +2590,7 @@ impl<W: LayoutElement> Layout<W> {
     /// active monitor's overview zoom or change which monitor is active,
     /// *except* the pull-back's own retargeting (`retarget_active_monitor_zoom`),
     /// which must stay cancel-free so the choreography can drive itself.
+    #[cfg(feature = "navigation")]
     pub fn cancel_carousel_pullback(&mut self) {
         self.carousel_pullback = None;
     }
@@ -2584,6 +2610,7 @@ impl<W: LayoutElement> Layout<W> {
     /// completion. Must run after monitor zoom animations have been
     /// advanced (so `overview_zoom_settled()` reflects this frame) and
     /// after the carousel rotation animation's own completion check.
+    #[cfg(feature = "navigation")]
     fn advance_carousel_pullback(&mut self) {
         let Some(mut pullback) = self.carousel_pullback.take() else {
             return;
@@ -2649,6 +2676,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "navigation")]
     fn carousel_pullback_is_active(&self) -> bool {
         self.carousel_pullback.is_some()
     }
@@ -2657,6 +2685,7 @@ impl<W: LayoutElement> Layout<W> {
     /// value to `new_target`. Mirrors `Monitor::animate_zoom_to`
     /// (monitor.rs); uses the `overview_open_close` animation config, same as
     /// `toggle_overview`.
+    #[cfg(feature = "navigation")]
     fn retarget_carousel_rotation(&mut self, new_target: f64) {
         let current = self.carousel_rotation();
         let config = self.options.animations.overview_open_close.0;
@@ -3999,6 +4028,7 @@ impl<W: LayoutElement> Layout<W> {
     /// Carousel reveal progress: 0.0 when not configured, the overview is
     /// closed, or zoom hasn't reached `reveal_zoom` yet; ramps to 1.0 as zoom
     /// approaches `assembled_zoom`.
+    #[cfg(feature = "navigation")]
     pub fn carousel_reveal(&self) -> f64 {
         let Some(cc) = self.options.overview.consolidated_carousel else {
             return 0.;
@@ -4014,6 +4044,7 @@ impl<W: LayoutElement> Layout<W> {
 
     /// Overview is open, the carousel is configured, and the rotation has
     /// settled (no animation in flight) on a non-host output.
+    #[cfg(feature = "navigation")]
     pub fn in_carousel_lens(&self) -> bool {
         if self.options.overview.consolidated_carousel.is_none() {
             return false;
@@ -4037,6 +4068,7 @@ impl<W: LayoutElement> Layout<W> {
     /// texture across `[0,1]^2` with no further letterbox/crop of its own (the quad itself is
     /// letterboxed to the target view's aspect in `render_inner`), so:
     /// `content_point = uv * target_view`, hit-tested at the same live zoom.
+    #[cfg(feature = "navigation")]
     pub fn carousel_focus_jump(&mut self, uv: (f64, f64)) -> bool {
         self.carousel_focus_jump_at(Some(uv))
     }
@@ -4044,10 +4076,12 @@ impl<W: LayoutElement> Layout<W> {
     /// Enter-confirm variant: jumps to the target's currently-focused window, skipping the `uv`
     /// hit-test entirely. Same gating/activation/close-overview behavior as
     /// [`Self::carousel_focus_jump`].
+    #[cfg(feature = "navigation")]
     pub fn carousel_focus_jump_to_focused(&mut self) -> bool {
         self.carousel_focus_jump_at(None)
     }
 
+    #[cfg(feature = "navigation")]
     fn carousel_focus_jump_at(&mut self, uv: Option<(f64, f64)>) -> bool {
         if !self.in_carousel_lens() {
             return false;
@@ -4108,6 +4142,7 @@ impl<W: LayoutElement> Layout<W> {
     /// -4: scrolling moved the host's workspaces behind an unmoving lens).
     /// Returns `false` (no-op) when `in_carousel_lens()` doesn't hold — the
     /// caller falls back to normal routing.
+    #[cfg(feature = "navigation")]
     pub fn carousel_lens_switch_workspace(&mut self, up: bool) -> bool {
         let Some(mon) = self.carousel_lens_monitor_mut() else {
             return false;
@@ -4124,6 +4159,7 @@ impl<W: LayoutElement> Layout<W> {
     /// [`Self::carousel_lens_switch_workspace`]: side-scrolling with the lens
     /// settled must scroll the remote's active workspace, not the workspace
     /// under the cursor on the host.
+    #[cfg(feature = "navigation")]
     pub fn carousel_lens_focus_column(&mut self, right: bool) -> bool {
         let Some(mon) = self.carousel_lens_monitor_mut() else {
             return false;
@@ -4139,6 +4175,7 @@ impl<W: LayoutElement> Layout<W> {
 
     /// The monitor the settled lens is showing, when `in_carousel_lens()`
     /// holds (rotation settled on a non-host ring member).
+    #[cfg(feature = "navigation")]
     fn carousel_lens_monitor_mut(&mut self) -> Option<&mut Monitor<W>> {
         if !self.in_carousel_lens() {
             return None;
@@ -4328,8 +4365,11 @@ impl<W: LayoutElement> Layout<W> {
             // output, the active monitor is not necessarily the host, so the
             // consolidated host-monitor clause cannot be asserted. The
             // isolated-output clause has no such dependency and still applies.
+            #[cfg(feature = "navigation")]
             let carousel_settled_home =
                 self.carousel_rotation_anim.is_none() && self.carousel_rotation == 0.0;
+            #[cfg(not(feature = "navigation"))]
+            let carousel_settled_home = true;
             if consolidated && !carousel_settled_home {
                 if monitor.isolated {
                     assert!(!monitor.overview_open);
@@ -4535,6 +4575,7 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        #[cfg(feature = "navigation")]
         if let Some(anim) = &self.carousel_rotation_anim {
             if anim.is_done() {
                 self.carousel_rotation_anim = None;
@@ -4549,6 +4590,7 @@ impl<W: LayoutElement> Layout<W> {
         // case where the output is still connected but no longer eligible.
         // Cheap to gate: only bother recomputing the ring when there's
         // actually a non-home rotation target to validate.
+        #[cfg(feature = "navigation")]
         if self.overview_open
             && self.options.overview.consolidated_carousel.is_some()
             && self.carousel_rotation_target() != 0.0
@@ -4627,10 +4669,12 @@ impl<W: LayoutElement> Layout<W> {
             return true;
         }
 
+        #[cfg(feature = "navigation")]
         if self.carousel_rotation_anim.is_some() {
             return true;
         }
 
+        #[cfg(feature = "navigation")]
         if self.carousel_pullback.is_some() {
             return true;
         }
@@ -5542,6 +5586,7 @@ impl<W: LayoutElement> Layout<W> {
     /// restore a stranded zoom on the *previous* monitor (currently only
     /// `focus_output`, which knows the previous monitor's index) can do so.
     /// Callers that don't need that can just drop the return value.
+    #[cfg(feature = "navigation")]
     fn on_active_monitor_changed(&mut self) -> Option<Pullback> {
         let pullback = self.carousel_pullback.take();
 
@@ -5598,6 +5643,7 @@ impl<W: LayoutElement> Layout<W> {
             // only caller that still has the previous monitor's index handy
             // and cares about its zoom being visible again), so it's kept
             // here rather than folded into the shared helper.
+            #[cfg(feature = "navigation")]
             if let Some(pullback) = self.on_active_monitor_changed() {
                 if let Some(prev_idx) = prev_idx {
                     if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
@@ -7598,6 +7644,7 @@ impl<W: LayoutElement> Layout<W> {
     pub fn toggle_overview(&mut self) {
         self.overview_open = !self.overview_open;
 
+        #[cfg(feature = "navigation")]
         if self.overview_open {
             // Instant snap to host (ring position 0.0), not `reset_carousel_center()`:
             // the overview-open animation handles the visual transition, so no
@@ -7615,17 +7662,21 @@ impl<W: LayoutElement> Layout<W> {
             for monitor in self.monitors_mut() {
                 monitor.reset_overview_zoom();
             }
-            self.reset_carousel_center();
+            #[cfg(feature = "navigation")]
+            {
+                self.reset_carousel_center();
 
-            // Snap carousel rotation home instantly (no animation — the
-            // overview close animation is the transition) so a remote output
-            // never keeps painting its lens panel after the overview closes.
-            self.carousel_rotation = 0.;
-            self.carousel_rotation_anim = None;
+                // Snap carousel rotation home instantly (no animation — the
+                // overview close animation is the transition) so a remote
+                // output never keeps painting its lens panel after the
+                // overview closes.
+                self.carousel_rotation = 0.;
+                self.carousel_rotation_anim = None;
 
-            // Cancel any in-flight pull-back choreography outright; there's
-            // nothing left for it to drive toward.
-            self.carousel_pullback = None;
+                // Cancel any in-flight pull-back choreography outright;
+                // there's nothing left for it to drive toward.
+                self.carousel_pullback = None;
+            }
         }
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
@@ -7679,17 +7730,20 @@ impl<W: LayoutElement> Layout<W> {
             monitor.reset_overview_zoom_preset_idx();
         }
         // The carousel centering is meaningless once the overview is closed.
-        self.reset_carousel_center();
+        #[cfg(feature = "navigation")]
+        {
+            self.reset_carousel_center();
 
-        // Snap carousel rotation home instantly (no animation — the
-        // overview close animation is the transition) so a remote output
-        // never keeps painting its lens panel after the overview closes.
-        self.carousel_rotation = 0.;
-        self.carousel_rotation_anim = None;
+            // Snap carousel rotation home instantly (no animation — the
+            // overview close animation is the transition) so a remote output
+            // never keeps painting its lens panel after the overview closes.
+            self.carousel_rotation = 0.;
+            self.carousel_rotation_anim = None;
 
-        // Cancel any in-flight pull-back choreography outright; there's
-        // nothing left for it to drive toward.
-        self.carousel_pullback = None;
+            // Cancel any in-flight pull-back choreography outright; there's
+            // nothing left for it to drive toward.
+            self.carousel_pullback = None;
+        }
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
         self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
@@ -8547,6 +8601,7 @@ impl<W: LayoutElement> Layout<W> {
     /// overview state or output count). Used by input-intercept gates that
     /// need to decide whether to fall through to normal focus-column
     /// behavior before calling `carousel_request_rotate`.
+    #[cfg(feature = "navigation")]
     pub fn carousel_configured(&self) -> bool {
         self.options.overview.consolidated_carousel.is_some()
     }
@@ -8604,4 +8659,59 @@ impl<W: LayoutElement> Layout<W> {
         false
     }
     pub fn grid_click_activated(&mut self) {}
+}
+
+#[cfg(not(feature = "navigation"))]
+impl<W: LayoutElement> Layout<W> {
+    pub fn carousel_outputs(&self) -> Vec<&Monitor<W>> {
+        Vec::new()
+    }
+    pub fn carousel_rotation(&self) -> f64 {
+        0.
+    }
+    pub fn carousel_rotation_target(&self) -> f64 {
+        0.
+    }
+    pub fn carousel_rotating(&self) -> bool {
+        false
+    }
+    pub fn carousel_ring(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+    pub fn reset_carousel_center(&mut self) {}
+    pub fn rotate_carousel(&mut self, _delta: isize) {}
+    pub fn carousel_request_rotate(&mut self, _delta: isize) {}
+    pub fn carousel_request_rotate_to(&mut self, _ring_target: f64) {}
+    pub fn cancel_carousel_pullback(&mut self) {}
+    fn advance_carousel_pullback(&mut self) {}
+    fn carousel_pullback_is_active(&self) -> bool {
+        false
+    }
+    pub fn carousel_reveal(&self) -> f64 {
+        0.
+    }
+    pub fn in_carousel_lens(&self) -> bool {
+        false
+    }
+    pub fn carousel_focus_jump(&mut self, _uv: (f64, f64)) -> bool {
+        false
+    }
+    pub fn carousel_focus_jump_to_focused(&mut self) -> bool {
+        false
+    }
+    pub fn carousel_lens_switch_workspace(&mut self, _up: bool) -> bool {
+        false
+    }
+    pub fn carousel_lens_focus_column(&mut self, _right: bool) -> bool {
+        false
+    }
+    pub fn carousel_configured(&self) -> bool {
+        false
+    }
+
+    fn on_active_monitor_changed(&mut self) {
+        if self.overview_open {
+            self.set_monitors_overview_state();
+        }
+    }
 }

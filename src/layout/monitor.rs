@@ -2991,6 +2991,7 @@ impl<W: LayoutElement> Monitor<W> {
     /// their crop bounds with that SAME target scale, not the host's — otherwise, on mixed-DPI
     /// host/target pairs, the two content types' physical crop rects disagree and the extent
     /// equality claim above breaks for the background/layer contribution.
+    #[cfg(feature = "navigation")]
     pub fn render_overview_at_zoom<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,

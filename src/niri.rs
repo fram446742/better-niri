@@ -193,6 +193,7 @@ use crate::render_helpers::debug::push_opaque_regions;
 #[cfg(feature = "effects")]
 use crate::render_helpers::global_shader_element::{GlobalPassState, GlobalShaderElement};
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
+#[cfg(feature = "navigation")]
 use crate::render_helpers::panel::PanelRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
@@ -291,6 +292,7 @@ pub struct Niri {
     /// Frame stamp bumped once per `redraw_queued_outputs` cycle, so `update_panel_sources` can
     /// tell whether a given content output's `PanelSource` was already refreshed this cycle (it
     /// may be reached more than once, e.g. via a screencopy re-render) and skip redundant work.
+    #[cfg(feature = "navigation")]
     panel_frame: Cell<u64>,
 
     /// Whether the at-startup=true window rules are active.
@@ -790,6 +792,7 @@ impl Drop for InRenderInnerGuard {
 /// whenever texture identity or contents change — which is why the host-side compare keys on
 /// `(source Id, generation)` and never on the per-buffer damage-bag `CommitCounter`s (those are
 /// independent between A and B and reset to default on recreation).
+#[cfg(feature = "navigation")]
 pub struct PanelSource {
     /// Scratch buffer index in [`OutputState::panel_offscreen`] that the next render targets.
     /// Toggled only on publish, so it never names the buffer backing `elem`.
@@ -818,6 +821,7 @@ pub struct PanelSource {
     last_extent: Option<Rectangle<f64, Logical>>,
 }
 
+#[cfg(feature = "navigation")]
 impl Default for PanelSource {
     fn default() -> Self {
         Self {
@@ -832,6 +836,7 @@ impl Default for PanelSource {
     }
 }
 
+#[cfg(feature = "navigation")]
 impl PanelSource {
     /// Resets to the fresh (never-rendered) state, dropping the retained published element (and
     /// thus releasing its texture clone) so an output that stopped participating in the carousel
@@ -921,14 +926,17 @@ pub struct OutputState {
     /// This output's own damage-gated panel content source (populated when this output
     /// participates in the carousel, as content for some host — possibly itself). See
     /// `PanelSource` and `Niri::update_panel_sources`.
+    #[cfg(feature = "navigation")]
     pub panel_source: RefCell<PanelSource>,
     /// Ping-pong offscreen buffers backing `panel_source`, indexed by `PanelSource::flip`. Kept
     /// OUTSIDE the `RefCell` (`OffscreenBuffer::render` takes `&self`) so the GPU render call in
     /// `update_panel_sources` never runs while a `panel_source` borrow is held.
+    #[cfg(feature = "navigation")]
     pub panel_offscreen: [OffscreenBuffer; 2],
     /// Retained per-ring-slot panel elements when this output is acting as a carousel HOST,
     /// keyed by ring index. Entries are dropped when the ring shrinks. Built from `panel_source`
     /// content (this output's own, or a sibling's) each frame; wired up in Gate B Task 6.
+    #[cfg(feature = "navigation")]
     pub panel_elems: RefCell<HashMap<usize, PanelRenderElement>>,
     /// Set (only ever from `update_panel_sources`, while this output is the active carousel HOST)
     /// when a panel content source published fresh pixels this render. Consumed in `redraw()`,
@@ -938,12 +946,14 @@ pub struct OutputState {
     /// (see `IN_RENDER_INNER`), so it cannot call `Niri::queue_redraw` (`&mut self`) directly —
     /// this flag plus deferred consumption is the mirror of the `shader_throttle_timer` deferred
     /// re-borrow pattern used just below in `redraw()`.
+    #[cfg(feature = "navigation")]
     pub panel_redraw_pending: Cell<bool>,
     /// Click hit-test geometry for the carousel panel stack drawn on this output, refreshed by
     /// the panel-stack block in `render_inner` every frame panels are drawn (nearest/highest-z
     /// panel first, matching draw order and thus hit priority), and cleared whenever panels
     /// aren't drawn so a stale cache can't eat clicks after the carousel closes (see
     /// `clear_stale_panel_sources`). Each entry is `(ring_pos, corners)` for one drawn panel.
+    #[cfg(feature = "navigation")]
     pub panel_hits: RefCell<Vec<(f64, [[f64; 2]; 4])>>,
 }
 
@@ -4478,6 +4488,7 @@ impl Niri {
             display_handle,
             is_session_instance,
             start_time: Instant::now(),
+            #[cfg(feature = "navigation")]
             panel_frame: Cell::new(0),
             is_at_startup: true,
             clock: animation_clock,
@@ -4964,10 +4975,15 @@ impl Niri {
             global_shader_chain: RefCell::new(GlobalShaderChain::default()),
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
             blend_description: None,
+            #[cfg(feature = "navigation")]
             panel_source: RefCell::new(PanelSource::default()),
+            #[cfg(feature = "navigation")]
             panel_offscreen: [OffscreenBuffer::default(), OffscreenBuffer::default()],
+            #[cfg(feature = "navigation")]
             panel_elems: RefCell::new(HashMap::new()),
+            #[cfg(feature = "navigation")]
             panel_redraw_pending: Cell::new(false),
+            #[cfg(feature = "navigation")]
             panel_hits: RefCell::new(Vec::new()),
         };
         let rv = self.output_state.insert(output.clone(), state);
@@ -6481,6 +6497,7 @@ impl Niri {
         // One stamp for this whole cycle: every output redrawn below shares it, so
         // `update_panel_sources` only refreshes each content output's `PanelSource` once even
         // though `render()` may run for it more than once (e.g. a screencopy re-render).
+        #[cfg(feature = "navigation")]
         self.panel_frame.set(self.panel_frame.get().wrapping_add(1));
 
         while let Some((output, _)) = self.output_state.iter().find(|(_, state)| {
@@ -7190,6 +7207,7 @@ impl Niri {
     /// configured and open with reveal > 0, or the rotation hasn't settled back on the host. When
     /// false, the pre-carousel overview path draws with no prepass and no panel elements. See the
     /// drawing rule in the Gate B Task 6 brief.
+    #[cfg(feature = "navigation")]
     fn carousel_panels_needed(&self) -> bool {
         if !self.layout.is_overview_open() {
             return false;
@@ -7208,6 +7226,7 @@ impl Niri {
     /// all, or once settled back on the host itself (reveal > 0 but rotation == 0 and not
     /// animating) — in that case the host strip draws live, matching the drawing rule's "skip
     /// d == 0 when settled_on_host" panel-skip.
+    #[cfg(feature = "navigation")]
     fn carousel_host_strip_suppressed(&self, output: &Output) -> bool {
         if self.layout.active_output() != Some(output) || !self.carousel_panels_needed() {
             return false;
@@ -7363,6 +7382,7 @@ impl Niri {
     ///
     /// Bails out in one branch in the common (carousel not active) case to keep this cheap on
     /// every commit.
+    #[cfg(feature = "navigation")]
     pub fn queue_carousel_host_redraw_for_sibling(&mut self, content_output: &Output) {
         if !self.carousel_panels_needed() {
             return;
@@ -7420,6 +7440,7 @@ impl Niri {
         // (e.g. an isolated output, or a screencopy of a non-focused monitor) touch no
         // panel state at all; a stale ring member is reconciled the next time the active
         // host itself redraws.
+        #[cfg(feature = "navigation")]
         if self.layout.active_output() == Some(output) {
             if self.carousel_panels_needed() {
                 self.update_panel_sources(&mut ctx.as_gles(), output, self.panel_frame.get());
@@ -8141,6 +8162,7 @@ impl Niri {
         // for free: rotation snaps to the target's ring position, so d == 0 there instead, and
         // it fills the center slot at CENTER_FRACTION while every other ring member (including
         // the host itself) recedes to the side as an ordinary panel.
+        #[cfg(feature = "navigation")]
         if self.layout.active_output() == Some(output) && self.carousel_panels_needed() {
             let view = mon.view_size();
             let scale = output.current_scale().fractional_scale();
@@ -8357,6 +8379,7 @@ impl Niri {
     /// silently win for every host's panel stack (the multi-host zoom-contamination finding from
     /// the Task 5 review). There is deliberately no re-entrancy guard for this beyond the
     /// call-site gate: the fix belongs at the one call site, not scattered defensive checks here.
+    #[cfg(feature = "navigation")]
     fn update_panel_sources(&self, ctx: &mut RenderCtx<GlesRenderer>, host: &Output, frame: u64) {
         let _span = tracy_client::span!("Niri::update_panel_sources");
         debug_assert!(
@@ -8542,6 +8565,7 @@ impl Niri {
     /// `update_panel_sources`), so this is the single authoritative place ring membership is
     /// reconciled; an output that stops participating gets its content dropped the next time the
     /// active host redraws.
+    #[cfg(feature = "navigation")]
     fn clear_stale_panel_sources(&self, keep: &[Output]) {
         for (output, state) in &self.output_state {
             if keep.contains(output) {
@@ -8902,6 +8926,7 @@ impl Niri {
         // `Queued`/`...AndQueued` state `queue_redraw` just set here, silently dropping the
         // deferred redraw. Leaving the flag SET on `Skipped` means it's picked up by this same
         // check the next time this output actually renders.
+        #[cfg(feature = "navigation")]
         if res != RenderResult::Skipped
             && self
                 .output_state
@@ -12257,6 +12282,7 @@ niri_render_elements! {
     OutputRenderElements<R> => {
         Monitor = MonitorRenderElement<R>,
         // Carousel panel prepass content: the monitor's overview cropped to its workspace strip.
+        #[cfg(feature = "navigation")]
         PanelMonitor = CropRenderElement<MonitorRenderElement<R>>,
         RescaledTile = RescaleRenderElement<TileRenderElement<R>>,
         LayerSurface = LayerSurfaceRenderElement<R>,
@@ -12282,6 +12308,7 @@ niri_render_elements! {
         #[cfg(feature = "effects")]
         ScopedShader = ScopedShaderElement,
         // Consolidated carousel: perspective-tilted cover-flow panel.
+        #[cfg(feature = "navigation")]
         Panel = PanelRenderElement,
     }
 }
@@ -12662,4 +12689,17 @@ mod shader_throttle_tests {
             ShaderFrameDecision::Due => panic!("elapsed clamped to 0, so not due"),
         }
     }
+}
+
+#[cfg(not(feature = "navigation"))]
+impl Niri {
+    fn carousel_panels_needed(&self) -> bool {
+        false
+    }
+
+    fn carousel_host_strip_suppressed(&self, _output: &Output) -> bool {
+        false
+    }
+
+    pub fn queue_carousel_host_redraw_for_sibling(&mut self, _content_output: &Output) {}
 }
