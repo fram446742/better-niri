@@ -7069,6 +7069,12 @@ impl<W: LayoutElement> Layout<W> {
                 monitor.reset_overview_zoom(default_zoom);
             }
             self.reset_carousel_center();
+
+            // Snap carousel rotation home instantly (no animation — the
+            // overview close animation is the transition) so a remote output
+            // never keeps painting its lens panel after the overview closes.
+            self.carousel_rotation = 0.;
+            self.carousel_rotation_anim = None;
         }
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
@@ -7123,6 +7129,12 @@ impl<W: LayoutElement> Layout<W> {
         }
         // The carousel centering is meaningless once the overview is closed.
         self.reset_carousel_center();
+
+        // Snap carousel rotation home instantly (no animation — the
+        // overview close animation is the transition) so a remote output
+        // never keeps painting its lens panel after the overview closes.
+        self.carousel_rotation = 0.;
+        self.carousel_rotation_anim = None;
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
         self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
