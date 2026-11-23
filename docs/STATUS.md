@@ -171,9 +171,11 @@ picked up without re-auditing.
    `companionctl`; `companion-niri` adds a `compositor.*` bridge that performs
    typed niri actions and queries outputs/workspaces/windows over IPC, and
    subscribes to the event stream to auto-track `auto:workspaces` /
-   `auto:windows` parking lots (activation, focus, close, minimize, urgency).
-   Remaining: compositor-side actions consuming those lots, Phase B/C rules
-   and adapters, and the companion apps from `ECOSYSTEM.md`.
+   `auto:windows` parking lots (activation, focus, close, minimize, urgency),
+   and `parker.*` consumes them to park/restore a window or a whole workspace
+   (minimize/unminimize through niri, snapshots persisted in the `parker` lot).
+   Remaining: Phase B/C rules and adapters, and the companion apps from
+   `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
 7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,

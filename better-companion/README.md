@@ -16,7 +16,7 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-automation` | `automation.*` | Named action sequences executed through the registry |
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
 | `companion-system` | `system.*` | Ping, status and paths |
-| `companion-niri` | `compositor.*` | niri IPC bridge: actions and output/workspace/window queries |
+| `companion-niri` | `compositor.*`, `parker.*` | niri IPC bridge (actions/queries + event tracker) and compositor-side park/restore |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
 
@@ -67,6 +67,23 @@ maintains two ordinary parking lots:
 Window closes remove entries; activation/focus/minimize/urgency events update
 them. Use `companionctl call parking list '{"lot":"auto:windows"}'`. Start the
 daemon with `--no-track` to disable the subscription.
+
+## Parking and restoring on the compositor
+
+`parker.*` consumes the auto lots through the niri bridge:
+
+```sh
+companionctl call parker park                                  # focused window
+companionctl call parker park '{"window":70}'
+companionctl call parker restore '{"window":70}'
+companionctl call parker park-workspace '{"workspace":7}'
+companionctl call parker restore-workspace '{"workspace":7,"focus":true}'
+companionctl call parker list
+```
+
+Parking minimizes the window(s) and records their snapshots in the `parker`
+lot; restoring unminimizes them (and optionally focuses the workspace).
+`park-workspace` minimizes every window tracked for that workspace.
 
 ## Contexts
 
