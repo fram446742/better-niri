@@ -3466,6 +3466,10 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.axis()
     }
 
+    pub fn main_axis(&self) -> niri_config::MainAxis {
+        self.scrolling.main_axis()
+    }
+
     pub fn tiles_with_render_positions(
         &self,
     ) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>, bool)> {
