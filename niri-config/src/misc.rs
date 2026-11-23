@@ -512,18 +512,16 @@ impl MergeWith<OverviewPart> for Overview {
         if let Some(cc) = &part.consolidated_carousel {
             let reveal = cc.reveal_zoom.map_or(0.48, |v| v.0);
             let assembled = cc.assembled_zoom.map_or(0.22, |v| v.0);
-            let (reveal_zoom, assembled_zoom) = if assembled > 0.
-                && assembled < reveal
-                && reveal < 1.
-            {
-                (reveal, assembled)
-            } else {
-                warn!(
+            let (reveal_zoom, assembled_zoom) =
+                if assembled > 0. && assembled < reveal && reveal < 1. {
+                    (reveal, assembled)
+                } else {
+                    warn!(
                     "overview.consolidated-carousel requires 0 < assembled-zoom < reveal-zoom < 1 \
                          (got assembled={assembled}, reveal={reveal}); using defaults 0.22 / 0.48"
                 );
-                (0.48, 0.22)
-            };
+                    (0.48, 0.22)
+                };
             self.consolidated_carousel = Some(ConsolidatedCarousel {
                 reveal_zoom,
                 assembled_zoom,
