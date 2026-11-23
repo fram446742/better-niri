@@ -68,7 +68,12 @@ pub struct Headless {
 impl Headless {
     pub fn new(event_loop: LoopHandle<'static, State>) -> Self {
         let udev_seat = std::env::var("XDG_SEAT").unwrap_or_else(|_| "seat0".to_owned());
-        init_headless_libinput(event_loop, &udev_seat);
+        // Opening real libinput devices from the headless backend is opt-in: tests and nested
+        // sessions must not receive events from the host's physical keyboard/pointer. Set
+        // NIRI_HEADLESS_INPUT=1 for a real headless session that needs input.
+        if std::env::var_os("NIRI_HEADLESS_INPUT").is_some() {
+            init_headless_libinput(event_loop, &udev_seat);
+        }
 
         Self {
             renderer: None,
