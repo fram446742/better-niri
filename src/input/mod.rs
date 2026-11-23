@@ -4111,6 +4111,7 @@ impl State {
             // position, which is exactly the confusing pre-Gate-C behavior the lens is meant to
             // replace. A miss on the lens (backdrop/gaps) is a deliberate no-op, not a
             // fall-through.
+            #[cfg(feature = "navigation")]
             if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Left) {
                 let location = pointer.current_location();
                 if let Some((output, pos_within_output)) = self.niri.output_under(location) {

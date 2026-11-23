@@ -313,6 +313,9 @@ compositor IPC fallback.
   open/close actions, hot corner, four-finger gesture and the hardcoded
   H/J/K/L binds), the grid gesture state, its visual helpers and renderer,
   and the whole `grid_overview` model plus the `Workspace.grid_overview`
-  field (grid methods fall back to no-op stubs). Only thin layout plumbing
-  remains; the carousel is still a follow-up.
+  field (grid methods fall back to no-op stubs). It also gates the
+  consolidated carousel: rotation/pullback state, panel sources and offscreen
+  buffers, per-host panel caches and click hits, panel rendering and
+  prepasses, and the panel element variants. Only thin layout plumbing and
+  no-op stubs remain.
 - `agent` (off by default): the automation seat.

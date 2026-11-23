@@ -12555,6 +12555,7 @@ fn decoration_redraw_visibility(custom: bool, light: bool) {
     assert!(layout.decorations_are_animating(&output));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn consolidated_mode_scopes_overview_to_active_output() {
     fn make_output(name: &str) -> Output {
@@ -12627,6 +12628,7 @@ fn consolidated_mode_scopes_overview_to_active_output() {
     assert_eq!(None, mons[1].overview_progress_value());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn removing_active_output_refreshes_overview_state() {
     fn make_output(name: &str) -> Output {
@@ -12708,6 +12710,7 @@ fn removing_active_output_refreshes_overview_state() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn carousel_reveal_tracks_zoom_threshold() {
     fn make_output(name: &str) -> Output {
@@ -12785,6 +12788,7 @@ fn carousel_reveal_tracks_zoom_threshold() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn zoom_target_unclamped_without_consolidated_carousel() {
     let mut layout = Layout::<TestWindow>::default();
@@ -12825,6 +12829,7 @@ fn zoom_target_unclamped_without_consolidated_carousel() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn carousel_lens_false_while_rotation_is_zero() {
     fn make_output(name: &str) -> Output {
@@ -12886,6 +12891,7 @@ fn carousel_lens_false_while_rotation_is_zero() {
     assert!(!layout.in_carousel_lens());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn carousel_outputs_includes_host_and_reset_centers_on_active() {
     fn make_output(name: &str) -> Output {
@@ -12971,6 +12977,7 @@ fn carousel_outputs_includes_host_and_reset_centers_on_active() {
                                                         // active host "A"
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn rotate_carousel_wraps_over_ring_positions() {
     // Outputs positioned left-to-right by `x`, same order as added, so ring
@@ -13057,6 +13064,7 @@ fn rotate_carousel_wraps_over_ring_positions() {
     assert_eq!(layout.carousel_rotation_target(), 2.0); // wrapped backward to rightmost
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn lens_routes_workspace_switch_to_remote_monitor() {
     // Scrolling workspaces while the lens is settled on a remote output must
@@ -13181,6 +13189,7 @@ fn lens_routes_workspace_switch_to_remote_monitor() {
     assert_eq!(col_idx(&layout, &b), 0, "remote column focused back left");
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn overview_close_snaps_carousel_rotation_home() {
     // Regression test: closing the overview while the carousel is rotated
@@ -13343,6 +13352,7 @@ fn pullback_test_layout() -> (Layout<TestWindow>, Output, Output) {
     (layout, a, b)
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_runs_three_phases() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13382,6 +13392,7 @@ fn pullback_runs_three_phases() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_skipped_when_assembled() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13409,6 +13420,7 @@ fn pullback_skipped_when_assembled() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_cancelled_by_overview_close() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13441,6 +13453,7 @@ fn pullback_cancelled_by_overview_close() {
     assert!(!layout.carousel_rotating());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_cancelled_by_user_zoom() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13480,6 +13493,7 @@ fn pullback_cancelled_by_user_zoom() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_cancelled_by_active_monitor_change() {
     let (mut layout, a, b) = pullback_test_layout();
@@ -13507,6 +13521,7 @@ fn pullback_cancelled_by_active_monitor_change() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_cancelled_by_cross_output_window_activation() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13534,6 +13549,7 @@ fn pullback_cancelled_by_cross_output_window_activation() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn lens_recenters_when_target_leaves_ring() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13573,6 +13589,7 @@ fn lens_recenters_when_target_leaves_ring() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn pullback_rerequest_during_zoom_in_rotates_again() {
     let (mut layout, _a, _b) = pullback_test_layout();
@@ -13634,6 +13651,7 @@ fn pullback_rerequest_during_zoom_in_rotates_again() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn cross_output_activation_refreshes_overview_state() {
     let (mut layout, _a, b) = pullback_test_layout();
@@ -13673,6 +13691,7 @@ fn cross_output_activation_refreshes_overview_state() {
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn output_removal_recenters_ring() {
     fn make_output(name: &str, x: i32) -> Output {
@@ -13775,6 +13794,7 @@ fn output_removal_recenters_ring() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn rotate_noop_single_output() {
     fn make_output(name: &str, x: i32) -> Output {
@@ -13843,6 +13863,7 @@ fn rotate_noop_single_output() {
     assert!(!layout.carousel_pullback_is_active());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn active_output_change_rebases_ring() {
     let (mut layout, a, b) = pullback_test_layout();
@@ -13873,6 +13894,7 @@ fn active_output_change_rebases_ring() {
     assert!(!layout.carousel_rotating());
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn active_output_change_restores_stranded_pullback_zoom() {
     let (mut layout, a, b) = pullback_test_layout();
@@ -13935,6 +13957,7 @@ fn set_window_size_and_communicate(
     }
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn focus_jump_activates_window_on_settled_remote_output() {
     let (mut layout, _a, b) = pullback_test_layout();
@@ -13978,6 +14001,7 @@ fn focus_jump_activates_window_on_settled_remote_output() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn focus_jump_is_noop_outside_carousel_lens() {
     let (mut layout, a, _b) = pullback_test_layout();
@@ -13995,6 +14019,7 @@ fn focus_jump_is_noop_outside_carousel_lens() {
     assert_eq!(layout.active_output(), Some(&a));
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn focus_jump_to_focused_uses_targets_active_window_skipping_uv() {
     let (mut layout, _a, b) = pullback_test_layout();
@@ -14026,6 +14051,7 @@ fn focus_jump_to_focused_uses_targets_active_window_skipping_uv() {
     );
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn rotate_carousel_single_output_is_noop() {
     fn make_output(name: &str) -> Output {
@@ -14083,6 +14109,7 @@ fn rotate_carousel_single_output_is_noop() {
     assert_eq!(layout.carousel_rotation_target(), 0.0);
 }
 
+#[cfg(feature = "navigation")]
 #[test]
 fn reset_carousel_center_noop_when_active_not_in_set() {
     fn make_output(name: &str) -> Output {

@@ -46,7 +46,9 @@ pub mod liquid_glass;
 pub mod memory;
 pub mod offscreen;
 pub mod overview_rescale;
+#[cfg(feature = "navigation")]
 pub mod panel;
+#[cfg(feature = "navigation")]
 pub mod panel_quad;
 pub mod primary_gpu_texture;
 pub mod render_elements;
