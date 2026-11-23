@@ -91,7 +91,7 @@ operate the desktop without the shell.
 | better-session | Context/session save/restore | new, high priority |
 | better-sidepanels | Persistent side panels | new, medium |
 | better-shot | Capture/recording/annotation | new, medium |
-| better-monitor | Output profiles, safe apply | new, medium-high |
+| better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
 | better-audio | PipeWire routing | new, exploratory |
 | better-wallpaper | Scenes, per-workspace wallpapers | new, medium |
 | better-settings | Unified GTK4 settings frontend | new, medium-high |
