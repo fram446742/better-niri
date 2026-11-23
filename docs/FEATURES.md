@@ -63,13 +63,13 @@ This table is the integration contract, not a claim of completion.
 | --- | --- | --- | --- | --- | --- |
 | Virtual outputs | Absent | biri (niri PR #3800, open) | biri | Integrated (core) | TTY + headless; IPC/CLI create/remove; config `create-virtual`; virtual-output frame-callback path. |
 | Isolated outputs | Absent | biri | biri | Integrated (core) | Overview/Alt-Tab/hotkey overlay/config notification hidden; `power-off-monitors skip-isolated=true` keeps them lit. |
-| Hidden workspaces | Absent | biri (niri PR #2997, open) | biri | Planned | Config + IPC actions; keep out of overview/carousel. |
+| Hidden workspaces | Absent | biri (niri PR #2997, open) | biri | Integrated | `hidden` workspace config, `toggle-workspace-visibility`, hidden-aware IPC/focus/unhide rules; kept out of overview/render regions. |
 | Portrait / vertical main axis | Absent | biri | biri | Planned | Per-output/workspace; directional input stays physical. |
 | Per-output behaviour | Upstream | upstream | upstream | Upstream | Output config and layout rules. |
 | Multi-monitor improvements | Partial | niri-elite, biri | combine | Planned | Carousel, isolated outputs, per-output gestures. |
 | Different refresh rates | Upstream | upstream | upstream | Upstream | Per-output frame clocks. |
-| Sticky windows | Absent | biri | biri native | Planned | Native compositor implementation wins over IPC moving. |
-| Sticky floating windows | Absent | biri (niri PR #3302, closed) | biri | Planned | Floating windows follow workspaces of their output. |
+| Sticky windows | Absent | biri | biri native | Integrated | Native monitor-level sticky space, `open-sticky`, `toggle-window-sticky`, `float-above-fullscreen`; sticky windows render above workspaces. |
+| Sticky floating windows | Absent | biri (niri PR #3302, closed) | biri | Integrated | `open-sticky` implies floating; sticky tiles live on the monitor, not a workspace. |
 | Float above fullscreen | Absent | biri (niri PR #4062, open) | biri | Planned | Opt-in window rule. |
 | Stage / scratchpad workspaces | External | better-nsticky | better-nsticky | Planned | Keep as external daemon; add compatibility mode. |
 
