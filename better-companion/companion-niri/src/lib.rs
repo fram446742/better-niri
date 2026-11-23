@@ -17,16 +17,16 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use companion_core::{ActionInfo, Context};
+pub use companion_core::{AUTO_WINDOWS, AUTO_WORKSPACES};
 use companion_parking::Parking;
 use niri_ipc::socket::{Socket, SOCKET_PATH_ENV};
 use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
 use serde_json::{json, Value};
 
-pub const AUTO_WORKSPACES: &str = "auto:workspaces";
-pub const AUTO_WINDOWS: &str = "auto:windows";
-
 mod parker;
+mod windows;
 pub use parker::{Parker, DEFAULT_LOT};
+pub use windows::Windows;
 
 pub struct Compositor {
     socket: Option<PathBuf>,

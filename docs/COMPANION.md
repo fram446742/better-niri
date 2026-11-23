@@ -390,6 +390,11 @@ niri's Cargo workspace):
   steps; `automation.run` executes them through the registry.
 - `companion-hooks`: event → commands registration and resolution (`fire`
   returns matches; the daemon does not execute commands implicitly).
+- `companion-rules`: declarative rules matching auto-tracked windows
+  (app_id/title/workspace/floating/minimized) with `explain`/`apply`/`run`;
+  `run` executes the rule steps through the registry.
+- `windows.*` in `companion-niri`: `run-or-raise`/`singleton` focus an existing
+  match or spawn the configured command; `find` returns matches.
 - `companion-system`: ping/status/paths.
 - `companion-niri`: `compositor.*` bridge over the niri IPC socket — perform a
   typed `Action`, and query version/outputs/workspaces/windows/focused window.
@@ -402,8 +407,9 @@ niri's Cargo workspace):
 - `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
 - `companionctl`: list/status/call client.
 
-Not yet: Phase B `rules`/`run_or_raise`, the optional adapters/companions, and
-richer parking policies (e.g. stashing without minimizing).
+Phase B is started: `rules.*` and `windows.run-or-raise`/`singleton` are in.
+Not yet: Phase B adapters, richer swallowing rules and the optional
+adapters/companions; parking currently means minimizing.
 
 ## 9. Roadmap
 

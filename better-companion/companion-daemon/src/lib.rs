@@ -26,7 +26,11 @@ pub fn build_registry_with_parking(
         parking.clone(),
         companion_niri::Compositor::from_env(),
     ));
+    registry.register(companion_niri::Windows::new(
+        companion_niri::Compositor::from_env(),
+    ));
     registry.register(companion_niri::Compositor::from_env());
+    registry.register(companion_rules::Rules::from_state_dir(parking.clone())?);
     Ok((registry, parking))
 }
 
@@ -124,6 +128,8 @@ mod tests {
                 assert!(contexts.contains_key("system"));
                 assert!(contexts.contains_key("compositor"));
                 assert!(contexts.contains_key("parker"));
+                assert!(contexts.contains_key("rules"));
+                assert!(contexts.contains_key("windows"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -159,7 +165,9 @@ mod tests {
                 "hooks",
                 "parker",
                 "parking",
-                "system"
+                "rules",
+                "system",
+                "windows",
             ]
         );
         let _ = std::fs::remove_file(&socket);
