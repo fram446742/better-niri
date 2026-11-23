@@ -1,0 +1,18 @@
+[package]
+name = "companion-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "better-companion"
+path = "src/main.rs"
+
+[dependencies]
+companion-core.workspace = true
+companion-parking.workspace = true
+companion-automation.workspace = true
+companion-hooks.workspace = true
+companion-system.workspace = true
+serde_json.workspace = true

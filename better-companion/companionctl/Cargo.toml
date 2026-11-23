@@ -1,0 +1,14 @@
+[package]
+name = "companionctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "companionctl"
+path = "src/main.rs"
+
+[dependencies]
+companion-core.workspace = true
+serde_json.workspace = true
