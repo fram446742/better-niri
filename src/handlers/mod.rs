@@ -86,7 +86,9 @@ use smithay::wayland::color::management::{
 };
 
 use crate::protocols::gamma_control::{GammaControlHandler, GammaControlManagerState};
+#[cfg(feature = "kde")]
 use crate::protocols::kde_output_order::KdeOutputOrderV1Handler;
+#[cfg(feature = "kde")]
 use crate::delegate_kde_output_order_v1;
 use crate::protocols::mutter_x11_interop::MutterX11InteropHandler;
 use crate::protocols::output_management::{OutputManagementHandler, OutputManagementManagerState};
@@ -1035,6 +1037,7 @@ impl OutputManagementHandler for State {
 
 impl MutterX11InteropHandler for State {}
 
+#[cfg(feature = "kde")]
 impl KdeOutputOrderV1Handler for State {
     fn kde_output_order_v1_state(
         &mut self,
@@ -1043,4 +1046,5 @@ impl KdeOutputOrderV1Handler for State {
     }
 }
 
+#[cfg(feature = "kde")]
 delegate_kde_output_order_v1!(State);

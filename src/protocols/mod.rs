@@ -1,7 +1,9 @@
 pub mod ext_workspace;
 pub mod foreign_toplevel;
 pub mod gamma_control;
+#[cfg(feature = "kde")]
 pub mod kde_blur;
+#[cfg(feature = "kde")]
 pub mod kde_output_order;
 pub mod mutter_x11_interop;
 pub mod output_management;

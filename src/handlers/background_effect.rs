@@ -9,8 +9,10 @@ use smithay::wayland::compositor::{
     add_post_commit_hook, with_states, RegionAttributes, SurfaceData,
 };
 
+#[cfg(feature = "kde")]
 use crate::delegate_kde_blur;
 use crate::niri::State;
+#[cfg(feature = "kde")]
 use crate::protocols::kde_blur::{KdeBlurHandler, KdeBlurRegion, KdeBlurSurfaceCachedState};
 use crate::utils::region::region_to_non_overlapping_rects;
 
@@ -71,6 +73,7 @@ fn recompute_blur_region(states: &SurfaceData, inner: &mut CachedBlurRegionInner
         return;
     }
 
+    #[cfg(feature = "kde")]
     if cached.has::<KdeBlurSurfaceCachedState>() {
         let mut guard = cached.get::<KdeBlurSurfaceCachedState>();
         match &guard.current().blur_region {
@@ -146,6 +149,7 @@ impl ExtBackgroundEffectHandler for State {
     }
 }
 
+#[cfg(feature = "kde")]
 impl KdeBlurHandler for State {
     fn set_blur_region(&mut self, wl_surface: WlSurface) {
         mark_blur_region_pending_dirty(&wl_surface);
@@ -155,4 +159,5 @@ impl KdeBlurHandler for State {
         mark_blur_region_pending_dirty(&wl_surface);
     }
 }
+#[cfg(feature = "kde")]
 delegate_kde_blur!(State);

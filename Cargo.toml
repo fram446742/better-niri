@@ -115,7 +115,7 @@ tracing-subscriber.workspace = true
 tracing.workspace = true
 tracy-client.workspace = true
 wayland-backend = "0.3.16"
-wayland-protocols-plasma = { version = "0.3.11", features = ["server"] }
+wayland-protocols-plasma = { version = "0.3.11", features = ["server"], optional = true }
 wayland-scanner = "0.31.11"
 wayland-server = "0.31.14"
 xcursor = "0.3.11"
@@ -153,9 +153,12 @@ xshell = "0.2.7"
 pkg-config = "0.3"
 
 [features]
-default = ["agent", "dbus", "systemd", "xdp-gnome-screencast"]
+default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde"]
 # Enables the agent seat, a second input seat for automation over IPC.
 agent = []
+# Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1 and the KDE
+# colour-picker D-Bus interface.
+kde = ["dep:wayland-protocols-plasma"]
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).

@@ -178,7 +178,9 @@ use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
 use crate::protocols::gamma_control::GammaControlManagerState;
+#[cfg(feature = "kde")]
 use crate::protocols::kde_blur::KdeBlurState;
+#[cfg(feature = "kde")]
 use crate::protocols::kde_output_order::KdeOutputOrderV1State;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
@@ -393,6 +395,7 @@ pub struct Niri {
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
+    #[cfg(feature = "kde")]
     pub kde_blur_state: KdeBlurState,
     pub xdg_foreign_state: XdgForeignState,
     pub shm_state: ShmState,
@@ -432,6 +435,7 @@ pub struct Niri {
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
     pub fifo_manager_state: FifoManagerState,
+    #[cfg(feature = "kde")]
     pub kde_output_order_v1_state: KdeOutputOrderV1State,
     /// Capability flags for the active global shader, cached per config load.
     pub global_shader_caps: Cell<Option<niri_config::GlobalShaderCaps>>,
@@ -2742,6 +2746,7 @@ impl State {
 
         let new_config = self.backend.ipc_outputs().lock().unwrap().clone();
         self.niri.output_management_state.notify_changes(new_config);
+        #[cfg(feature = "kde")]
         self.niri
             .kde_output_order_v1_state
             .update_output_order(self.niri.sorted_outputs.clone());
@@ -4044,6 +4049,7 @@ impl Niri {
         );
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let background_effect_state = BackgroundEffectState::new::<State>(&display_handle);
+        #[cfg(feature = "kde")]
         let kde_blur_state = KdeBlurState::new::<State>(&display_handle);
         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
 
@@ -4107,6 +4113,7 @@ impl Niri {
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
         let fifo_manager_state = FifoManagerState::new::<State>(&display_handle);
 
+        #[cfg(feature = "kde")]
         let kde_output_order_v1_state =
             KdeOutputOrderV1State::new::<State, _>(&display_handle, |_| true);
 
@@ -4327,6 +4334,7 @@ impl Niri {
             image_copy_cursor_sessions: Vec::new(),
             viewporter_state,
             background_effect_state,
+            #[cfg(feature = "kde")]
             kde_blur_state,
             xdg_foreign_state,
             text_input_state,
@@ -4371,6 +4379,7 @@ impl Niri {
             activation_state,
             mutter_x11_interop_state,
             fifo_manager_state,
+            #[cfg(feature = "kde")]
             kde_output_order_v1_state,
             global_shader_caps: Cell::new(None),
             #[cfg(test)]
