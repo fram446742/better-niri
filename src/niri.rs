@@ -827,7 +827,14 @@ impl PanelSource {
     /// `OutputState::panel_offscreen` buffers (see `OffscreenBuffer::clear`) — this only resets
     /// the published-element side of the pair.
     pub fn clear(&mut self) {
+        // `generation` is deliberately carried over: the backing `panel_offscreen` buffers (and
+        // their smithay `Id`s) live outside this struct and survive a reset, so an extent-change
+        // reset followed by a re-render can republish under the SAME buffer Id. Zeroing the
+        // counter would let the host's retained `PanelRenderElement` aliasing on
+        // `(source Id, generation)` keep a stale texture clone instead of rebuilding.
+        let generation = self.generation;
         *self = Self::default();
+        self.generation = generation;
     }
 }
 
