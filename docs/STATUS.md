@@ -57,12 +57,32 @@ Reconciled with upstream `02ee0585`:
 - stationary view position for tile IPC, station/gesture restriction;
 - HDR screencopy uses `CaptureBuffer` and the native portal `node_sink` path.
 
+Added on top of the elite base after the initial merge:
+
+- KDE output order (`kde_output_order_v1`) and KDE colour picker D-Bus interface.
+- Global post-process shaders (`global-shader`): multi-pass chains, feedback
+  (`niri_prev`/`niri_buffer`), `niri_screen`/`niri_source`, region/cursor mode,
+  redraw intelligence and black-seeded first frame.
+- Scoped shaders: `region-shader` blocks and per-window `window-rule { shader }`
+  chains with content-addressed compile cache and watched-file hot reload.
+- Named `window-shaders`/`output-shaders` presets, per-output shader rules,
+  `toggle-window-shader`/`cycle-window-shader` and
+  `toggle-output-shader`/`cycle-output-shader` actions.
+- Focus-ring shaders: animated wax/rainbow ring, per-window watched-file
+  decoration shaders, padding envelopes, hot reload.
+- Overview runtime zoom presets and `overview-zoom-cycle/in/out` actions.
+- Layer-rule background-effect `ignore-opacity` (alpha-mask surface sampling).
+- Hidden workspaces (`hidden`, `toggle-workspace-visibility`, hidden-aware
+  focus/IPC/unhide rules) and sticky windows (`open-sticky`,
+  `toggle-window-sticky`, monitor-level sticky space), plus
+  `float-above-fullscreen`.
+
 Verified on this branch:
 
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 666 tests |
+| `cargo test --workspace` | pass, 739 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
 | `cargo fmt --check` | pass |
 | `cargo build --release` | not re-run after the merge |
