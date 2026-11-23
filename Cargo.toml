@@ -4,7 +4,7 @@ members = [
     "niri-ipc",
     "niri-visual-tests",
 ]
-exclude = ["better-companion", "better-portal", "better-monitor", "better-session", "better-shot", "better-wallpaper"]
+exclude = ["better-companion", "better-portal", "better-monitor", "better-session", "better-shot", "better-wallpaper", "better-settings"]
 
 [workspace.package]
 version = "26.4.0-elite"

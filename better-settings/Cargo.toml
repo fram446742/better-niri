@@ -1,0 +1,25 @@
+[package]
+name = "better-settings"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+rust-version = "1.80"
+
+[features]
+default = ["gui"]
+gui = ["dep:gtk4"]
+
+[dependencies]
+serde_json = "1"
+gtk4 = { version = "0.10", optional = true }
+
+[[bin]]
+name = "better-settings"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "better-settingsctl"
+path = "src/bin/settingsctl.rs"
+
+[workspace]
