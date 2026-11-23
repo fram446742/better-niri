@@ -16,6 +16,11 @@ use serde_json::Value;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Auto-tracked parking lot with one entry per open window.
+pub const AUTO_WINDOWS: &str = "auto:windows";
+/// Auto-tracked parking lot with one entry per workspace.
+pub const AUTO_WORKSPACES: &str = "auto:workspaces";
+
 /// One action exposed by a bounded context.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionInfo {
@@ -88,6 +93,12 @@ pub trait Context: Send + Sync {
 
     /// Optional named sequence, used by the registry's `automation.run` support.
     fn sequence(&self, _name: &str) -> Option<Vec<Step>> {
+        None
+    }
+
+    /// Optional rule evaluation for `rules.run`; returns the steps to execute
+    /// for `window` (or every tracked window when `None`).
+    fn matched_steps(&self, _window: Option<u64>) -> Option<Result<Vec<Step>, String>> {
         None
     }
 }
@@ -174,6 +185,9 @@ impl Registry {
         if namespace == "automation" && action == "run" {
             return self.run_automation(params);
         }
+        if namespace == "rules" && action == "run" {
+            return self.run_rules(params);
+        }
 
         let context = self
             .contexts
@@ -195,10 +209,33 @@ impl Registry {
             .sequence(name)
             .ok_or_else(|| format!("unknown automation sequence `{name}`"))?;
 
+        let results = self.dispatch_steps(steps, "automation.run")?;
+        Ok(serde_json::json!({ "name": name, "results": results }))
+    }
+
+    fn run_rules(&self, params: &Value) -> ContextResult {
+        let window = params.get("window").and_then(Value::as_u64);
+        let context = self
+            .contexts
+            .get("rules")
+            .ok_or_else(|| "rules context is not registered".to_owned())?;
+        let steps = context
+            .matched_steps(window)
+            .ok_or_else(|| "rules context did not provide rule evaluation".to_owned())??;
+        let results = self.dispatch_steps(steps, "rules.run")?;
+        Ok(serde_json::json!({
+            "window": window,
+            "results": results,
+        }))
+    }
+
+    fn dispatch_steps(&self, steps: Vec<Step>, caller: &str) -> Result<Vec<Value>, String> {
         let mut results = Vec::with_capacity(steps.len());
         for step in steps {
-            if step.namespace == "automation" && step.action == "run" {
-                return Err("automation.run cannot call itself".to_owned());
+            if (step.namespace == "automation" && step.action == "run")
+                || (step.namespace == "rules" && step.action == "run")
+            {
+                return Err(format!("{caller} cannot call itself"));
             }
             let value = self.call(&step.namespace, &step.action, &step.params)?;
             results.push(serde_json::json!({
@@ -207,7 +244,7 @@ impl Registry {
                 "value": value,
             }));
         }
-        Ok(serde_json::json!({ "name": name, "results": results }))
+        Ok(results)
     }
 }
 

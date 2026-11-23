@@ -16,7 +16,8 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-automation` | `automation.*` | Named action sequences executed through the registry |
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
 | `companion-system` | `system.*` | Ping, status and paths |
-| `companion-niri` | `compositor.*`, `parker.*` | niri IPC bridge (actions/queries + event tracker) and compositor-side park/restore |
+| `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
+| `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore and run-or-raise/singleton |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
 
@@ -84,6 +85,25 @@ companionctl call parker list
 Parking minimizes the window(s) and records their snapshots in the `parker`
 lot; restoring unminimizes them (and optionally focuses the workspace).
 `park-workspace` minimizes every window tracked for that workspace.
+
+## Rules and run-or-raise (Phase B)
+
+```sh
+# Run-or-raise: focus a matching window, or spawn it.
+companionctl call windows run-or-raise '{"app_id":"firefox","spawn":["firefox"]}'
+companionctl call windows singleton '{"app_id":"Alacritty","spawn_sh":"alacritty"}'
+companionctl call windows find '{"title":"Mozilla"}'
+
+# Rules match auto-tracked windows and carry steps.
+companionctl call rules set '{
+  "name":"browser",
+  "match":{"app_id":"firefox"},
+  "steps":[{"namespace":"parker","action":"park","params":{}}]
+}'
+companionctl call rules explain '{"window":10}'
+companionctl call rules apply '{"window":10}'
+companionctl call rules run '{"window":10}'   # registry executes the steps
+```
 
 ## Contexts
 

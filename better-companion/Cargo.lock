@@ -28,6 +28,7 @@ dependencies = [
  "companion-hooks",
  "companion-niri",
  "companion-parking",
+ "companion-rules",
  "companion-system",
  "serde_json",
 ]
@@ -57,6 +58,16 @@ name = "companion-parking"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "companion-rules"
+version = "0.1.0"
+dependencies = [
+ "companion-core",
+ "companion-parking",
  "serde",
  "serde_json",
 ]
