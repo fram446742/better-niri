@@ -130,17 +130,34 @@ See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. A per-keyboard branch
 (`integration/biri-per-keyboard`) is parked with the config/tests commits
 applied; it is core input work and resumes next.
 
-## Next steps
+## What is still open
 
-1. Runtime-test the elite branch on AMD/Intel/Nvidia and multi-monitor. Keep the
-   currently running compositor untouched.
-2. Use `better-nsticky`'s fake-niri/e2e harness for IPC-level tests of new
-   actions, and headless `niri-visual-tests` for grid/minimise/shader geometry.
-3. Add the remaining biri features on top: hidden workspaces, virtual/isolated
-   outputs, sticky floating windows, per-keyboard config, vertical axis,
-   shader pipeline and carousel.
-4. Add Naxdy's KDE screenshot/colour-picker/output-order and `org_kde_kwin_blur`.
-5. Add demoji's `block-out-blur`; investigate PR #4750 texture-cache cleanup.
-6. Integrate better-nsticky as a compatibility client (delegate sticky to the
-   compositor, keep staging/scratchpads).
-7. Only then consider moving the branch to `main`.
+Ordered by plan value. Each item names the upstream references so it can be
+picked up without re-auditing.
+
+1. **Hardware validation** of the current branch on AMD/Intel/Nvidia and
+   multi-monitor (HDR, VRR, tearing, explicit sync, DPCM, multi-GPU,
+   screencasting). The running compositor must stay untouched; use the
+   headless/visual-test harness.
+2. **Carousel cover-flow redesign** — biri `fbf672f4`…`54887e66`
+   (`carousel_ring`/rotation, damage-gated `PanelSource`s `f8dcd26d`,
+   `0d13d718`, cover-flow stack `bb818388`, concave panels `f0603a62`,
+   pull-back `6d4d5542`, click-to-rotate `38a9513e`, lens focus-jump
+   `54887e66`). The panel shader (`424ec5fb`) is already in place.
+3. **Portrait / vertical main axis** — biri `b30284c7` (rewrites the scrolling
+   axis; large).
+4. **Vulkan renderer on the niri side** — better-smithay has the Vulkan
+   renderer; niri still wires only GLES.
+5. **KDE screenshot2** — `kde/main` `src/dbus/kwin_screenshot2.rs` needs
+   Naxdy's capture abstraction; colour picker and output order are already
+   integrated.
+6. **Ecosystem** — `better-portal` (separate daemon), `better-companion`
+   (workspace with `companion-core`, `-parking`, `-automation`, `-hooks`,
+   `-system`, `companionctl`), and the companions listed in `ECOSYSTEM.md`.
+   Companion repos start only after Phase 1.
+7. **Remaining built-in module features** — Cargo features for `effects`,
+   `navigation`, `cursor` and `vulkan` (the `kde` feature is done), so a
+   minimal build can drop them; the code is currently always compiled with
+   `kde` gated.
+8. **Multi-action binds** — deferred cross-cutting refactor touching ~59
+   bind/config/IPC/UI conflict points; DWT is already integrated separately.
