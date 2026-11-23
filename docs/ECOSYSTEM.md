@@ -293,4 +293,5 @@ backend (fullscreen/interactive screenshot and colour picking) and proxies the
 ScreenCast backend (CreateSession/SelectSources/Start plus Session/Request
 Close) to the compositor's existing portal backend, with the PipeWire node ids
 passed through. Interactive screenshots use an external layer-shell
-`better-portal-picker`; ScreenCast selection still comes from niri.
+`better-portal-picker`; ScreenCast output selection is also external, via
+niri's `org.better.portal.ScreenCastSelection` API.

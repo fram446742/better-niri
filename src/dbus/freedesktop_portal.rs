@@ -25,7 +25,7 @@ use super::gnome_shell_screenshot::{file_uri, ScreenshotToNiri};
 use super::mutter_screen_cast::{CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId};
 use super::niri_portal_screen_cast::{
     validate_selection, PickSourcesReply, PickSourcesRequest, PickerCursorMode, PickerOptions,
-    PickerPersistMode, PickerRequestId, PickerSourceTypes,
+    PickerPersistMode, PickerRequestId, PickerSelection, PickerSourceTypes,
 };
 use super::request_name;
 use crate::backend::IpcOutputMap;
@@ -67,6 +67,8 @@ struct Shared {
 struct SessionState {
     owner: OwnedUniqueName,
     select: Option<SelectedOptions>,
+    /// Selection supplied by an external picker through the niri selection API.
+    forced_selection: Option<PickerSelection>,
     cast_session: Option<CastSessionId>,
     started: bool,
     /// Closing this channel wakes up any pending Start call.
@@ -190,6 +192,7 @@ impl ScreenCastBackend {
         let state = SessionState {
             owner,
             select: None,
+            forced_selection: None,
             cast_session: None,
             started: false,
             closed_tx,
@@ -276,7 +279,7 @@ impl ScreenCastBackend {
         debug!(%session_handle, app_id, "portal Start");
 
         // Extract what we need from the session under the lock.
-        let (select, closed_rx) = {
+        let (select, forced_selection, closed_rx) = {
             let mut sessions = self.0.sessions.lock().unwrap();
             let Some(state) = sessions.get_mut(&session_handle) else {
                 return Err(fdo::Error::Failed("no such session".to_owned()));
@@ -292,8 +295,19 @@ impl ScreenCastBackend {
             state.started = true;
             (
                 state.select.clone().unwrap_or_default(),
+                state.forced_selection.take(),
                 state.closed_rx.clone(),
             )
+        };
+
+        // Options describe what the client asked SelectSources for; both forced
+        // and picker selections must satisfy them.
+        let picker_options = PickerOptions {
+            app_id: app_id.clone(),
+            source_types: select.source_types,
+            multiple: select.multiple,
+            cursor_mode: select.picker_cursor_mode,
+            persist_mode: select.persist_mode,
         };
 
         // Try restoring a previous selection without prompting.
@@ -302,7 +316,18 @@ impl ScreenCastBackend {
             .as_ref()
             .and_then(|restore| self.resolve_restored_monitors(&select, restore));
 
-        let (sources, persist_mode, creation_time) = if let Some(sources) = restored {
+        // An external picker (better-portal-picker) can supply the selection
+        // through `org.better.portal.ScreenCastSelection`; consume it instead of
+        // showing the compositor's picker.
+        let (sources, persist_mode, creation_time) = if let Some(forced) = forced_selection {
+            match validate_selection(&picker_options, forced) {
+                Ok((sources, persist_mode)) => (sources, persist_mode, None),
+                Err(err) => {
+                    warn!("forced screen cast selection is invalid: {err}");
+                    return Ok((RESPONSE_ERROR, StartResults::default()));
+                }
+            }
+        } else if let Some(sources) = restored {
             debug!("restored screen cast selection without the picker");
             let creation_time = select.restore.as_ref().unwrap().creation_time;
             (sources, select.persist_mode, Some(creation_time))
@@ -375,14 +400,7 @@ impl ScreenCastBackend {
                 }
             };
 
-            let options = PickerOptions {
-                app_id: String::new(),
-                source_types: select.source_types,
-                multiple: select.multiple,
-                cursor_mode: select.picker_cursor_mode,
-                persist_mode: select.persist_mode,
-            };
-            match validate_selection(&options, selection) {
+            match validate_selection(&picker_options, selection) {
                 Ok((sources, persist_mode)) => (sources, persist_mode, None),
                 Err(err) => {
                     warn!("screen cast picker returned an invalid selection: {err}");
@@ -938,6 +956,74 @@ async fn remove_request(server: &ObjectServer, path: &OwnedObjectPath) {
     }
 }
 
+/// Internal selection API used by the external `better-portal-picker`.
+///
+/// This lives on the compositor's portal bus next to the ScreenCast backend.
+/// better-portal sets the selected output before forwarding Start; niri then
+/// skips its own picker and streams the forced selection.
+#[derive(Clone)]
+pub struct ScreenCastSelectionBackend(Arc<Shared>);
+
+fn parse_selection_sources(sources: &[(u32, String)]) -> Result<Vec<StreamTargetId>, fdo::Error> {
+    if sources.is_empty() {
+        return Err(fdo::Error::InvalidArgs(
+            "selection must contain at least one source".to_owned(),
+        ));
+    }
+    let mut parsed = Vec::with_capacity(sources.len());
+    for (kind, value) in sources {
+        match *kind {
+            SOURCE_TYPE_MONITOR => parsed.push(StreamTargetId::Output {
+                name: value.clone(),
+            }),
+            SOURCE_TYPE_WINDOW => {
+                let id = value
+                    .parse::<u64>()
+                    .map_err(|_| fdo::Error::InvalidArgs(format!("invalid window id `{value}`")))?;
+                parsed.push(StreamTargetId::Window { id });
+            }
+            other => {
+                return Err(fdo::Error::InvalidArgs(format!(
+                    "unknown screen cast source type {other}"
+                )))
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+#[interface(name = "org.better.portal.ScreenCastSelection")]
+impl ScreenCastSelectionBackend {
+    async fn set_selection(
+        &self,
+        session_handle: OwnedObjectPath,
+        sources: Vec<(u32, String)>,
+        persist_mode: u32,
+    ) -> fdo::Result<()> {
+        let sources = parse_selection_sources(&sources)?;
+        let persist_mode = PickerPersistMode::try_from(persist_mode)
+            .map_err(|err| fdo::Error::InvalidArgs(err.to_owned()))?;
+        let mut sessions = self.0.sessions.lock().unwrap();
+        let Some(state) = sessions.get_mut(&session_handle) else {
+            return Err(fdo::Error::Failed("no such session".to_owned()));
+        };
+        state.forced_selection = Some(PickerSelection {
+            sources,
+            persist_mode,
+        });
+        Ok(())
+    }
+
+    async fn clear_selection(&self, session_handle: OwnedObjectPath) -> fdo::Result<()> {
+        let mut sessions = self.0.sessions.lock().unwrap();
+        let Some(state) = sessions.get_mut(&session_handle) else {
+            return Err(fdo::Error::Failed("no such session".to_owned()));
+        };
+        state.forced_selection = None;
+        Ok(())
+    }
+}
+
 fn sender_from_header(header: &Header<'_>) -> fdo::Result<OwnedUniqueName> {
     header
         .sender()
@@ -968,6 +1054,8 @@ pub fn start(
         .at(PORTAL_PATH, ScreenCastBackend(shared.clone()))?;
     conn.object_server()
         .at(PORTAL_PATH, ScreenshotBackend(shared.clone()))?;
+    conn.object_server()
+        .at(PORTAL_PATH, ScreenCastSelectionBackend(shared.clone()))?;
     request_name(&conn, BUS_NAME, monitor)?;
 
     let async_conn = conn.inner().clone();
@@ -1165,5 +1253,35 @@ mod tests {
             ..Default::default()
         };
         assert!(parse_select_options(bad).is_err());
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn parses_output_and_window_sources() {
+        let sources = parse_selection_sources(&[
+            (SOURCE_TYPE_MONITOR, "eDP-1".to_owned()),
+            (SOURCE_TYPE_WINDOW, "42".to_owned()),
+        ])
+        .unwrap();
+        assert_eq!(
+            sources,
+            vec![
+                StreamTargetId::Output {
+                    name: "eDP-1".to_owned()
+                },
+                StreamTargetId::Window { id: 42 }
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_unknown_and_bad_window_sources() {
+        assert!(parse_selection_sources(&[]).is_err());
+        assert!(parse_selection_sources(&[(99, "x".to_owned())]).is_err());
+        assert!(parse_selection_sources(&[(SOURCE_TYPE_WINDOW, "nope".to_owned())]).is_err());
     }
 }
