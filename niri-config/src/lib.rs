@@ -3006,6 +3006,7 @@ mod tests {
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,
+                        ignore_opacity: None,
                         noise: None,
                         saturation: None,
                         liquid_glass: None,
@@ -3017,6 +3018,7 @@ mod tests {
                         background_effect: BackgroundEffectRule {
                             xray: None,
                             blur: None,
+                            ignore_opacity: None,
                             noise: None,
                             saturation: None,
                             liquid_glass: None,
@@ -3064,6 +3066,7 @@ mod tests {
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,
+                        ignore_opacity: None,
                         noise: None,
                         saturation: None,
                         liquid_glass: None,
@@ -3074,6 +3077,7 @@ mod tests {
                         background_effect: BackgroundEffectRule {
                             xray: None,
                             blur: None,
+                            ignore_opacity: None,
                             noise: None,
                             saturation: None,
                             liquid_glass: None,

@@ -210,6 +210,10 @@ impl Shaders {
                     UniformName::new("niri_linear_scale", UniformType::_1f),
                     UniformName::new("niri_linear_to_ref", UniformType::_1f),
                     UniformName::new("niri_hdr_to_sdr", UniformType::_1f),
+                    UniformName::new("surface_to_geo", UniformType::Matrix3x3),
+                    UniformName::new("alpha_mask_enabled", UniformType::_1i),
+                    UniformName::new("alpha_threshold", UniformType::_1f),
+                    UniformName::new("surface_tex", UniformType::_1i),
                 ],
             )
             .map_err(|err| {

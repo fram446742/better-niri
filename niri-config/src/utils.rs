@@ -93,6 +93,76 @@ impl MergeWith<Flag> for bool {
     }
 }
 
+impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for BoolOrFloat {
+    fn type_check(
+        type_name: &Option<knuffel::span::Spanned<knuffel::ast::TypeName, S>>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) {
+        if let Some(type_name) = &type_name {
+            ctx.emit_error(DecodeError::unexpected(
+                type_name,
+                "type name",
+                "no type name expected for this node",
+            ));
+        }
+    }
+
+    fn raw_decode(
+        val: &knuffel::span::Spanned<knuffel::ast::Literal, S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        match &**val {
+            knuffel::ast::Literal::Bool(b) => Ok(if *b {
+                BoolOrFloat::True
+            } else {
+                BoolOrFloat::False
+            }),
+            knuffel::ast::Literal::Decimal(ref value) => match value.try_into() {
+                Ok(v) => {
+                    if (0.0..=1.0).contains(&v) {
+                        Ok(BoolOrFloat::Threshold(v))
+                    } else {
+                        ctx.emit_error(DecodeError::conversion(
+                            val,
+                            "threshold must be between 0.0 and 1.0",
+                        ));
+                        Ok(BoolOrFloat::False)
+                    }
+                }
+                Err(e) => {
+                    ctx.emit_error(DecodeError::conversion(val, e));
+                    Ok(BoolOrFloat::False)
+                }
+            },
+            knuffel::ast::Literal::Int(ref value) => match value.try_into() {
+                Ok(v) => {
+                    let v: i64 = v;
+                    if (0..=1).contains(&v) {
+                        Ok(BoolOrFloat::Threshold(v as f64))
+                    } else {
+                        ctx.emit_error(DecodeError::conversion(
+                            val,
+                            "threshold must be between 0.0 and 1.0",
+                        ));
+                        Ok(BoolOrFloat::False)
+                    }
+                }
+                Err(e) => {
+                    ctx.emit_error(DecodeError::conversion(val, e));
+                    Ok(BoolOrFloat::False)
+                }
+            },
+            _ => {
+                ctx.emit_error(DecodeError::unsupported(
+                    val,
+                    "expected a bool or a number between 0.0 and 1.0",
+                ));
+                Ok(BoolOrFloat::False)
+            }
+        }
+    }
+}
+
 impl<S: knuffel::traits::ErrorSpan, const MIN: i32, const MAX: i32> knuffel::DecodeScalar<S>
     for FloatOrInt<MIN, MAX>
 {
@@ -243,72 +313,5 @@ pub fn expand_home_path<T, S: knuffel::traits::ErrorSpan>(
     } else {
         let base = ctx.get::<BasePath>().unwrap();
         Ok(base.0.join(path))
-    }
-}
-
-impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for BoolOrFloat {
-    fn type_check(
-        type_name: &Option<knuffel::span::Spanned<knuffel::ast::TypeName, S>>,
-        ctx: &mut knuffel::decode::Context<S>,
-    ) {
-        if let Some(type_name) = &type_name {
-            ctx.emit_error(DecodeError::unexpected(
-                type_name,
-                "type name",
-                "no type name expected for this node",
-            ));
-        }
-    }
-
-    fn raw_decode(
-        val: &knuffel::span::Spanned<knuffel::ast::Literal, S>,
-        ctx: &mut knuffel::decode::Context<S>,
-    ) -> Result<Self, DecodeError<S>> {
-        match &**val {
-            knuffel::ast::Literal::Bool(b) => Ok(if *b {
-                BoolOrFloat::True
-            } else {
-                BoolOrFloat::False
-            }),
-            knuffel::ast::Literal::Decimal(ref value) => match value.try_into() {
-                Ok(v) => {
-                    if (0.0..=1.0).contains(&v) {
-                        Ok(BoolOrFloat::Threshold(v))
-                    } else {
-                        ctx.emit_error(DecodeError::conversion(
-                            val,
-                            "threshold must be between 0.0 and 1.0",
-                        ));
-                        Ok(BoolOrFloat::False)
-                    }
-                }
-                Err(e) => {
-                    ctx.emit_error(DecodeError::conversion(val, e));
-                    Ok(BoolOrFloat::False)
-                }
-            },
-            knuffel::ast::Literal::Int(ref value) => match value.try_into() {
-                Ok(v) => {
-                    let v: i64 = v;
-                    if (0..=1).contains(&v) {
-                        Ok(BoolOrFloat::Threshold(v as f64))
-                    } else {
-                        ctx.emit_error(DecodeError::conversion(
-                            val,
-                            "threshold must be between 0.0 and 1.0",
-                        ));
-                        Ok(BoolOrFloat::False)
-                    }
-                }
-                Err(e) => {
-                    ctx.emit_error(DecodeError::conversion(val, e));
-                    Ok(BoolOrFloat::False)
-                }
-            },
-            _ => {
-                ctx.emit_error(DecodeError::conversion(val, "expected a bool or a float"));
-                Ok(BoolOrFloat::False)
-            }
-        }
     }
 }
