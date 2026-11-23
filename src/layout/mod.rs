@@ -2305,7 +2305,11 @@ impl<W: LayoutElement> Layout<W> {
         let Some(active) = self.active_output().cloned() else {
             return;
         };
-        if self.carousel_outputs().iter().any(|m| m.output() == &active) {
+        if self
+            .carousel_outputs()
+            .iter()
+            .any(|m| m.output() == &active)
+        {
             self.carousel_rotation = 0.;
             self.carousel_rotation_anim = None;
         }

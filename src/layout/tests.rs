@@ -12813,7 +12813,8 @@ fn carousel_outputs_includes_host_and_reset_centers_on_active() {
     ); // host included
 
     layout.reset_carousel_center();
-    assert_eq!(layout.carousel_rotation_target(), 0.0); // centered (rotation snapped to host) on active host "A"
+    assert_eq!(layout.carousel_rotation_target(), 0.0); // centered (rotation snapped to host) on
+                                                        // active host "A"
 }
 
 #[test]

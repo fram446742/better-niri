@@ -517,9 +517,9 @@ impl MergeWith<OverviewPart> for Overview {
                     (reveal, assembled)
                 } else {
                     warn!(
-                        "overview.consolidated-carousel requires 0 < assembled-zoom < reveal-zoom < 1 \
+                    "overview.consolidated-carousel requires 0 < assembled-zoom < reveal-zoom < 1 \
                          (got assembled={assembled}, reveal={reveal}); using defaults 0.15 / 0.4"
-                    );
+                );
                     (0.4, 0.15)
                 };
             self.consolidated_carousel = Some(ConsolidatedCarousel {
