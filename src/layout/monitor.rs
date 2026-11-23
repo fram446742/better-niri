@@ -2482,6 +2482,32 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    /// Like [`Self::window_under`], but resolves the workspace/window hit at a caller-supplied
+    /// `zoom` (via [`Self::workspaces_with_render_geo_at_zoom`]) instead of this monitor's own
+    /// live `overview_zoom()`. Used for the carousel lens focus-jump, which hit-tests a *remote*
+    /// monitor's content baked at the panel prepass's `fill_zoom`, not this monitor's local
+    /// overview state.
+    pub fn window_under_at_zoom(
+        &self,
+        zoom: f64,
+        pos: Point<f64, Logical>,
+    ) -> Option<(&W, HitType)> {
+        let (ws, geo) = self
+            .workspaces_with_render_geo_at_zoom(zoom)
+            .find_map(|(ws, geo)| {
+                // Extend width to entire output, mirroring `Self::workspace_under`.
+                let loc = Point::from((0., geo.loc.y));
+                let size = Size::from((self.view_size.w, geo.size.h));
+                let bounds = Rectangle::new(loc, size);
+
+                bounds.contains(pos).then_some((ws, geo))
+            })?;
+
+        let pos_within_workspace = (pos - geo.loc).downscale(zoom);
+        let (win, hit) = ws.window_under(pos_within_workspace)?;
+        Some((win, hit.to_activate()))
+    }
+
     pub fn resize_edges_under(&self, pos_within_output: Point<f64, Logical>) -> Option<ResizeEdge> {
         if self.overview_progress.is_some() {
             return None;
