@@ -94,7 +94,7 @@ operate the desktop without the shell.
 | better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
 | better-audio | PipeWire routing | new, exploratory |
 | better-wallpaper | Scenes, per-workspace wallpapers | **started**: `better-wallpaper/` scenes + focus watcher |
-| better-settings | Unified GTK4 settings frontend | new, medium-high |
+| better-settings | Unified GTK4 settings frontend | **started**: `better-settings/` text-preserving model + GTK4 UI + `settingsctl` |
 | better-portal | XDG portal backend + external layer-shell picker daemon | committed, after Phase 1 |
 | better-noctalia-plugins | Shell integration | new, later |
 

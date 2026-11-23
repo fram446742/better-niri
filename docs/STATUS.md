@@ -190,7 +190,10 @@ picked up without re-auditing.
    `wl-copy` and `satty` post-processing; `better-wallpaper/` maps named
    workspace scenes to images and applies them once or by following niri's
    event stream (`swaybg`/`swww` style command templates, one process per
-   output). Remaining apps: better-sidepanels, better-audio, better-settings.
+   output); `better-settings/` edits niri's KDL config through a
+   text-preserving patcher (comments/formatting kept, timestamped backups) with
+   a GTK4 frontend plus a scriptable `better-settingsctl`. Remaining apps:
+   better-sidepanels, better-audio.
    Remaining: richer swallowing rules and the companion apps from
    `ECOSYSTEM.md`.
    `better-portal` extraction from the compositor's existing portal backend is
