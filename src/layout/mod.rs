@@ -3937,7 +3937,6 @@ impl<W: LayoutElement> Layout<W> {
         ((cc.reveal_zoom - zoom) / (cc.reveal_zoom - cc.assembled_zoom)).clamp(0., 1.)
     }
 
-
     /// Overview is open, the carousel is configured, and the rotation has
     /// settled (no animation in flight) on a non-host output.
     pub fn in_carousel_lens(&self) -> bool {
@@ -8199,7 +8198,6 @@ impl<W: LayoutElement> Layout<W> {
             && self
                 .active_workspace()
                 .is_none_or(|ws| ws.active_ignored_floating_window_in_grid().is_none())
-
     }
 
     /// Whether the consolidated carousel is configured (regardless of

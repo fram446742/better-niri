@@ -129,11 +129,7 @@ pub fn sampling_matrix(corners: &[[f64; 2]; 4]) -> Option<glam::Mat3> {
 pub fn point_in_quad_uv(corners: &[[f64; 2]; 4], p: (f64, f64)) -> Option<(f64, f64)> {
     let m = sampling_matrix(corners)?;
     let (bx, by, bw, bh) = bounding_box(corners);
-    let norm = glam::Vec3::new(
-        ((p.0 - bx) / bw) as f32,
-        ((p.1 - by) / bh) as f32,
-        1.0,
-    );
+    let norm = glam::Vec3::new(((p.0 - bx) / bw) as f32, ((p.1 - by) / bh) as f32, 1.0);
     let s = m * norm;
     if s.z == 0.0 {
         return None;

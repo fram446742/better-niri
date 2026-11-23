@@ -4050,12 +4050,14 @@ impl State {
 
                     if let Some(ring_pos) = hit_ring_pos {
                         let rotation = self.niri.layout.carousel_rotation();
-                        let settled = rotation == rotation.round()
-                            && !self.niri.layout.carousel_rotating();
+                        let settled =
+                            rotation == rotation.round() && !self.niri.layout.carousel_rotating();
                         let target = self.niri.layout.carousel_rotation_target();
 
                         if !(settled && ring_pos.round() == target.round()) {
-                            self.niri.layout.carousel_request_rotate_to(ring_pos.round());
+                            self.niri
+                                .layout
+                                .carousel_request_rotate_to(ring_pos.round());
                             // FIXME: granular.
                             self.niri.queue_redraw_all();
                             return;
