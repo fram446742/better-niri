@@ -1106,6 +1106,7 @@ impl State {
                 target: RenderTarget::ScreenCapture,
                 intent: RenderIntent::Normal,
                 xray: None,
+                shader_time: self.niri.window_shader_start.elapsed().as_secs_f32(),
             };
             // Render the window geometry at the origin, so element positions are in window
             // coordinates.

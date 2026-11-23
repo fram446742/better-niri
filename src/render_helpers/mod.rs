@@ -67,6 +67,9 @@ pub struct RenderCtx<'a, R> {
     pub target: RenderTarget,
     pub intent: RenderIntent,
     pub xray: Option<&'a Xray>,
+    /// Seconds since the compositor's window-shader time origin, bound as `niri_time` for
+    /// per-window scoped shaders. `0.0` on incidental render paths that don't animate windows.
+    pub shader_time: f32,
 }
 
 impl<'a, R> RenderCtx<'a, R> {
@@ -78,6 +81,7 @@ impl<'a, R> RenderCtx<'a, R> {
             target: self.target,
             intent: self.intent,
             xray: self.xray,
+            shader_time: self.shader_time,
         }
     }
 }
@@ -89,6 +93,7 @@ impl<'a, R: AsGlesRenderer> RenderCtx<'a, R> {
             target: self.target,
             intent: self.intent,
             xray: self.xray,
+            shader_time: self.shader_time,
         }
     }
 }
@@ -154,6 +159,12 @@ impl RenderTarget {
         self.should_block_out(block_out_from)
             && block_out_from.is_some_and(|rule| rule.kind == BlockOutKind::Hide)
     }
+}
+
+/// Whether shaders (global / region / window) should render for this target. Always on for the
+/// real Output; on for capture targets (Screencast / ScreenCapture) only when opted in.
+pub fn target_renders_shaders(target: RenderTarget, capture_enabled: bool) -> bool {
+    target == RenderTarget::Output || capture_enabled
 }
 
 impl ToRenderElement for BakedBuffer<TextureBuffer<GlesTexture>> {

@@ -358,6 +358,12 @@ pub trait LayoutElement {
 
     fn rules(&self) -> &ResolvedWindowRules;
 
+    /// The shader that should render for this window right now: the runtime override (from the
+    /// toggle/cycle-window-shader actions) if one is active, the window-rule shader otherwise.
+    fn effective_shader(&self) -> Option<&crate::window::ResolvedShader> {
+        self.rules().shader.as_ref()
+    }
+
     /// Runs periodic clean-up tasks.
     fn refresh(&self);
 
@@ -441,6 +447,7 @@ pub struct Options {
     pub disable_resize_throttling: bool,
     pub disable_transactions: bool,
     pub deactivate_unfocused_windows: bool,
+    pub shaders_in_capture: bool,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -724,6 +731,7 @@ impl Options {
             disable_resize_throttling: config.debug.disable_resize_throttling,
             disable_transactions: config.debug.disable_transactions,
             deactivate_unfocused_windows: config.debug.deactivate_unfocused_windows,
+            shaders_in_capture: config.shaders_in_capture,
         }
     }
 
@@ -1837,6 +1845,36 @@ impl<W: LayoutElement> Layout<W> {
         let mon_windows = mon.workspaces.iter().flat_map(|ws| ws.windows());
 
         moving_window.chain(mon_windows)
+    }
+
+    /// Windows currently visible on `output`: the on-screen tiles of the active workspace, plus
+    /// any window being interactively moved onto this output. Unlike [`Self::windows_for_output`],
+    /// this excludes inactive workspaces and columns scrolled off the viewport — used to decide
+    /// whether an animating window shader must force continuous redraws, so hidden windows don't
+    /// peg the GPU. NOTE: only meaningful when the overview is closed; in the overview several
+    /// workspaces are shown zoomed out and the per-tile `visible` flag reflects normal-view
+    /// culling, so callers should fall back to `windows_for_output` while the overview is open.
+    pub fn visible_windows_for_output(&self, output: &Output) -> impl Iterator<Item = &W> + '_ {
+        let MonitorSet::Normal { monitors, .. } = &self.monitor_set else {
+            panic!()
+        };
+
+        let moving_window = self
+            .interactive_move
+            .as_ref()
+            .and_then(|x| x.moving())
+            .filter(|move_| move_.output == *output)
+            .map(|move_| move_.tile.window())
+            .into_iter();
+
+        let mon = monitors.iter().find(|mon| &mon.output == output).unwrap();
+        let visible_windows = mon
+            .active_workspace_ref()
+            .tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
+            .map(|(tile, _, _)| tile.window());
+
+        moving_window.chain(visible_windows)
     }
 
     pub fn windows_for_output_mut(&mut self, output: &Output) -> impl Iterator<Item = &mut W> + '_ {

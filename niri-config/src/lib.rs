@@ -40,11 +40,14 @@ pub mod layer_rule;
 pub mod layout;
 pub mod misc;
 pub mod output;
+pub mod output_shader;
 pub mod recent_windows;
 pub mod region_shader;
 pub mod screen_cast_picker;
+pub mod shader_presets;
 pub mod utils;
 pub mod window_rule;
+pub mod window_shaders;
 pub mod workspace;
 
 pub use crate::animations::{Animation, Animations};
@@ -61,16 +64,21 @@ pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
 pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
+pub use crate::output_shader::{
+    OutputShaderPart, OutputShaderPassPart, OutputShaderPreset, OutputShadersPart,
+};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
 pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::screen_cast_picker::ScreenCastPicker;
-pub use crate::utils::FloatOrInt;
+pub use crate::shader_presets::{builtin_preset_source, ShaderPresetRefPart, BUILTIN_PRESET_NAMES};
 use crate::utils::{expand_home_path, Flag, MergeWith as _};
+pub use crate::utils::{BoolOrFloat, FloatOrInt};
 pub use crate::window_rule::{
     FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, ShaderRule,
     TearingContentType, WindowRule,
 };
+pub use crate::window_shaders::{WindowShaderPreset, WindowShadersPart};
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
 
 const RECURSION_LIMIT: u8 = 10;
@@ -83,6 +91,10 @@ pub struct Config {
     pub spawn_sh_at_startup: Vec<SpawnShAtStartup>,
     pub layout: Layout,
     pub prefer_no_csd: bool,
+    pub shaders_in_capture: bool,
+    /// Max frames per second for shader-driven continuous redraws (global/region/window shaders).
+    /// `0` = uncapped (redraw at the output's native refresh rate, the historical behaviour).
+    pub shader_animation_max_fps: u16,
     pub cursor: Cursor,
     pub screenshot_path: ScreenshotPath,
     pub clipboard: Clipboard,
@@ -107,6 +119,8 @@ pub struct Config {
     pub recent_windows: RecentWindows,
     pub screen_cast_picker: ScreenCastPicker,
     pub region_shaders: Vec<RegionShader>,
+    pub window_shaders: Vec<WindowShaderPreset>,
+    pub output_shaders: Vec<OutputShaderPreset>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +141,10 @@ pub enum ConfigPath {
         system_path: PathBuf,
     },
 }
+
+// Single-argument scalar node: `shader-animation-max-fps 30`.
+#[derive(knuffel::Decode)]
+struct ShaderAnimationMaxFps(#[knuffel(argument)] u16);
 
 // Newtypes for putting information into the knuffel context.
 struct BasePath(PathBuf);
@@ -185,6 +203,8 @@ where
                     | "layer-rule"
                     | "workspace"
                     | "region-shader"
+                    | "window-shaders"
+                    | "output-shaders"
                     | "include"
             ) && !seen.insert(name)
             {
@@ -243,6 +263,14 @@ where
                     let part = RegionShaderPart::decode_node(node, ctx)?;
                     config.borrow_mut().region_shaders.push(part.into());
                 }
+                "window-shaders" => {
+                    let part = WindowShadersPart::decode_node(node, ctx)?;
+                    config.borrow_mut().window_shaders.extend(part.presets);
+                }
+                "output-shaders" => {
+                    let part = OutputShadersPart::decode_node(node, ctx)?;
+                    config.borrow_mut().output_shaders.extend(part.presets);
+                }
 
                 // Single-part sections.
                 "binds" => {
@@ -266,6 +294,15 @@ where
 
                 "prefer-no-csd" => {
                     config.borrow_mut().prefer_no_csd = Flag::decode_node(node, ctx)?.0
+                }
+
+                "shaders-in-capture" => {
+                    config.borrow_mut().shaders_in_capture = Flag::decode_node(node, ctx)?.0
+                }
+
+                "shader-animation-max-fps" => {
+                    config.borrow_mut().shader_animation_max_fps =
+                        ShaderAnimationMaxFps::decode_node(node, ctx)?.0
                 }
 
                 "screenshot-path" => {
@@ -2094,6 +2131,7 @@ mod tests {
                             },
                         ),
                         layout: None,
+                        shader: None,
                     },
                     Output {
                         off: false,
@@ -2125,6 +2163,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        shader: None,
                     },
                     Output {
                         off: false,
@@ -2159,6 +2198,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        shader: None,
                     },
                 ],
             ),
@@ -2388,6 +2428,8 @@ mod tests {
                 },
             },
             prefer_no_csd: true,
+            shaders_in_capture: false,
+            shader_animation_max_fps: 0,
             cursor: Cursor {
                 xcursor_theme: "breeze_cursors",
                 xcursor_size: 16,
@@ -3588,6 +3630,8 @@ mod tests {
                 corner_radius: 16.0,
             },
             region_shaders: [],
+            window_shaders: [],
+            output_shaders: [],
         }
         "#);
     }
@@ -3871,5 +3915,25 @@ mod tests {
         assert_eq!(config.input.keyboard_named("Other").xkb.layout, "de");
         assert_eq!(config.input.keyboard_named("Ext").xkb.layout, "");
         assert_eq!(config.input.fallback_keyboard().xkb.layout, "");
+    }
+
+    #[test]
+    fn shaders_in_capture_parses() {
+        let on = Config::parse_mem("shaders-in-capture\n").unwrap();
+        assert!(on.shaders_in_capture);
+        let off = Config::parse_mem("").unwrap();
+        assert!(!off.shaders_in_capture);
+    }
+
+    #[test]
+    fn shader_animation_max_fps_parses() {
+        let capped = Config::parse_mem("shader-animation-max-fps 30\n").unwrap();
+        assert_eq!(capped.shader_animation_max_fps, 30);
+        // Absent → 0 (uncapped).
+        let unset = Config::parse_mem("").unwrap();
+        assert_eq!(unset.shader_animation_max_fps, 0);
+        // Explicit 0 is accepted and means uncapped.
+        let zero = Config::parse_mem("shader-animation-max-fps 0\n").unwrap();
+        assert_eq!(zero.shader_animation_max_fps, 0);
     }
 }

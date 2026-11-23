@@ -477,6 +477,37 @@ animations {
 //     // reads-cursor     // forces software cursor so the shader can read/transform the cursor
 // }
 
+// Named per-window shader presets for the toggle-window-shader and
+// cycle-window-shader binds (applied to the focused window at runtime).
+// window-shaders {
+//     preset "grayscale" {
+//         source "vec4 global_color(vec3 c) { vec3 s = tex2D_screen(c.xy).rgb; float g = dot(s, vec3(0.299, 0.587, 0.114)); return vec4(vec3(g), 1.0); }"
+//     }
+//     preset "fire" {
+//         path "~/.config/niri/shaders/fire.frag"
+//     }
+// }
+
+// Per-output colour filters. Built-ins: grayscale, invert, saturation (amount=),
+// temperature (kelvin=, 6500 is neutral). No GLSL required.
+//
+// output "eDP-1" {
+//     shader {
+//         preset "saturation" amount=1.4
+//     }
+// }
+//
+// Named presets for the toggle-output-shader and cycle-output-shader binds:
+//
+// output-shaders {
+//     preset "night" {
+//         preset "temperature" kelvin=3200
+//     }
+//     preset "mono" {
+//         preset "grayscale"
+//     }
+// }
+
 // Window rules let you adjust behavior for individual windows.
 // Find more information on the wiki:
 // https://niri-wm.github.io/niri/Configuration:-Window-Rules

@@ -215,6 +215,7 @@ fn capture(
         target: RenderTarget::Output,
         intent: RenderIntent::Normal,
         xray: None,
+        shader_time: 0.0,
     };
     layout
         .monitor_for_output(&env.output)

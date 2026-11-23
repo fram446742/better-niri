@@ -292,6 +292,7 @@ impl TestCase for Layout {
             target: RenderTarget::Output,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: 0.0,
         };
         self.layout
             .monitor_for_output(&self.output)

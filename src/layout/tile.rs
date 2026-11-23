@@ -4,7 +4,7 @@ use std::rc::Rc;
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
-use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::element::{Element, Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
@@ -25,6 +25,8 @@ use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
+use crate::render_helpers::scoped_shader_element::{ScopedShaderElement, ScopedSource};
+use crate::render_helpers::shaders::{ProgramType, Shaders};
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -162,6 +164,7 @@ niri_render_elements! {
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
+        Scoped = crate::render_helpers::scoped_shader_element::ScopedShaderElement,
     }
 }
 
@@ -1339,7 +1342,57 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        // If we're not resizing, render the window itself.
+        // If a per-window shader is configured and its program chain is compiled, push a
+        // capture-based scoped shader element ABOVE the window content (it is pushed first, so it
+        // is topmost and drawn last — capturing the composited window in its rectangle, then
+        // shading it). We do NOT suppress the normal window render: the window composites below and
+        // the shaded capture covers it. This is a region shader pinned to the window's geometry — a
+        // cheap framebuffer blit + shade — rather than rasterizing the window's surface tree into
+        // an offscreen every frame (which `OffscreenBuffer`'s `is_unique_reference` reset
+        // would force, since the shader element retains a clone of the offscreen texture
+        // across frames). Border, shadow and focus ring are emitted below and lie OUTSIDE
+        // the window rectangle, so they are not captured or shaded. Crash-safety: if the
+        // rule is absent or the program is missing, nothing is pushed and the window
+        // renders normally.
+        if !pushed_resize {
+            if let Some(resolved) = self.window.effective_shader().cloned().filter(|_| {
+                crate::render_helpers::target_renders_shaders(
+                    ctx.target,
+                    self.options.shaders_in_capture,
+                )
+            }) {
+                let have_program = Shaders::get(ctx.renderer)
+                    .program(ProgramType::Scoped(resolved.key, 0))
+                    .is_some();
+                if have_program {
+                    let area = Rectangle::new(window_render_loc, window_size);
+                    let size_phys = (
+                        (window_size.w * self.scale) as f32,
+                        (window_size.h * self.scale) as f32,
+                    );
+                    let n_passes = resolved.passes.len();
+                    let offscreens = (0..n_passes.saturating_sub(1))
+                        .map(|_| Rc::new(OffscreenBuffer::default()))
+                        .collect::<Vec<_>>();
+                    let elem = ScopedShaderElement::new(
+                        Id::new(),
+                        area,
+                        self.scale as f32,
+                        ctx.shader_time,      // niri_time: shared compositor origin
+                        (0.0, 0.0),           // niri_cursor = (0, 0) (v1)
+                        [0.0, 0.0, 1.0, 1.0], // region_norm: whole window
+                        size_phys,            // niri_output_size = window physical size
+                        resolved.key,
+                        n_passes,
+                        ScopedSource::Capture,
+                        offscreens,
+                    );
+                    push(elem.into());
+                }
+            }
+        }
+
+        // Render the window itself (composites below the shaded capture above, when present).
         let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
         if !pushed_resize {
             let geo = Rectangle::new(window_render_loc, window_size);
@@ -1639,6 +1692,8 @@ impl<W: LayoutElement> Tile<W> {
                 renderer,
                 intent: RenderIntent::Normal,
                 xray: xray.as_deref(),
+                // Snapshots are static captures for open/close animations; no live shader time.
+                shader_time: 0.0,
             },
             Point::from((0., 0.)),
             xray_pos,
@@ -1691,6 +1746,7 @@ impl<W: LayoutElement> Tile<W> {
                         renderer,
                         intent: RenderIntent::Normal,
                         xray: Some(xray),
+                        shader_time: 0.0,
                     },
                     Point::from((0., 0.)),
                     xray_pos,
@@ -1712,6 +1768,7 @@ impl<W: LayoutElement> Tile<W> {
                 renderer,
                 intent: RenderIntent::Normal,
                 xray: xray.as_deref(),
+                shader_time: 0.0,
             },
             Point::from((0., 0.)),
             xray_pos,

@@ -255,6 +255,9 @@ pub struct SavedKeyboardState {
 pub struct Niri {
     pub config: Rc<RefCell<Config>>,
 
+    /// Shared origin for per-window scoped shaders' `niri_time`. Set once at startup and never
+    /// reset, so all window shaders animate in-phase off one monotonic real-seconds clock.
+    pub window_shader_start: std::time::Instant,
     /// Output config from the config file.
     ///
     /// This does not include transient output config changes done via IPC. It is only used when
@@ -645,6 +648,46 @@ impl GlobalShaderChain {
     }
 }
 
+/// Decision for one frame of the `shader-animation-max-fps` throttle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShaderFrameDecision {
+    /// This is the first shader frame, or a full interval has elapsed: render it as a shader
+    /// frame and schedule the next wake one interval out.
+    Due,
+    /// Not yet due; the next shader frame is `remaining` away.
+    Wait(Duration),
+}
+
+/// Given when the last shader frame rendered, the current time, and the capped frame interval,
+/// decide whether this frame is due. Pure so it is unit-testable without a running compositor.
+fn decide_shader_frame(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    interval: Duration,
+) -> ShaderFrameDecision {
+    match last {
+        None => ShaderFrameDecision::Due,
+        Some(last) => {
+            let elapsed = now.saturating_duration_since(last);
+            if elapsed >= interval {
+                ShaderFrameDecision::Due
+            } else {
+                ShaderFrameDecision::Wait(interval - elapsed)
+            }
+        }
+    }
+}
+
+/// What to do with the per-output shader-throttle timer after a redraw decision.
+enum ThrottleAction {
+    /// Leave the currently-armed timer as-is.
+    Keep,
+    /// Cancel any pending timer.
+    Cancel,
+    /// Arm (replacing any pending) a one-shot wake this far out.
+    Arm(Duration),
+}
+
 pub struct OutputState {
     pub global: GlobalId,
     pub frame_clock: FrameClock,
@@ -652,6 +695,14 @@ pub struct OutputState {
     pub on_demand_vrr_enabled: bool,
     // After the last redraw, some ongoing animations still remain.
     pub unfinished_animations_remain: bool,
+    /// When we last allowed a shader-driven redraw on this output, for the
+    /// `shader-animation-max-fps` throttle. `None` until the first shader frame.
+    pub last_shader_frame: Option<std::time::Instant>,
+    /// Pending one-shot timer that re-queues a throttled shader redraw at the next capped
+    /// deadline. Stored so it can be cancelled/replaced; `None` when no throttle wake is armed.
+    pub shader_throttle_timer: Option<RegistrationToken>,
+    /// Runtime shader override for this output: preset selection and on/off.
+    pub shader_state: crate::output_shader::OutputShaderState,
     /// Last sequence received in a vblank event.
     pub last_drm_sequence: Option<u32>,
     pub vblank_throttle: VBlankThrottle,
@@ -2245,13 +2296,47 @@ impl State {
             shaders_changed = true;
         }
 
+        let output_shaders_changed = {
+            let shaders_of = |c: &niri_config::Config| {
+                c.outputs
+                    .0
+                    .iter()
+                    .map(|o| (o.name.clone(), o.shader.clone()))
+                    .collect::<Vec<_>>()
+            };
+            shaders_of(&config) != shaders_of(&old_config)
+        };
+
         if config.region_shaders != old_config.region_shaders
             || config.window_rules != old_config.window_rules
+            || config.window_shaders != old_config.window_shaders
+            || config.output_shaders != old_config.output_shaders
+            || output_shaders_changed
         {
             let chains = scoped_shader_chains(&config);
             self.backend.with_primary_renderer(|renderer| {
                 shaders::set_scoped_programs(renderer, &chains);
             });
+            // Preset selections are stored by name; re-resolve them against the new config.
+            self.niri.layout.with_windows_mut(|mapped, _| {
+                mapped.update_shader_preset(&config);
+            });
+            let output_shader_preset_names: Vec<String> = config
+                .output_shaders
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            for state in self.niri.output_state.values_mut() {
+                if state
+                    .shader_state
+                    .clear_stale_preset(&output_shader_preset_names)
+                {
+                    warn!(
+                        "output shader preset is no longer defined in output-shaders; \
+                         falling back to the output's configured shader rule"
+                    );
+                }
+            }
             shaders_changed = true;
         }
 
@@ -3188,6 +3273,8 @@ impl State {
                     renderer,
                     intent: RenderIntent::Normal,
                     xray: None,
+                    // Feeds a static unmap snapshot (Tile::render_snapshot uses shader_time 0).
+                    shader_time: 0.0,
                 };
 
                 self.niri.fill_xray_elements(ctx.r(), output);
@@ -4156,6 +4243,7 @@ impl Niri {
         drop(config_);
         let mut niri = Self {
             config,
+            window_shader_start: std::time::Instant::now(),
             config_file_output_config,
             config_file_watcher: None,
 
@@ -4618,6 +4706,9 @@ impl Niri {
             redraw_state: RedrawState::Idle,
             on_demand_vrr_enabled: false,
             unfinished_animations_remain: false,
+            last_shader_frame: None,
+            shader_throttle_timer: None,
+            shader_state: Default::default(),
             frame_clock: FrameClock::new(refresh_interval, vrr),
             last_drm_sequence: None,
             vblank_throttle: VBlankThrottle::new(self.event_loop.clone(), name.connector.clone()),
@@ -6081,6 +6172,46 @@ impl Niri {
         }
     }
 
+    /// Cancel any pending `shader-animation-max-fps` throttle wake for `output`.
+    fn cancel_shader_throttle_timer(&mut self, output: &Output) {
+        let token = self
+            .output_state
+            .get_mut(output)
+            .and_then(|state| state.shader_throttle_timer.take());
+        if let Some(token) = token {
+            self.event_loop.remove(token);
+        }
+    }
+
+    /// Arm a one-shot wake `delay` from now that re-queues a throttled shader redraw for `output`,
+    /// replacing any pending wake.
+    fn arm_shader_throttle_timer(&mut self, output: &Output, delay: Duration) {
+        self.cancel_shader_throttle_timer(output);
+        let out = output.clone();
+        let token =
+            match self
+                .event_loop
+                .insert_source(Timer::from_duration(delay), move |_, _, state| {
+                    match state.niri.output_state.get_mut(&out) {
+                        Some(s) => s.shader_throttle_timer = None,
+                        // Output disconnected before this wake fired; queue_redraw would unwrap a
+                        // missing output and panic, so just drop the timer.
+                        None => return TimeoutAction::Drop,
+                    }
+                    state.niri.queue_redraw(&out);
+                    TimeoutAction::Drop
+                }) {
+                Ok(token) => token,
+                Err(err) => {
+                    warn!("error arming shader throttle timer: {err:?}");
+                    return;
+                }
+            };
+        if let Some(state) = self.output_state.get_mut(output) {
+            state.shader_throttle_timer = Some(token);
+        }
+    }
+
     pub fn redraw_queued_outputs(&mut self, backend: &mut Backend) {
         let _span = tracy_client::span!("Niri::redraw_queued_outputs");
 
@@ -6713,6 +6844,56 @@ impl Niri {
         }
     }
 
+    /// Resolve the configured shader chain for `output`, or an empty vec if it has none.
+    ///
+    /// This is the single place output shader chains are resolved, so the `scoped_key` computed
+    /// at compile time always matches the one looked up at render time.
+    pub(crate) fn output_shader_chain(
+        &self,
+        output: &smithay::output::Output,
+    ) -> Vec<(String, bool)> {
+        // Read the runtime override out of output_state before borrowing config, so the two
+        // borrows never overlap.
+        let (disabled, selected) = match self.output_state.get(output) {
+            Some(state) => (
+                state.shader_state.disabled,
+                state.shader_state.preset.clone(),
+            ),
+            None => (false, None),
+        };
+        if disabled {
+            return Vec::new();
+        }
+
+        // This is the established idiom for output-config lookup in this file; see the call
+        // sites at src/niri.rs:3216 and :3104. `find` matches on make/model/serial or connector.
+        let name = output.user_data().get::<OutputName>().unwrap();
+        let config = self.config.borrow();
+
+        // A selected preset overrides the output's configured rule. Resolved by name on every
+        // call, so a config reload is picked up without any re-resolution step.
+        //
+        // A selected name that no longer exists (renamed/removed `output-shaders` preset,
+        // reloaded before the state was re-resolved) falls through to the output's own
+        // configured `shader` rule below rather than dropping the shader entirely. The config
+        // reload gate clears stale selections and warns the user; this is only the silent
+        // safety net for any path that reads the state in between, so it must not warn itself —
+        // it runs every frame, from both the render path and the redraw gate.
+        if let Some(selected) = &selected {
+            if let Some(preset) = config.output_shaders.iter().find(|p| &p.name == selected) {
+                return preset.pass_sources(&read_scoped_shader_path);
+            }
+        }
+
+        let Some(out_config) = config.outputs.find(name) else {
+            return Vec::new();
+        };
+        let Some(shader) = &out_config.shader else {
+            return Vec::new();
+        };
+        shader.pass_sources(&config.output_shaders, &read_scoped_shader_path)
+    }
+
     pub fn update_shaders(&mut self) {
         self.layout.update_shaders();
 
@@ -6783,6 +6964,7 @@ impl Niri {
                 target: RenderTarget::Screencast,
                 intent: RenderIntent::PickerPreview,
                 xray: None,
+                shader_time: self.window_shader_start.elapsed().as_secs_f32(),
             };
             let elements = self.render_to_vec(ctx, &source, false);
             let elements: Vec<_> = elements
@@ -6957,125 +7139,195 @@ impl Niri {
         // screencopy), so the effect does not leak into recordings and the per-output ping-pong
         // state is not corrupted by capture renders. A compiled program is also required; this
         // gate has zero overhead when no program is loaded.
-        if ctx.target == RenderTarget::Output
-            && Shaders::get(ctx.renderer)
-                .program(ProgramType::GlobalPass(0))
-                .is_some()
-        {
-            let start = state.global_shader_start.get().unwrap_or_else(|| {
-                let now = std::time::Instant::now();
-                state.global_shader_start.set(Some(now));
-                now
-            });
-            let time = start.elapsed().as_secs_f32();
-            let scale = output.current_scale().fractional_scale() as f32;
-            let area = Rectangle::from_size(output_size(output));
+        //
+        // When reads_cursor is active, the element must render ABOVE the cursor (pushed before
+        // render_pointer) so the cursor is captured into the screen texture. Otherwise it renders
+        // BELOW the cursor (pushed after render_pointer) so the hardware cursor is unaffected.
+        let reads_cursor = {
+            let cfg = self.config.borrow();
+            cfg.global_shader.enable && cfg.global_shader.reads_cursor
+        };
+        let capture_enabled = self.config.borrow().shaders_in_capture;
+        let capture_render = ctx.target != RenderTarget::Output;
+        let mut global_shader_elem: Option<GlobalShaderElement> =
+            if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled)
+                && Shaders::get(ctx.renderer)
+                    .program(ProgramType::GlobalPass(0))
+                    .is_some()
+            {
+                let start = state.global_shader_start.get().unwrap_or_else(|| {
+                    let now = std::time::Instant::now();
+                    state.global_shader_start.set(Some(now));
+                    now
+                });
+                let time = start.elapsed().as_secs_f32();
+                let scale = output.current_scale().fractional_scale() as f32;
+                let area = Rectangle::from_size(output_size(output));
 
-            // Cursor in output-local physical pixels (same source as render_pointer).
-            let output_pos = self.global_space.output_geometry(output).unwrap().loc;
-            let pointer_pos = self
-                .tablet_cursor_location
-                .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-            let pointer_local = pointer_pos - output_pos.to_f64();
-            let cursor = (
-                (pointer_local.x * scale as f64) as f32,
-                (pointer_local.y * scale as f64) as f32,
-            );
+                // Cursor in output-local physical pixels (same source as render_pointer).
+                let output_pos = self.global_space.output_geometry(output).unwrap().loc;
+                let pointer_pos = self
+                    .tablet_cursor_location
+                    .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                let pointer_local = pointer_pos - output_pos.to_f64();
+                let cursor = (
+                    (pointer_local.x * scale as f64) as f32,
+                    (pointer_local.y * scale as f64) as f32,
+                );
 
-            let output_size_phys = (
-                (area.size.w * scale as f64) as f32,
-                (area.size.h * scale as f64) as f32,
-            );
+                let output_size_phys = (
+                    (area.size.w * scale as f64) as f32,
+                    (area.size.h * scale as f64) as f32,
+                );
 
-            // Region-local rendering: when cursor-radius is set on a cursor-only (non-animating)
-            // shader, shrink the element to a box around the cursor so damage + scanout are
-            // limited to that box. Otherwise cover the whole output.
-            let caps = self.global_shader_caps();
-            let cursor_radius = self.config.borrow().global_shader.cursor_radius;
-            // Number of passes in the active chain (registry length). Region mode is whole-output
-            // only; multi-pass chains (N >= 2) always reshade the full output.
-            let n_passes = Shaders::get(ctx.renderer)
-                .custom_global_passes
-                .borrow()
-                .len();
-            let (area, region_norm) = match cursor_radius {
-                Some(r) if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 => {
-                    let r = r as f64; // logical px
-                    let full = area;
-                    let box_loc = (
-                        (pointer_local.x - r).max(full.loc.x),
-                        (pointer_local.y - r).max(full.loc.y),
-                    );
-                    let box_end = (
-                        (pointer_local.x + r).min(full.loc.x + full.size.w),
-                        (pointer_local.y + r).min(full.loc.y + full.size.h),
-                    );
-                    let box_rect = Rectangle::new(
-                        (box_loc.0, box_loc.1).into(),
-                        (
-                            (box_end.0 - box_loc.0).max(0.0),
-                            (box_end.1 - box_loc.1).max(0.0),
-                        )
-                            .into(),
-                    );
-                    if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
-                        // Cursor is off this output (e.g. on another monitor) so the clamped box
-                        // is empty: render whole-output here. A zero-size region would otherwise
-                        // divide by zero in the shader's tex2D_* remap.
-                        (full, [0.0, 0.0, 1.0, 1.0])
-                    } else {
-                        let region_norm = [
-                            ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
-                            ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
-                            (box_rect.size.w / full.size.w) as f32,
-                            (box_rect.size.h / full.size.h) as f32,
-                        ];
-                        (box_rect, region_norm)
+                // Region-local rendering: when cursor-radius is set on a cursor-only
+                // (non-animating) shader, shrink the element to a box around the
+                // cursor so damage + scanout are limited to that box. Otherwise
+                // cover the whole output.
+                let caps = self.global_shader_caps();
+                let cursor_radius = self.config.borrow().global_shader.cursor_radius;
+                // Number of passes in the active chain (registry length). Region mode is
+                // whole-output only; multi-pass chains (N >= 2) always reshade the
+                // full output.
+                let n_passes = Shaders::get(ctx.renderer)
+                    .custom_global_passes
+                    .borrow()
+                    .len();
+                let (area, region_norm) = match cursor_radius {
+                    Some(r)
+                        if caps.uses_cursor && !caps.is_animating() && r > 0 && n_passes <= 1 =>
+                    {
+                        let r = r as f64; // logical px
+                        let full = area;
+                        let box_loc = (
+                            (pointer_local.x - r).max(full.loc.x),
+                            (pointer_local.y - r).max(full.loc.y),
+                        );
+                        let box_end = (
+                            (pointer_local.x + r).min(full.loc.x + full.size.w),
+                            (pointer_local.y + r).min(full.loc.y + full.size.h),
+                        );
+                        let box_rect = Rectangle::new(
+                            (box_loc.0, box_loc.1).into(),
+                            (
+                                (box_end.0 - box_loc.0).max(0.0),
+                                (box_end.1 - box_loc.1).max(0.0),
+                            )
+                                .into(),
+                        );
+                        if box_rect.size.w <= 0.0 || box_rect.size.h <= 0.0 {
+                            // Cursor is off this output (e.g. on another monitor) so the clamped
+                            // box is empty: render whole-output here. A
+                            // zero-size region would otherwise
+                            // divide by zero in the shader's tex2D_* remap.
+                            (full, [0.0, 0.0, 1.0, 1.0])
+                        } else {
+                            let region_norm = [
+                                ((box_rect.loc.x - full.loc.x) / full.size.w) as f32,
+                                ((box_rect.loc.y - full.loc.y) / full.size.h) as f32,
+                                (box_rect.size.w / full.size.w) as f32,
+                                (box_rect.size.h / full.size.h) as f32,
+                            ];
+                            (box_rect, region_norm)
+                        }
                     }
-                }
-                _ => (area, [0.0, 0.0, 1.0, 1.0]),
+                    _ => (area, [0.0, 0.0, 1.0, 1.0]),
+                };
+
+                // A fresh Id every frame makes smithay damage both the new box and the vacated old
+                // box (the removed element's last geometry), which is what gives region mode its
+                // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a
+                // stable per-output Id for a damage optimization, region mode must
+                // damage the vacated box explicitly or moving-cursor effects will
+                // leave trails. Size the per-output chain state to the active chain
+                // length and snapshot each pass's feedback handles for this frame.
+                // The borrow is dropped before constructing the element (it only
+                // needs the cloned handles, not the chain itself).
+                let passes = {
+                    let mut chain = state.global_shader_chain.borrow_mut();
+                    chain.resize(n_passes);
+                    (0..n_passes)
+                        .map(|i| GlobalPassState {
+                            // Read the live trail either way.
+                            prev: chain.prev[i].clone(),
+                            buffer_prev: chain.buffer_prev[i].clone(),
+                            // Capture renders write to throwaway sinks/offscreens so the live
+                            // output's ping-pong is never corrupted;
+                            // the Output render uses the real shared ones.
+                            result: if capture_render {
+                                std::rc::Rc::new(std::cell::RefCell::new(None))
+                            } else {
+                                chain.result[i].clone()
+                            },
+                            buffer_result: if capture_render {
+                                std::rc::Rc::new(std::cell::RefCell::new(None))
+                            } else {
+                                chain.buffer_result[i].clone()
+                            },
+                            pass_offscreen: if capture_render {
+                                std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                            } else {
+                                chain.pass_offscreen[i].clone()
+                            },
+                            buffer: if capture_render {
+                                std::rc::Rc::new(
+                                    crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                                )
+                            } else {
+                                chain.buffer[i].clone()
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                };
+                // screen_result is the niri_screen_prev ping-pong sink; throwaway for capture
+                // renders.
+                let screen_result = if capture_render {
+                    std::rc::Rc::new(std::cell::RefCell::new(None))
+                } else {
+                    state.global_shader_screen_result.clone()
+                };
+
+                Some(GlobalShaderElement::new(
+                    Id::new(),
+                    area,
+                    scale,
+                    time,
+                    cursor,
+                    region_norm,
+                    output_size_phys,
+                    state.global_shader_screen_prev.clone(),
+                    screen_result,
+                    passes,
+                ))
+            } else {
+                None
             };
 
-            // A fresh Id every frame makes smithay damage both the new box and the vacated old
-            // box (the removed element's last geometry), which is what gives region mode its
-            // correct box(cursor) ∪ box(prev_cursor) damage. If this is ever changed to a stable
-            // per-output Id for a damage optimization, region mode must damage the vacated box
-            // explicitly or moving-cursor effects will leave trails.
-            // Size the per-output chain state to the active chain length and snapshot each pass's
-            // feedback handles for this frame. The borrow is dropped before constructing the
-            // element (it only needs the cloned handles, not the chain itself).
-            let passes = {
-                let mut chain = state.global_shader_chain.borrow_mut();
-                chain.resize(n_passes);
-                (0..n_passes)
-                    .map(|i| GlobalPassState {
-                        prev: chain.prev[i].clone(),
-                        result: chain.result[i].clone(),
-                        pass_offscreen: chain.pass_offscreen[i].clone(),
-                        buffer: chain.buffer[i].clone(),
-                        buffer_prev: chain.buffer_prev[i].clone(),
-                        buffer_result: chain.buffer_result[i].clone(),
-                    })
-                    .collect::<Vec<_>>()
-            };
+        // When reads_cursor is on, push the global shader element first so the cursor is
+        // composited into niri_screen (the cursor becomes part of the captured screen texture).
+        if reads_cursor {
+            if let Some(elem) = global_shader_elem.take() {
+                push(elem.into());
+            }
+        }
 
-            let elem = GlobalShaderElement::new(
-                Id::new(),
-                area,
-                scale,
-                time,
-                cursor,
-                region_norm,
-                output_size_phys,
-                state.global_shader_screen_prev.clone(),
-                state.global_shader_screen_result.clone(),
-                passes,
-            );
-            push(elem.into());
+        // The pointer goes on the top (or below the global shader when reads_cursor is on).
+        if include_pointer && self.pointer_visibility.is_visible() {
+            self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
+        }
+
+        // When reads_cursor is off (default), push the global shader element after the pointer
+        // so the hardware cursor remains above the effect.
+        if !reads_cursor {
+            if let Some(elem) = global_shader_elem {
+                push(elem.into());
+            }
         }
 
         // Push region shader elements for regions matching this output.
-        if ctx.target == RenderTarget::Output {
+        if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled) {
             let scale = output.current_scale().fractional_scale() as f32;
             let out_name = output.name();
             let full = Rectangle::from_size(output_size(output));
@@ -7096,6 +7348,39 @@ impl Niri {
                 .global_shader_start
                 .get()
                 .map_or(0.0, |s| s.elapsed().as_secs_f32());
+
+            // The output shader is a full-output region: same element, no geometry to configure.
+            let output_chain = self.output_shader_chain(output);
+            if !output_chain.is_empty() {
+                let key = shaders::scoped_key(&output_chain);
+                if Shaders::get(ctx.renderer)
+                    .program(ProgramType::Scoped(key, 0))
+                    .is_some()
+                {
+                    let n_passes = output_chain.len();
+                    let offscreens = (0..n_passes.saturating_sub(1))
+                        .map(|_| {
+                            std::rc::Rc::new(
+                                crate::render_helpers::offscreen::OffscreenBuffer::default(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let elem = ScopedShaderElement::new(
+                        Id::new(),
+                        full,
+                        scale,
+                        time,
+                        cursor,
+                        [0., 0., 1., 1.],
+                        out_phys,
+                        key,
+                        n_passes,
+                        ScopedSource::Capture,
+                        offscreens,
+                    );
+                    push(elem.into());
+                }
+            }
 
             // Clone region data out before any mutable borrows.
             let regions: Vec<_> = {
@@ -7675,6 +7960,35 @@ impl Niri {
                 })
             };
 
+            // A hand-written animated output shader must keep redrawing, exactly like a region
+            // shader. Every built-in filter is static, so it costs no extra frames.
+            let output_shader_animate = {
+                let chain = self.output_shader_chain(output);
+                niri_config::GlobalShaderCaps::scan_chain(&chain).is_animating()
+            };
+
+            // Decide whether a window on this output runs a time-driven per-window shader that
+            // must keep redrawing. Scans resolved shader sources like the region shaders above;
+            // static shaders (no niri_time usage) impose no continuous-redraw cost.
+            //
+            // Only VISIBLE animating windows should force redraws — a shader on a background
+            // workspace or a column scrolled off the viewport is invisible, so animating it just
+            // pegs the GPU for nothing. In the overview, though, several workspaces are shown
+            // zoomed out (and the per-tile visible flag reflects normal-view culling), so there we
+            // fall back to scanning all windows to keep their shaders animating as before.
+            let shader_animates = |win: &Mapped| {
+                win.effective_shader().map_or(false, |shader| {
+                    niri_config::GlobalShaderCaps::scan_chain(&shader.passes).is_animating()
+                })
+            };
+            let window_shader_animate = if self.layout.is_overview_open() {
+                self.layout.windows_for_output(output).any(shader_animates)
+            } else {
+                self.layout
+                    .visible_windows_for_output(output)
+                    .any(shader_animates)
+            };
+
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
@@ -7706,10 +8020,59 @@ impl Niri {
                     .any(|mapped| mapped.are_animations_ongoing());
             }
 
-            // Time/feedback-driven global shaders must keep redrawing to animate when idle.
-            state.unfinished_animations_remain |= global_shader_animate;
-            // Animated region shaders on this output also need continuous redraws.
-            state.unfinished_animations_remain |= region_shader_animate;
+            // Time/feedback-driven global, region and per-window shaders must keep redrawing to
+            // animate when the desktop is otherwise idle. When `shader-animation-max-fps` is 0
+            // (default) this is unconditional — a redraw every frame, as before. When a cap is set,
+            // throttle the *shader-only* case to that rate: render one shader frame, then drive the
+            // next via a one-shot timer instead of the vblank loop, so an idle animated shader
+            // recomposites `cap_fps` times/sec instead of at the panel's native refresh. Shaders
+            // riding along with a non-shader animation (drag, transition, overview) are never
+            // throttled — those must stay smooth.
+            let shader_animate = global_shader_animate
+                || region_shader_animate
+                || output_shader_animate
+                || window_shader_animate;
+            let cap_fps = self.config.borrow().shader_animation_max_fps;
+            let now = std::time::Instant::now();
+
+            let throttle = if cap_fps == 0 {
+                state.unfinished_animations_remain |= shader_animate;
+                ThrottleAction::Cancel
+            } else if !shader_animate {
+                ThrottleAction::Cancel
+            } else if state.unfinished_animations_remain {
+                // A non-shader animation already drives full-rate redraws; shaders ride along.
+                // Keep the clock current so the throttle doesn't immediately fire afterwards.
+                state.last_shader_frame = Some(now);
+                ThrottleAction::Cancel
+            } else {
+                // Shaders are the sole reason to redraw → cap the rate.
+                let interval = Duration::from_secs_f64(1.0 / f64::from(cap_fps));
+                match decide_shader_frame(state.last_shader_frame, now, interval) {
+                    ShaderFrameDecision::Due => {
+                        // Render this as a shader frame; drive the next via the timer, not the
+                        // vblank loop, so we get exactly cap_fps recomposites/sec.
+                        state.last_shader_frame = Some(now);
+                        ThrottleAction::Arm(interval)
+                    }
+                    ShaderFrameDecision::Wait(remaining) => {
+                        // Other damage triggered this redraw between shader frames. Ensure a wake
+                        // is pending for the next shader deadline without
+                        // churning the timer.
+                        if state.shader_throttle_timer.is_some() {
+                            ThrottleAction::Keep
+                        } else {
+                            ThrottleAction::Arm(remaining)
+                        }
+                    }
+                }
+            };
+            // `state`'s borrow ends here; the timer ops re-borrow `&mut self`.
+            match throttle {
+                ThrottleAction::Keep => {}
+                ThrottleAction::Cancel => self.cancel_shader_throttle_timer(output),
+                ThrottleAction::Arm(delay) => self.arm_shader_throttle_timer(output, delay),
+            }
 
             // Render.
             res = backend.render(self, output, target_presentation_time);
@@ -8718,6 +9081,7 @@ impl Niri {
                         target: RenderTarget::ScreenCapture,
                         intent: RenderIntent::Normal,
                         xray: None,
+                        shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                     };
                     let offset = screencopy.region_loc().upscale(-1);
                     let mut elements = Vec::new();
@@ -8800,6 +9164,7 @@ impl Niri {
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let offset = screencopy.region_loc().upscale(-1);
         let mut elements = Vec::new();
@@ -8923,6 +9288,7 @@ impl Niri {
                     target: RenderTarget::ScreenCapture,
                     intent: RenderIntent::Normal,
                     xray: None,
+                    shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                 };
                 let mut elements = Vec::new();
                 self.render(ctx, output, draw_cursor, &mut |elem| {
@@ -9024,6 +9390,7 @@ impl Niri {
                 target: RenderTarget::ScreenCapture,
                 intent: RenderIntent::Normal,
                 xray: None,
+                shader_time: self.window_shader_start.elapsed().as_secs_f32(),
             };
             mapped.render_for_screen_cast(ctx, scale, &mut |elem| {
                 elements.push(WindowCaptureRenderElement::Window(elem));
@@ -9407,6 +9774,7 @@ impl Niri {
             target: RenderTarget::Output,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let was_capture = self.pick_color_capture.replace(true);
         let elements = self.render_to_vec(ctx, output, false);
@@ -9452,6 +9820,7 @@ impl Niri {
                     target,
                     intent: RenderIntent::Normal,
                     xray: None,
+                    shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                 };
                 let was_magnifier_capture = self.magnifier_capture.replace(true);
                 let elements = self.render_to_vec(ctx, &output, false);
@@ -9572,6 +9941,7 @@ impl Niri {
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let elements = self.render_to_vec(ctx, output, include_pointer);
         let elements = elements.iter().rev();
@@ -9682,6 +10052,7 @@ impl Niri {
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         mapped.render(
             ctx,
@@ -9758,6 +10129,7 @@ impl Niri {
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
+            shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let elements = self.render_to_vec(ctx, output, false);
         let pixels = render_to_vec(
@@ -9995,6 +10367,7 @@ impl Niri {
                 target: RenderTarget::ScreenCapture,
                 intent: RenderIntent::Normal,
                 xray: None,
+                shader_time: self.window_shader_start.elapsed().as_secs_f32(),
             };
             let elements = self.render_to_vec(ctx, output, include_pointer);
 
@@ -10580,6 +10953,7 @@ impl Niri {
                         target,
                         intent: RenderIntent::Normal,
                         xray: None,
+                        shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                     };
                     let elements = self.render_to_vec(ctx, &output, false);
                     let elements = elements.iter().rev();
@@ -10875,6 +11249,27 @@ pub(crate) fn scoped_shader_chains(config: &niri_config::Config) -> Vec<Vec<(Str
             if !chain.is_empty() {
                 chains.push(chain);
             }
+        }
+    }
+    for preset in &config.window_shaders {
+        let chain = preset.pass_sources(read_scoped_shader_path);
+        if !chain.is_empty() {
+            chains.push(chain);
+        }
+    }
+    for out in &config.outputs.0 {
+        if let Some(shader) = &out.shader {
+            let chain = shader.pass_sources(&config.output_shaders, &read_scoped_shader_path);
+            if !chain.is_empty() {
+                chains.push(chain);
+            }
+        }
+    }
+    // Compile every preset eagerly so cycle-output-shader never stalls on a recompile.
+    for preset in &config.output_shaders {
+        let chain = preset.pass_sources(&read_scoped_shader_path);
+        if !chain.is_empty() {
+            chains.push(chain);
         }
     }
     chains
@@ -11353,5 +11748,65 @@ mod tearing_tests {
         // The client hint still works on its own.
         assert!(tearing_allowed(None, None, true, ContentType::None));
         assert!(!tearing_allowed(None, None, false, ContentType::Game));
+    }
+}
+
+#[cfg(test)]
+mod shader_throttle_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{decide_shader_frame, ShaderFrameDecision};
+
+    #[test]
+    fn first_frame_is_due() {
+        let now = Instant::now();
+        assert_eq!(
+            decide_shader_frame(None, now, Duration::from_millis(33)),
+            ShaderFrameDecision::Due
+        );
+    }
+
+    #[test]
+    fn within_interval_waits_for_remaining() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(33);
+        let last = now - Duration::from_millis(10);
+        match decide_shader_frame(Some(last), now, interval) {
+            ShaderFrameDecision::Wait(remaining) => {
+                // ~23ms left; allow a little slack for clock resolution.
+                assert!(remaining <= Duration::from_millis(23));
+                assert!(remaining >= Duration::from_millis(22));
+            }
+            ShaderFrameDecision::Due => panic!("should not be due yet"),
+        }
+    }
+
+    #[test]
+    fn at_or_past_interval_is_due() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(33);
+        // Exactly one interval elapsed.
+        assert_eq!(
+            decide_shader_frame(Some(now - interval), now, interval),
+            ShaderFrameDecision::Due
+        );
+        // Well past the interval.
+        assert_eq!(
+            decide_shader_frame(Some(now - Duration::from_millis(100)), now, interval),
+            ShaderFrameDecision::Due
+        );
+    }
+
+    #[test]
+    fn clock_going_backwards_does_not_panic() {
+        let now = Instant::now();
+        // last is in the "future" relative to now (saturating_duration_since → 0 elapsed).
+        let last = now + Duration::from_millis(50);
+        match decide_shader_frame(Some(last), now, Duration::from_millis(33)) {
+            ShaderFrameDecision::Wait(remaining) => {
+                assert_eq!(remaining, Duration::from_millis(33));
+            }
+            ShaderFrameDecision::Due => panic!("elapsed clamped to 0, so not due"),
+        }
     }
 }

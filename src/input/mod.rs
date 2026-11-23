@@ -2884,6 +2884,64 @@ impl State {
                     }
                 }
             }
+            Action::ToggleWindowShader => {
+                let active_window = self
+                    .niri
+                    .layout
+                    .active_workspace_mut()
+                    .and_then(|ws| ws.active_window_mut());
+                if let Some(window) = active_window {
+                    window.toggle_window_shader();
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::ToggleWindowShaderById(id) => {
+                let window = self
+                    .niri
+                    .layout
+                    .workspaces_mut()
+                    .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
+                if let Some(window) = window {
+                    window.toggle_window_shader();
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::CycleWindowShader => {
+                let config = self.niri.config.clone();
+                let active_window = self
+                    .niri
+                    .layout
+                    .active_workspace_mut()
+                    .and_then(|ws| ws.active_window_mut());
+                if let Some(window) = active_window {
+                    window.cycle_window_shader(&config.borrow());
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::CycleWindowShaderById(id) => {
+                let config = self.niri.config.clone();
+                let window = self
+                    .niri
+                    .layout
+                    .workspaces_mut()
+                    .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
+                if let Some(window) = window {
+                    window.cycle_window_shader(&config.borrow());
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::ToggleOutputShader(name) => match self.resolve_shader_output(name.as_deref()) {
+                Some(output) => self.toggle_output_shader(&output),
+                None => warn!("toggle-output-shader: no matching output"),
+            },
+            Action::CycleOutputShader(name) => match self.resolve_shader_output(name.as_deref()) {
+                Some(output) => self.cycle_output_shader(&output),
+                None => warn!("cycle-output-shader: no matching output"),
+            },
             Action::SetDynamicCastWindow => {
                 let id = self
                     .niri
@@ -3213,6 +3271,45 @@ impl State {
 
         // FIXME: granular
         self.niri.queue_redraw_all();
+    }
+
+    fn resolve_shader_output(&self, name: Option<&str>) -> Option<Output> {
+        match name {
+            Some(name) => self.niri.output_by_name_match(name).cloned(),
+            None => self.niri.layout.active_output().cloned(),
+        }
+    }
+
+    fn toggle_output_shader(&mut self, output: &Output) {
+        // Every live output has an entry in output_state (populated in add_output), the same
+        // invariant queue_redraw() below relies on with its own unwrap.
+        self.niri
+            .output_state
+            .get_mut(output)
+            .unwrap()
+            .shader_state
+            .toggle();
+        self.niri.queue_redraw(output);
+    }
+
+    fn cycle_output_shader(&mut self, output: &Output) {
+        let names: Vec<String> = self
+            .niri
+            .config
+            .borrow()
+            .output_shaders
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        // Every live output has an entry in output_state (populated in add_output), the same
+        // invariant queue_redraw() below relies on with its own unwrap.
+        self.niri
+            .output_state
+            .get_mut(output)
+            .unwrap()
+            .shader_state
+            .cycle(&names);
+        self.niri.queue_redraw(output);
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
