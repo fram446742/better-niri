@@ -76,10 +76,11 @@ The module boundary is now documented and drives the next integrations:
   per-keyboard), layout/window primitives, outputs, protocols, config/IPC.
 - **Built-in modules**: `effects` (all shader scopes + liquid glass presets),
   `navigation` (grid/carousel/zoom/magnifier), `cursor` (SVG/shake), `agent`
-  (off by default), `portal`, `kde`, `vulkan`.
-- **Companions**: better-nsticky, better-companion, better-session,
-  better-sidepanels, better-shot, better-monitor, better-audio,
-  better-wallpaper, better-settings; shell integration stays Noctalia-only.
+  (off by default), `kde`, `vulkan`.
+- **Companions**: better-companion (absorbs nsticky's staging/scratchpad
+  workflow), better-session, better-sidepanels, better-shot, better-monitor,
+  better-audio, better-wallpaper, better-settings, better-portal (separate
+  portal daemon); shell integration stays Noctalia-only.
 
 See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. A per-keyboard branch
 (`integration/biri-per-keyboard`) is parked with the config/tests commits

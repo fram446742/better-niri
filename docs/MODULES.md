@@ -61,7 +61,6 @@ Proposed modules:
 | `navigation` | Grid overview, consolidated carousel, dynamic overview zoom, magnifier | on | none |
 | `cursor` | SVG cursor themes, shake-to-enlarge, cursor-specific effects | on | `resvg`/`usvg` |
 | `agent` | Agent seat, agent IPC socket, AT-SPI automation helpers | **off** | none, but security-sensitive |
-| `portal` | Built-in XDG desktop portal backend and native cast picker | on | `zbus` (already optional upstream) |
 | `kde` | `org_kde_kwin_blur`, KDE screenshot/colour-picker D-Bus, KDE output order | on | `zbus` |
 | `vulkan` | Vulkan renderer selection (backend) | on for the full build, off for minimal | Vulkan loader, Smithay `renderer_vulkan` |
 
@@ -89,8 +88,8 @@ crashing the session.
 - **better-wallpaper** — scenes and per-workspace wallpapers (reuse Noctalia).
 - **better-settings** — GTK4/libadwaita frontend; each app remains the authority
   for its own config.
-- **better-portal** (candidate) — extract the portal backend once the built-in
-  module is stable.
+- **better-portal** — XDG portal backend and picker daemon; separate from the
+  compositor from the start.
 
 Companion services use:
 - niri IPC for compositor state/actions;
@@ -118,7 +117,6 @@ Do **not** name modules after products or arbitrary bundles. Use domains:
 - `navigation` (module): grid, carousel, zoom, magnifier.
 - `cursor` (module): SVG themes, shake.
 - `agent` (module): automation seat.
-- `portal` (module): portal backend and picker.
 - `kde` (module): KDE protocols and D-Bus services.
 
 Why shaders and virtual outputs are not in one module: virtual outputs are an
@@ -185,7 +183,7 @@ outputs, isolated outputs, window groups/tabs, capture protocols, config/IPC.
 
 `effects` (global/region/window/focus-ring shaders, multipass, feedback,
 presets, liquid glass), `navigation` (grid, carousel, dynamic zoom, magnifier),
-`cursor` (SVG, shake), `agent`, `portal`, `kde`, `vulkan`.
+`cursor` (SVG, shake), `agent`, `kde`, `vulkan`.
 
 ### Companion services (Tier 3)
 
@@ -199,25 +197,39 @@ Noctalia widgets/plugins only.
 
 ## 8. Sticky windows: the concrete split
 
-- Compositor core: a `sticky` property on floating windows, actions to toggle it,
-  and IPC/window-rule support. It follows workspaces/outputs correctly and does
-  not move windows around behind the scenes.
-- better-nsticky: staging, scratchpads, selectors, persistence, per-app rules,
-  and the user-facing workflow. If the compositor advertises the `sticky`
-  capability, nsticky delegates sticky operations to native actions and keeps
-  its unique features; otherwise it keeps its current move-based fallback.
-- better-companion: does not own sticky. It may invoke nsticky's API for
-  automation.
+Decision: sticky/staged/scratchpad **workflow is absorbed into
+better-companion**; the compositor owns only the primitive.
 
-This avoids two competing sticky engines.
+- Compositor core: a `sticky` property on floating windows, actions to toggle it,
+  hidden/stage workspaces, and IPC/window-rule support. It follows
+  workspaces/outputs correctly and never moves windows around behind the scenes.
+- better-companion: staging, scratchpads, selectors, persistence, per-app rules
+  and the user-facing workflow, preserving nsticky's code/history/attribution
+  (BSD-3-Clause). It uses the native sticky primitive when advertised and keeps
+  a move-based fallback for plain Niri.
+- No third sticky daemon. `nsticky` remains available during migration as a
+  compatibility CLI/config layer, then becomes an alias or is retired.
+
+This avoids two competing sticky engines and keeps the compositor free of
+user-specific staging policy.
 
 ## 9. Portals: the concrete split
 
-- Short term: `portal` built-in module reusing niri-elite's backend and picker.
-- Long term: move the portal backend to a `better-portal` process using
-  ext-image-copy-capture + PipeWire; keep only the picker UI (where compositor
-  input/UI is needed) as a module or an external layer-shell UI.
+Decision: **better-portal is a separate daemon from the start.**
+
+- better-portal implements the XDG desktop portal backend (ScreenCast,
+  Screenshot, and later remote desktop) over ext-image-copy-capture, PipeWire and
+  D-Bus.
+- The picker is owned by better-portal as a layer-shell client (outputs,
+  windows, regions, permissions). A compositor-native picker may be added later
+  behind an IPC request if the external one cannot meet the UX or security bar.
+- The compositor keeps capture protocol plumbing and its screenshot/IPC actions;
+  it does not embed a portal backend.
+- Permissions and persisted grants live in better-portal.
 - Do not implement capture twice; the compositor remains the source of buffers.
+
+The niri-elite built-in portal code is a reference/prototype, not a module we
+keep long term.
 
 ## 10. Migration plan for the current elite base
 
@@ -225,7 +237,7 @@ The elite merge currently contains many features already. We do not need to
 extract everything at once:
 
 1. Mark core features in docs and keep them.
-2. Wrap effect/overview/cursor/agent/portal/KDE registration behind modules and
+2. Wrap effect/overview/cursor/agent/KDE registration behind modules and
    `enabled` checks, with Cargo features.
 3. Add the capability query and the sticky primitive.
 4. Only then start companions.
@@ -234,9 +246,18 @@ extract everything at once:
 
 See `ECOSYSTEM.md` section "Open questions". The short list:
 
-- default build: full vs minimal;
-- portal: built-in now vs separate daemon from day one;
-- agent seat: default-off and how to authorize;
-- scratchpads ownership: nsticky vs companion;
-- whether grid/minimise are core or `navigation` core-with-runtime-gate;
-- when to create new repositories for companion services.
+Resolved:
+
+- default build: full binary with all modules; minimal via features/profile;
+- portal: separate `better-portal` daemon from the start;
+- agent seat: module off by default, explicit authorization and restricted
+  socket;
+- sticky/staged/scratchpads: absorbed into better-companion, native primitive in
+  the compositor;
+- minimise: core; grid/carousel/magnifier: `navigation` module;
+- companion repositories: after Phase 1;
+- Piri: fork preserving history and attribution.
+
+Remaining: the exact way better-companion absorbs nsticky (module layout,
+compatibility CLI) and whether the portal picker starts external or gets a
+compositor IPC fallback.

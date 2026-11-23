@@ -64,9 +64,9 @@ operate the desktop without the shell.
 | SVG cursors | niri-elite | Cosmetic dependency | Module `cursor` |
 | Shake-to-enlarge | niri-elite | Cursor effect | Module `cursor` |
 | Software EGL / multi-GPU | niri-elite | Backend support | Core |
-| Native portal | niri-elite | Portal backend | Module `portal` → later `better-portal` |
+| Native portal | niri-elite | Separate daemon from the start | `better-portal` |
 | Window groups | Naxdy / upstream tabs | Upstream tabs are the base | Core; Naxdy refinements only if still missing |
-| Sticky windows | better-nsticky, biri | Native primitive + nsticky workflow | Core primitive + better-nsticky |
+| Sticky windows | better-nsticky, biri | Native primitive in core; workflow absorbed into better-companion | Core primitive + better-companion |
 | Focus-ring shaders | biri | Scope of `effects` | Module `effects` |
 | Scratchpads | Piri, niri-scratchpad-rs, nsticky | Companion feature | better-companion / nsticky |
 | Run-or-raise, singleton, swallow | Piri, niri-ror | Companion automation | better-companion |
@@ -86,7 +86,7 @@ operate the desktop without the shell.
 | --- | --- | --- |
 | better-niri | Compositor, core + built-in modules | active |
 | better-smithay | Wayland/DRM/render infrastructure | active |
-| better-nsticky | Sticky/staged windows, scratchpads, workflow | existing |
+| better-nsticky | Sticky/staged windows, scratchpads, workflow | existing; absorbed into better-companion in Phase 3, kept as compatibility CLI meanwhile |
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
 | better-session | Context/session save/restore | new, high priority |
 | better-sidepanels | Persistent side panels | new, medium |
@@ -95,7 +95,7 @@ operate the desktop without the shell.
 | better-audio | PipeWire routing | new, exploratory |
 | better-wallpaper | Scenes, per-workspace wallpapers | new, medium |
 | better-settings | Unified GTK4 settings frontend | new, medium-high |
-| better-portal | Portal backend (after extraction) | candidate |
+| better-portal | XDG portal backend + picker daemon | new, after Phase 1 |
 | better-noctalia-plugins | Shell integration | new, later |
 
 **Do not create repositories or publish anything without explicit approval.**
@@ -131,7 +131,7 @@ Piri and niri-sidepanels should preserve upstream history/attribution if reused.
 ### Portals
 
 - Compositor provides buffers/protocols and the picker UI where needed.
-- Portal backend can move to `better-portal` once stable; do not duplicate
+- The portal backend lives in `better-portal` from the start; do not duplicate
   capture paths.
 
 ## 6. Roadmap
@@ -163,7 +163,9 @@ Piri and niri-sidepanels should preserve upstream history/attribution if reused.
 - Audit Piri deeply; preserve history/licence; decide plugin model.
 - Build better-companion: single IPC listener, state sync, reconnection,
   scratchpads/rules/singleton/swallow/run-or-raise.
-- Integrate nsticky via the sticky capability; no duplicate sticky.
+- Absorb nsticky's staging/scratchpad/workflow code with its history and
+  attribution; use the native sticky primitive; no duplicate sticky.
+- Keep a compatibility `nsticky` CLI/config path during migration.
 
 ### Phase 4 — Session and monitor
 
@@ -204,21 +206,30 @@ Piri and niri-sidepanels should preserve upstream history/attribution if reused.
 - **Companion availability.** Every feature must degrade gracefully when a
   companion is missing.
 
-## 8. Open questions (need a decision)
+## 8. Decisions and remaining questions
 
-1. **Default build**: full binary with all built-in modules enabled (recommended)
-   plus `--no-default-features` minimal, or minimal by default?
-2. **Portal**: built-in module now, or start `better-portal` as a separate
-   process immediately?
-3. **Agent seat**: default-off with explicit IPC authorization (recommended), or
-   opt-in Cargo feature only?
-4. **Scratchpads**: stay in better-nsticky, move to better-companion, or expose
-   both through one shared contract?
-5. **Navigation/minimise**: should grid/carousel/magnifier be a compile-time
-   optional module, while minimise stays core? (Recommended: minimise core;
-   navigation default-on module.)
-6. **Repository creation**: may we create the companion repositories now, or only
-   after Phase 0/1?
-7. **Piri**: fork with history, or build a new daemon using Piri as a reference?
-   (Recommended: fork/preserve history if the licence allows, then adapt.)
-8. **Shell**: confirm Noctalia plugins only and no native shell work for now.
+Resolved:
+
+1. **Default build**: full binary with all built-in modules enabled; minimal via
+   `--no-default-features` and installation profiles.
+2. **Portal**: `better-portal` daemon from the start; the compositor keeps only
+   capture plumbing and screenshot/IPC actions.
+3. **Agent seat**: module off by default, explicit authorization, restricted
+   socket; automation policy in better-companion.
+4. **Sticky/staged/scratchpads**: native primitive in the compositor; workflow
+   absorbed into better-companion with nsticky's history/attribution.
+5. **Navigation/minimise**: minimise core; grid/carousel/magnifier in the
+   `navigation` module.
+6. **Repositories**: companion repositories after Phase 1.
+7. **Piri**: fork preserving history and attribution.
+8. **Shell**: Noctalia plugins only; no native shell.
+
+Remaining technical questions:
+
+- **better-companion shape**: one daemon with internal `sticky`, `stage`,
+  `scratchpad`, `rules` modules (recommended), or a Piri core plus a separate
+  nsticky compatibility binary?
+- **nsticky compatibility**: keep the `nsticky` CLI name and config path as
+  aliases (recommended) or migrate everything to `better-companion` commands?
+- **Portal picker**: external layer-shell picker owned by better-portal
+  (recommended to start) or compositor-native picker exposed over IPC?

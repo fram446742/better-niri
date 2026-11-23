@@ -115,10 +115,11 @@ Features are classified before they are integrated:
 - **Tier 1 core** — must be in the compositor (presentation, HDR/colour, input,
   layout/window primitives, outputs, protocols, config/IPC).
 - **Tier 2 built-in modules** — shipped in the binary, compile-time optional,
-  inert until configured: `effects`, `navigation`, `cursor`, `agent`, `portal`,
-  `kde`, `vulkan`.
-- **Tier 3 companions** — separate repositories over IPC: nsticky, automation,
-  sessions, panels, shot, monitor, audio, wallpaper, settings.
+  inert until configured: `effects`, `navigation`, `cursor`, `agent`, `kde`,
+  `vulkan`. The portal backend is the separate `better-portal` daemon.
+- **Tier 3 companions** — separate repositories over IPC: better-companion
+  (which absorbs nsticky's workflow), sessions, panels, shot, monitor, audio,
+  wallpaper, settings, portal.
 - **Tier 4 shell** — Noctalia plugins only (frozen).
 
 The complete boundary, naming and zero-cost rules are in
