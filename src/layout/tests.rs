@@ -4,8 +4,8 @@ use insta::{assert_compact_debug_snapshot, assert_snapshot};
 use niri_config::utils::Flag;
 use niri_config::workspace::WorkspaceName;
 use niri_config::{
-    CenterFocusedColumn, FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
-    WorkspaceReference,
+    CenterFocusedColumn, FloatOrInt, MainAxis, OutputName, Struts, TabIndicatorLength,
+    TabIndicatorPosition, WorkspaceReference,
 };
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -14185,4 +14185,109 @@ fn reset_carousel_center_noop_when_active_not_in_set() {
 
     layout.reset_carousel_center();
     assert_eq!(layout.carousel_rotation_target(), 1.0); // unchanged: active "A" not in set
+}
+#[test]
+fn vertical_main_axis_places_columns_vertically() {
+    let mut options = Options::default();
+    options.layout.main_axis = MainAxis::Vertical;
+
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+        ],
+    );
+
+    let ws = layout.active_workspace().unwrap();
+    let positions: Vec<_> = ws
+        .tiles_with_render_positions()
+        .map(|(_, pos, _)| pos)
+        .collect();
+    assert_eq!(positions.len(), 2);
+
+    let dx = (positions[0].x - positions[1].x).abs();
+    let dy = (positions[0].y - positions[1].y).abs();
+    assert!(
+        dy > dx,
+        "expected the second column below the first, got dx={dx} dy={dy}"
+    );
+}
+
+#[test]
+fn vertical_main_axis_stacks_workspaces_along_the_cross_axis() {
+    let mut options = Options::default();
+    options.layout.main_axis = MainAxis::Vertical;
+
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            // Go to a second workspace and put a window there too.
+            Op::FocusWorkspaceDown,
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+        ],
+    );
+
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let geos: Vec<_> = monitor.workspaces_render_geo().take(2).collect();
+    let dx = (geos[0].loc.x - geos[1].loc.x).abs();
+    let dy = (geos[0].loc.y - geos[1].loc.y).abs();
+    assert!(
+        dx > dy,
+        "with a vertical main axis, workspaces must sit side by side, got dx={dx} dy={dy}"
+    );
+}
+
+#[cfg(feature = "navigation")]
+#[test]
+fn vertical_grid_is_the_transpose_of_the_horizontal_grid() {
+    use super::axis::AxisMap;
+    use super::grid_overview::GridLayout;
+
+    let config = niri_config::GridOverview::default();
+    let area = Rectangle::from_size(Size::from((1200., 1200.)));
+    let tiled = [(0, (600., 600.)), (1, (600., 600.)), (2, (600., 600.))];
+    let items = grid_layout_items(&tiled, &[]);
+
+    let horizontal = GridLayout::compute(&items, area, &config, None);
+    let vertical = GridLayout::compute_with_axis(
+        &items,
+        area,
+        &config,
+        None,
+        AxisMap::new(MainAxis::Vertical),
+    );
+    assert_eq!(horizontal.entries.len(), vertical.entries.len());
+
+    for ((h_item, h), (v_item, v)) in horizontal.entries.iter().zip(vertical.entries.iter()) {
+        assert_eq!(h_item.window_id(), v_item.window_id());
+        assert!(
+            (h.target_pos.x - v.target_pos.y).abs() < 0.5
+                && (h.target_pos.y - v.target_pos.x).abs() < 0.5,
+            "expected transposed positions, got {:?} and {:?}",
+            h.target_pos,
+            v.target_pos
+        );
+        assert!(
+            (h.target_size.w - v.target_size.h).abs() < 0.5
+                && (h.target_size.h - v.target_size.w).abs() < 0.5,
+            "expected transposed sizes, got {:?} and {:?}",
+            h.target_size,
+            v.target_size
+        );
+    }
 }
