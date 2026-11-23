@@ -1725,6 +1725,10 @@ mod tests {
                 default-floating-position x=100 y=-200 relative-to="bottom-left"
                 on-xdg-activate "ignore"
                 variable-refresh-rate "fullscreen-only"
+                block-out-blur {
+                    passes 5
+                    offset 10
+                }
 
                 focus-ring {
                     off
@@ -2877,6 +2881,22 @@ mod tests {
                     clip_to_geometry: None,
                     baba_is_float: None,
                     block_out_from: None,
+                    block_out_blur: Some(
+                        BlurPart {
+                            off: false,
+                            on: false,
+                            passes: Some(
+                                5,
+                            ),
+                            offset: Some(
+                                FloatOrInt(
+                                    10.0,
+                                ),
+                            ),
+                            noise: None,
+                            saturation: None,
+                        },
+                    ),
                     allow_tearing: None,
                     allow_tearing_content_type: None,
                     variable_refresh_rate: Some(

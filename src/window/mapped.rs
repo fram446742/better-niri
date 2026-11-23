@@ -1,6 +1,7 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::time::Duration;
 
+use niri_config::utils::MergeWith as _;
 use niri_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -27,7 +28,9 @@ use crate::layout::{
     LayoutElementRenderSnapshot, SizingMode,
 };
 use crate::niri_render_elements;
-use crate::render_helpers::background_effect::BackgroundEffectElement;
+use crate::render_helpers::background_effect::{
+    BackgroundEffect, BackgroundEffectElement, RenderParams,
+};
 use crate::render_helpers::blend::BlendSurfaceRenderElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
@@ -115,6 +118,9 @@ pub struct Mapped {
 
     /// Buffer to draw instead of the window when it should be blocked out.
     block_out_buffer: RefCell<SolidColorBuffer>,
+
+    /// Blur drawn over the window when it is blocked out with `block-out-blur`.
+    block_out_blur_effect: RefCell<BackgroundEffect>,
 
     /// The blur config, passed for background effect rendering.
     blur_config: niri_config::Blur,
@@ -310,6 +316,7 @@ impl Mapped {
             agent_cursor: None,
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
+            block_out_blur_effect: RefCell::new(BackgroundEffect::new()),
             blur_config: config.blur,
             animate_next_configure: false,
             animate_serials: Vec::new(),
@@ -336,6 +343,11 @@ impl Mapped {
 
     pub fn toplevel(&self) -> &ToplevelSurface {
         self.window.toplevel().expect("no X11 support")
+    }
+
+    fn block_out_blur_config(&self) -> Option<niri_config::Blur> {
+        let config = self.blur_config.merged_with(&self.rules.block_out_blur?);
+        (!config.off).then_some(config)
     }
 
     /// Recomputes the resolved window rules and returns whether they changed.
@@ -673,11 +685,9 @@ impl LayoutElement for Mapped {
         alpha: f32,
         push: &mut dyn FnMut(LayoutElementRenderElement<R>),
     ) {
-        if ctx.target.should_hide(self.rules.block_out_from) {
-            return;
-        }
-
-        if ctx.target.should_block_out(self.rules.block_out_from) {
+        if ctx.target.should_block_out(self.rules.block_out_from)
+            && self.block_out_blur_config().is_none()
+        {
             let mut buffer = self.block_out_buffer.borrow_mut();
             buffer.resize(self.window.geometry().size.to_f64());
             let elem =
@@ -773,6 +783,41 @@ impl LayoutElement for Mapped {
                 &mut |elem| push(elem.into()),
             );
         }
+    }
+
+    fn render_block_out_blur(
+        &self,
+        ctx: RenderCtx<GlesRenderer>,
+        geometry: Rectangle<f64, Logical>,
+        scale: f64,
+        radius: CornerRadius,
+        xray_pos: XrayPos,
+        push: &mut dyn FnMut(BackgroundEffectElement),
+    ) {
+        if !ctx.target.should_block_out(self.rules.block_out_from) {
+            return;
+        }
+        let Some(config) = self.block_out_blur_config() else {
+            return;
+        };
+
+        let mut effect = self.block_out_blur_effect.borrow_mut();
+        effect.update_config(config);
+        let options = niri_config::BackgroundEffect {
+            blur: Some(true),
+            xray: Some(false),
+            ..Default::default()
+        };
+        effect.update_render_elements(radius, options, false);
+
+        let params = RenderParams {
+            geometry,
+            original_geometry: geometry,
+            subregion: None,
+            clip: Some((geometry, radius)),
+            scale,
+        };
+        effect.render(ctx, None, params, xray_pos, 0., push);
     }
 
     fn render_background_effect(

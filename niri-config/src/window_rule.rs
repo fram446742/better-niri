@@ -2,8 +2,8 @@ use knuffel::errors::DecodeError;
 use niri_ipc::ColumnDisplay;
 
 use crate::appearance::{
-    BackgroundEffect, BackgroundEffectRule, BlockOutFrom, BorderRule, CornerRadius, ShadowRule,
-    TabIndicatorRule,
+    BackgroundEffect, BackgroundEffectRule, BlockOutFrom, BlurPart, BorderRule, CornerRadius,
+    ShadowRule, TabIndicatorRule,
 };
 use crate::layout::DefaultPresetSize;
 use crate::utils::{MergeWith, RegexEq};
@@ -70,6 +70,8 @@ pub struct WindowRule {
     pub baba_is_float: Option<bool>,
     #[knuffel(child)]
     pub block_out_from: Option<BlockOutFrom>,
+    #[knuffel(child)]
+    pub block_out_blur: Option<BlurPart>,
     #[knuffel(child, unwrap(argument))]
     pub allow_tearing: Option<bool>,
     /// Content types that may tear, independently of `allow-tearing`.
