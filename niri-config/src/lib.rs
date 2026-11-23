@@ -2729,6 +2729,10 @@ mod tests {
                         a: 0.3137255,
                     },
                 },
+                zoom_presets: None,
+                min_zoom: 0.05,
+                max_zoom: 0.75,
+                zoom_step: 0.1,
             },
             grid_overview: GridOverview {
                 gap: 16.0,
