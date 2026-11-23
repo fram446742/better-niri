@@ -149,7 +149,7 @@ fn make_layout(
 ) -> niri::layout::Layout<TestWindow> {
     let mut layout =
         niri::layout::Layout::<TestWindow>::with_options(clock.clone(), Options::default());
-    layout.add_output(output.clone(), None);
+    layout.add_output(output.clone(), None, false);
     layout
 }
 

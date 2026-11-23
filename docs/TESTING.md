@@ -10,12 +10,13 @@ when the row says so.
 | --- | --- | --- |
 | Workspace check (safe `main`) | `cargo check --workspace` with Smithay `a38bb709` | **Pass** |
 | Workspace check (elite branch) | `cargo check --workspace` with Smithay `2e8e9edb` | **Pass** |
-| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 661 tests, 0 failed |
+| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 666 tests, 0 failed |
 | Clippy (elite branch) | `cargo clippy --workspace --all-targets` | **Pass**, no errors; warnings remain in elite-derived code |
 | Format (elite branch) | `cargo fmt --check` | **Pass** |
 | Smithay consolidated, GLES | `cargo check -p smithay` with niri's feature set | **Pass** |
 | Smithay consolidated, Vulkan | `cargo check -p smithay --all-features` | **Pass** (warnings only) |
 | Release build | `cargo build --release` | Not re-run after the elite merge |
+| Virtual/isolated outputs | `cargo test --workspace` (fixtures) + visual tests | Logic tested; real TTY/hotplug/DPMS not yet hardware-tested |
 | Hardware features (HDR/VRR/tearing/explicit sync/Vulkan) | — | **Not tested** |
 
 Note: `cargo check --workspace --all-features` in better-smithay fails inside

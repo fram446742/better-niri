@@ -8,6 +8,7 @@ Here's what it looks like with all properties written out:
 ```kdl
 output "eDP-1" {
     // off
+    // create-virtual
     mode "1920x1080@120.030"
     scale 2.0
     transform "90"
@@ -15,6 +16,7 @@ output "eDP-1" {
     variable-refresh-rate // on-demand=true
     // drm-lease
     focus-at-startup
+    // isolated
     backdrop-color "#001100"
     // max-bpc 8
     // hdr
@@ -63,6 +65,27 @@ This flag turns off that output entirely.
 // Turn off that monitor.
 output "HDMI-A-1" {
     off
+}
+```
+
+### `create-virtual`
+
+This flag makes niri create a virtual (headless) output with this name if it doesn't already
+exist.
+
+It is useful for always having a stable output name for remote streaming setups (e.g.
+Sunshine/Moonlight).
+
+Notes:
+
+- Only supported on the TTY and Headless backends (not supported on Winit).
+- Niri will create the output at compositor startup and on config reload.
+- Niri will not automatically remove outputs that you delete from the config.
+
+```kdl
+output "sunshine" {
+    create-virtual
+    mode "1920x1080@144.000"
 }
 ```
 
@@ -265,6 +288,43 @@ output "DP-2" {
     focus-at-startup
 }
 ```
+
+### `isolated`
+
+Mark this output as isolated from compositor UI.
+
+This is intended for outputs used as a dedicated display surface — projection, digital signage, "shop-front" style visuals, or a clean OBS/capture feed — where the compositor's own UI should never appear.
+
+On an isolated output, niri does not draw:
+
+- the overview (the output stays at its normal zoom even while the overview is open elsewhere),
+- the Alt-Tab window switcher,
+- the hotkey overlay,
+- the config error notification.
+
+Windows and layer-shell surfaces still render normally, so the output remains fully usable — you can open windows on it and work with them as usual. The Alt-Tab switcher still works; it is simply displayed on a non-isolated output.
+
+> [!NOTE]
+> Isolated outputs are not yet excluded from dimming and idle power-off — they still turn off with everything else. Application notifications are drawn by notification daemons as layer-shell surfaces, which niri does not currently filter, so those can still appear.
+
+```kdl
+// Keep compositor UI off the signage display.
+output "HDMI-A-1" {
+    isolated
+}
+```
+
+#### Recipes
+
+**Signage that stays lit on idle.** Mark the output `isolated`, and point your idle daemon's power-off command at `power-off-monitors skip-isolated=true` instead of the plain `power-off-monitors`. Your normal screens sleep on idle; the signage output stays on and keeps rendering.
+
+**A fully passive "just wallpaper" display.** `isolated` removes the compositor's own UI, but windows can still be opened on the output (and it renders layer-shell surfaces normally). To make it show only a wallpaper — with any window that ends up there hidden — run a wallpaper client on the **overlay** layer, which niri draws above windows. Combined with `isolated`, the result is an output that shows only your wallpaper/video and nothing else:
+
+- New windows open on the *active* output, and an isolated signage output is one you never focus, so windows rarely land there in the first place.
+- If one does (an explicit move, or an `open-on-output` rule), the overlay-layer wallpaper covers it.
+- Note that this depends on your wallpaper tool being able to target the `overlay` layer; not all can (many are background-only). The wallpaper hides windows visually, but whether it also blocks clicks depends on the client's input handling.
+
+You can also push windows away from the output with a catch-all `open-on-output` [window rule](./Configuration:-Window-Rules.md) pointing at another output, though that affects placement globally and does not prevent manual moves.
 
 ### `background-color`
 

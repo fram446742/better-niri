@@ -51,6 +51,8 @@ pub struct Modeline {
 pub struct Output {
     #[knuffel(child)]
     pub off: bool,
+    #[knuffel(child)]
+    pub create_virtual: bool,
     #[knuffel(argument)]
     pub name: String,
     #[knuffel(child, unwrap(argument))]
@@ -73,6 +75,8 @@ pub struct Output {
     pub drm_lease: bool,
     #[knuffel(child)]
     pub focus_at_startup: bool,
+    #[knuffel(child)]
+    pub isolated: bool,
     // Deprecated; use layout.background_color.
     #[knuffel(child)]
     pub background_color: Option<Color>,
@@ -103,7 +107,9 @@ impl Default for Output {
         Self {
             off: false,
             drm_lease: false,
+            create_virtual: false,
             focus_at_startup: false,
+            isolated: false,
             name: String::new(),
             scale: None,
             transform: Transform::Normal,

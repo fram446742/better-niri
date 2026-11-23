@@ -316,6 +316,9 @@ pub struct Niri {
 
     // When false, we're idling with monitors powered off.
     pub monitors_active: bool,
+    /// When monitors are powered off but the power-off requested skip-isolated, isolated outputs
+    /// stay powered on and keep rendering. Meaningless while `monitors_active` is true.
+    pub power_off_skip_isolated: bool,
 
     /// Whether the laptop lid is closed.
     ///
@@ -931,7 +934,7 @@ impl State {
             || env::var_os("DISPLAY").is_some();
 
         let mut backend = if headless {
-            let headless = Headless::new();
+            let headless = Headless::new(event_loop.clone());
             Backend::Headless(headless)
         } else if has_display {
             let winit = Winit::new(config.clone(), event_loop.clone())?;
@@ -955,6 +958,10 @@ impl State {
 
         let mut state = Self { backend, niri };
 
+        // Create any declaratively-configured virtual outputs early, so that options like
+        // `focus-at-startup` can target them.
+        state.create_virtual_outputs_from_config();
+
         // Load the xkb_file config option if set by the user.
         state.load_xkb_file();
         // Initialize some IPC server state.
@@ -963,6 +970,61 @@ impl State {
         state.focus_default_monitor();
 
         Ok(state)
+    }
+
+    fn create_virtual_outputs_from_config(&mut self) {
+        let names = {
+            let config = self.niri.config.borrow();
+            config
+                .outputs
+                .0
+                .iter()
+                .filter(|o| o.create_virtual)
+                .map(|o| o.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        if names.is_empty() {
+            return;
+        }
+
+        if matches!(&self.backend, Backend::Winit(_)) {
+            warn!("config requests virtual outputs, but the Winit backend does not support them");
+            return;
+        }
+
+        for name in names {
+            // Skip if an output with this name already exists.
+            //
+            // We check both the compositor output list (connected outputs) and the IPC output
+            // state, because virtual outputs can exist while being currently disconnected (`off`).
+            let exists = self.niri.global_space.outputs().any(|o| o.name() == name)
+                || self
+                    .backend
+                    .ipc_outputs()
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .any(|o| o.name == name);
+            if exists {
+                continue;
+            }
+
+            match self.backend.create_virtual_output(
+                &mut self.niri,
+                1920,
+                1080,
+                60,
+                Some(name.clone()),
+            ) {
+                Ok(created) => {
+                    info!("created virtual output from config: {created}");
+                }
+                Err(err) => {
+                    warn!("error creating virtual output '{name}' from config: {err}");
+                }
+            }
+        }
     }
 
     pub fn refresh_and_flush_clients(&mut self) {
@@ -2243,6 +2305,8 @@ impl State {
     }
 
     pub fn reload_output_config(&mut self) {
+        self.create_virtual_outputs_from_config();
+
         let mut resized_outputs = vec![];
         let mut recolored_outputs = vec![];
 
@@ -4000,6 +4064,7 @@ impl Niri {
             blocker_cleared_tx,
             blocker_cleared_rx,
             monitors_active: true,
+            power_off_skip_isolated: false,
             is_lid_closed: false,
             ignore_power_key_until: None,
             touchpad_disabled_by_toggle: false,
@@ -4405,6 +4470,7 @@ impl Niri {
                 layout.background_color = c.and_then(|c| c.background_color);
             }
         }
+        let isolated = c.is_some_and(|c| c.isolated);
         drop(config);
 
         // Set scale and transform before adding to the layout since that will read the output size.
@@ -4415,7 +4481,8 @@ impl Niri {
             None,
         );
 
-        self.layout.add_output(output.clone(), layout_config);
+        self.layout
+            .add_output(output.clone(), layout_config, isolated);
 
         let lock_render_state = if self.is_locked() {
             // We haven't rendered anything yet so it's as good as locked.
@@ -4593,13 +4660,19 @@ impl Niri {
         self.queue_redraw(output);
     }
 
-    pub fn deactivate_monitors(&mut self, backend: &mut Backend) {
+    pub fn deactivate_monitors(&mut self, backend: &mut Backend, skip_isolated: bool) {
         if !self.monitors_active {
             return;
         }
 
         self.monitors_active = false;
-        backend.set_monitors_active(false);
+        self.power_off_skip_isolated = skip_isolated;
+        backend.set_monitors_active(false, skip_isolated);
+
+        // Isolated outputs stay on when skipping them, so they must keep redrawing.
+        if skip_isolated {
+            self.queue_redraw_all();
+        }
     }
 
     pub fn activate_monitors(&mut self, backend: &mut Backend) {
@@ -4608,7 +4681,8 @@ impl Niri {
         }
 
         self.monitors_active = true;
-        backend.set_monitors_active(true);
+        self.power_off_skip_isolated = false;
+        backend.set_monitors_active(true, false);
 
         self.queue_redraw_all();
     }
@@ -4680,6 +4754,65 @@ impl Niri {
         }
 
         None
+    }
+
+    /// Whether the output is marked `isolated` in its config.
+    ///
+    /// Isolated outputs are intended for projection/signage/capture use, and are kept free of
+    /// compositor chrome: the overview, the Alt-Tab switcher, the hotkey overlay, and the config
+    /// error notification are not drawn on them. Windows and layer-shell surfaces still render.
+    ///
+    /// Note that the overview is additionally suppressed in the layout (see `Monitor::isolated`),
+    /// since its zoom is driven by `overview_progress` rather than by this render-time check.
+    ///
+    /// Not yet covered: dimming/idle power-off, and layer-shell surfaces such as notification
+    /// daemons.
+    pub fn is_output_isolated(&self, output: &Output) -> bool {
+        let config = self.config.borrow();
+        output
+            .user_data()
+            .get::<OutputName>()
+            .and_then(|name| config.outputs.find(name))
+            .is_some_and(|c| c.isolated)
+    }
+
+    fn is_inside_hot_corner(&self, output: &Output, pos: Point<f64, Logical>) -> bool {
+        let config = self.config.borrow();
+        let hot_corners = output
+            .user_data()
+            .get::<OutputName>()
+            .and_then(|name| config.outputs.find(name))
+            .and_then(|c| c.hot_corners)
+            .unwrap_or(config.gestures.hot_corners)
+            .with_default_corners();
+
+        if hot_corners.off {
+            return false;
+        }
+
+        // Use size from the ceiled output geometry, since that's what we currently use for pointer
+        // motion clamping.
+        let geom = self.global_space.output_geometry(output).unwrap();
+        let size = geom.size.to_f64();
+
+        let contains = move |corner: Point<f64, Logical>| {
+            Rectangle::new(corner, Size::new(1., 1.)).contains(pos)
+        };
+
+        if hot_corners.top_right.is_some() && contains(Point::new(size.w - 1., 0.)) {
+            return true;
+        }
+        if hot_corners.bottom_left.is_some() && contains(Point::new(0., size.h - 1.)) {
+            return true;
+        }
+        if hot_corners.bottom_right.is_some() && contains(Point::new(size.w - 1., size.h - 1.)) {
+            return true;
+        }
+        if hot_corners.top_left.is_some() && contains(Point::new(0., 0.)) {
+            return true;
+        }
+
+        false
     }
 
     pub fn trigger_hot_corner(&mut self, action: HotCornerAction, output: Option<&Output>) {
@@ -5277,6 +5410,7 @@ impl Niri {
         let map_to_output = config.input.touch.map_to_output.as_ref();
         map_to_output
             .and_then(|name| self.output_by_name_match(name))
+            .or_else(|| self.layout.active_output())
             .or_else(|| self.global_space.outputs().next())
     }
 
@@ -6705,9 +6839,11 @@ impl Niri {
         self.exit_confirm_dialog
             .render(ctx.renderer, output, &mut |elem| push(elem.into()));
 
-        // Next, the config error notification too.
-        if let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
-            push(element.into());
+        // Next, the config error notification too. Isolated outputs stay free of compositor chrome.
+        if !self.is_output_isolated(output) {
+            if let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
+                push(element.into());
+            }
         }
 
         // If the session is locked, draw the lock surface.
@@ -6820,14 +6956,18 @@ impl Niri {
                 .render(self, output, ctx.r(), &mut |elem| push(elem.into()));
         }
 
-        // Draw the hotkey overlay on top.
-        if let Some(element) = self.hotkey_overlay.render(ctx.renderer, output) {
-            push(element.into());
-        }
+        // The hotkey overlay and Alt-Tab switcher are compositor chrome, so keep them off isolated
+        // outputs (projection/signage/capture); windows and layer-shell content still render below.
+        if !self.is_output_isolated(output) {
+            // Draw the hotkey overlay on top.
+            if let Some(element) = self.hotkey_overlay.render(ctx.renderer, output) {
+                push(element.into());
+            }
 
-        // Then, the Alt-Tab switcher.
-        self.window_mru_ui
-            .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
+            // Then, the Alt-Tab switcher.
+            self.window_mru_ui
+                .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
+        }
 
         // Don't draw the focus ring on the workspaces while interactively moving above those
         // workspaces, since the interactively-moved window already has a focus ring.
@@ -7145,7 +7285,10 @@ impl Niri {
         }
 
         let mut res = RenderResult::Skipped;
-        if self.monitors_active {
+        // Isolated outputs keep rendering while the rest are powered off with skip-isolated.
+        let output_active = self.monitors_active
+            || (self.power_off_skip_isolated && self.is_output_isolated(output));
+        if output_active {
             // Check if shake-to-enlarge hold duration expired and update animation.
             self.update_pointer_scale_animation(false);
             self.update_magnifier_animation();
@@ -7269,7 +7412,13 @@ impl Niri {
         //
         // However, this should probably be restricted to sending frame callbacks to more surfaces,
         // to err on the safe side.
-        self.send_frame_callbacks(output);
+        let is_virtual = crate::backend::VirtualOutputMarker::is_virtual(output);
+        if is_virtual {
+            self.send_frame_callbacks_for_virtual_output(output);
+        } else {
+            self.send_frame_callbacks(output);
+        }
+
         backend.with_primary_renderer(|renderer| {
             #[cfg(feature = "xdp-gnome-screencast")]
             {
@@ -7937,6 +8086,52 @@ impl Niri {
                 frame_callback_time,
                 FRAME_CALLBACK_THROTTLE,
                 should_send,
+            );
+        }
+    }
+
+    /// Send frame callbacks for a virtual output.
+    ///
+    /// Virtual outputs (e.g. HEADLESS-*) don't go through the normal scanout/render pipeline that
+    /// updates `surface_primary_scanout_output`, so the regular `send_frame_callbacks` visibility
+    /// filtering would often suppress callbacks entirely.
+    ///
+    /// This function therefore sends callbacks to surfaces associated with `output`
+    /// unconditionally (still subject to the per-surface throttling done inside `send_frame`).
+    ///
+    /// Note: this deliberately does not send callbacks for global/pointer-related surfaces (cursor
+    /// image, drag-and-drop icon) because those rely on the normal primary-output based
+    /// deduplication.
+    pub fn send_frame_callbacks_for_virtual_output(&mut self, output: &Output) {
+        let _span = tracy_client::span!("Niri::send_frame_callbacks_for_virtual_output");
+
+        let frame_callback_time = get_monotonic_time();
+
+        for mapped in self.layout.windows_for_output_mut(output) {
+            mapped.send_frame(
+                output,
+                frame_callback_time,
+                FRAME_CALLBACK_THROTTLE,
+                |_, _| Some(output.clone()),
+            );
+        }
+
+        for surface in layer_map_for_output(output).layers() {
+            surface.send_frame(
+                output,
+                frame_callback_time,
+                FRAME_CALLBACK_THROTTLE,
+                |_, _| Some(output.clone()),
+            );
+        }
+
+        if let Some(surface) = &self.output_state[output].lock_surface {
+            send_frames_surface_tree(
+                surface.wl_surface(),
+                output,
+                frame_callback_time,
+                FRAME_CALLBACK_THROTTLE,
+                |_, _| Some(output.clone()),
             );
         }
     }

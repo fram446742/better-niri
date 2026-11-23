@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut layout = niri::layout::Layout::<TestWindow>::with_options(clock.clone(), options);
-    layout.add_output(output.clone(), None);
+    layout.add_output(output.clone(), None, false);
 
     let specs: Vec<Spec> = match scenario.as_str() {
         "five" => vec![

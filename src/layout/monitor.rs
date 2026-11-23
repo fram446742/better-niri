@@ -79,6 +79,11 @@ pub struct Monitor<W: LayoutElement> {
     insert_hint_element: InsertHintElement,
     /// Location to render the insert hint element.
     insert_hint_render_loc: Option<InsertHintRenderLoc>,
+    /// Whether this output is marked `isolated` in config.
+    ///
+    /// Isolated outputs are kept out of the overview and compositor UI chrome (for
+    /// projection/signage/capture use). Refreshed from config on output add and config reload.
+    pub(super) isolated: bool,
     /// Whether the overview is open.
     pub(super) overview_open: bool,
     /// Progress of the overview zoom animation, 1 is fully in overview.
@@ -302,6 +307,7 @@ impl<W: LayoutElement> Monitor<W> {
         clock: Clock,
         base_options: Rc<Options>,
         layout_config: Option<LayoutPart>,
+        isolated: bool,
     ) -> Self {
         let options =
             Rc::new(Options::clone(&base_options).with_merged_layout(layout_config.as_ref()));
@@ -347,6 +353,7 @@ impl<W: LayoutElement> Monitor<W> {
             insert_hint: None,
             insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
             insert_hint_render_loc: None,
+            isolated,
             overview_open: false,
             overview_progress: None,
             grid_overview_open: false,
@@ -1563,6 +1570,12 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
+        // Isolated outputs never enter the overview. The visual zoom is driven by
+        // `overview_progress` (not `overview_open`), so refusing progress here is what actually
+        // keeps them out. This is enforced centrally on purpose: there are several call sites and
+        // gating each one is easy to get wrong.
+        let progress = if self.isolated { None } else { progress };
+
         let prev_render_idx = self.workspace_render_idx();
         self.overview_progress = progress.map(OverviewProgress::from);
         let new_render_idx = self.workspace_render_idx();

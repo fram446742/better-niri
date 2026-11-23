@@ -149,7 +149,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut layout = niri::layout::Layout::<TestWindow>::with_options(clock.clone(), options);
-    layout.add_output(output.clone(), None);
+    layout.add_output(output.clone(), None, false);
 
     // Distinct colors so that the flying window can be told apart from the source grid's
     // windows when checking the render z-order.

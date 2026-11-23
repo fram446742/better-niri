@@ -1559,6 +1559,7 @@ mod tests {
 
             output "eDP-1" {
                 focus-at-startup
+                isolated
                 scale 2
                 transform "flipped-90"
                 position x=10 y=20
@@ -2000,6 +2001,7 @@ mod tests {
                 [
                     Output {
                         off: false,
+                        create_virtual: false,
                         name: "eDP-1",
                         scale: Some(
                             FloatOrInt(
@@ -2048,6 +2050,7 @@ mod tests {
                         ),
                         drm_lease: false,
                         focus_at_startup: true,
+                        isolated: true,
                         background_color: Some(
                             Color {
                                 r: 0.09803922,
@@ -2078,6 +2081,7 @@ mod tests {
                     },
                     Output {
                         off: false,
+                        create_virtual: false,
                         name: "eDP-2",
                         scale: None,
                         transform: Normal,
@@ -2100,6 +2104,7 @@ mod tests {
                         variable_refresh_rate: None,
                         drm_lease: false,
                         focus_at_startup: false,
+                        isolated: false,
                         background_color: None,
                         backdrop_color: None,
                         hot_corners: None,
@@ -2107,6 +2112,7 @@ mod tests {
                     },
                     Output {
                         off: false,
+                        create_virtual: false,
                         name: "eDP-3",
                         scale: None,
                         transform: Normal,
@@ -2132,6 +2138,7 @@ mod tests {
                         variable_refresh_rate: None,
                         drm_lease: false,
                         focus_at_startup: false,
+                        isolated: false,
                         background_color: None,
                         backdrop_color: None,
                         hot_corners: None,
