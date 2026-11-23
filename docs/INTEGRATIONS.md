@@ -50,7 +50,46 @@ Divergence measured against the newest common niri commit:
 - If two sources implement the same feature, port one and record why; salvage
   individual fixes as separate commits referencing the alternative.
 
+## 2b. Base decision update: niri-elite + MEKCCK Smithay
+
+Per project direction, the functional base is now
+[`MEKCCK/niri-elite`](https://github.com/MEKCCK/niri-elite) and
+[`MEKCCK/smithay`](https://github.com/MEKCCK/smithay), not the niri-spicy line.
+The other projects are added on top of that base.
+
+- better-smithay: `integration/elite-base` @
+  `2e8e9edbe8a89af91d6bf3369c379cff21af76ff`.
+  First parent MEKCCK/smithay `66b0670` (stabilised colour management, connector
+  colour state, async flips, tearing, seat filtering); second parent the
+  losnoco lineage `dba9452b` for the Vulkan renderer, DRM colour pipelines,
+  SurfaceBarrier and tone-mapping helpers. The two colour modules were
+  otherwise identical apart from `ImageDescription::max_luminance`.
+- better-niri: `integration/elite-base`, merge commit `ea02411a` of
+  niri-elite `31458c94` (base `fcbc971c`) with current upstream `02ee0585`.
+  Reconciliation commit `bbd46e08` restored elite layout semantics and adapted
+  to upstream APIs.
+
+The merge kept 22 conflicted files. Material resolutions:
+
+| Area | Resolution |
+| --- | --- |
+| Move actions | upstream focus flag + elite grid `MoveTargets` |
+| Binds | upstream `pass_through` + elite actions |
+| Capture | upstream `CaptureBuffer`/damage tracker + elite HDR reference luminance |
+| Native portal | `node_sink.deliver()` instead of the Mutter signal emitter |
+| DPMS / frame callbacks | upstream guards kept; elite preview/minimise throttling added |
+| Window states | upstream fullscreen/maximise + elite minimise actions |
+| Tests | elite tests' auto-width harness restored; a separate default-width op serves upstream's preset-width test |
+
+Verified on the branch: `cargo check`, 652 tests, clippy without errors, fmt.
+No hardware validation yet.
+
+This supersedes the earlier "niri-spicy first" plan in section 3 below. The
+spicy/losnoco work remains valuable for Vulkan and the niri-side HDR/Vulkan
+port; it is now layered on the elite base rather than being the base.
+
 ## 3. Feature provenance and chosen ports
+
 
 ### HDR, colour management, Vulkan, presentation — niri-spicy + losnoco/smithay
 

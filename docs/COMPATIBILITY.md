@@ -1,41 +1,56 @@
 # Dependency and compatibility matrix
 
-## 1. Current pin (baseline, verified)
+## 1. Current pins
+
+### Safe baseline (`main`)
 
 | Component | Source | Revision | Notes |
 | --- | --- | --- | --- |
-| better-niri | `fram446742/better-niri` | `02ee0585b9da359cb30aa2a13a6023a6e471cc23` | Identical to niri upstream `main` at audit time. |
+| better-niri | `fram446742/better-niri` | `main` (audit baseline `02ee0585` + docs) | No behavioural changes. |
 | better-smithay | `fram446742/better-smithay` | `a38bb709a0400759b6a4fab6129e0f1dd72808c3` | Identical to Smithay `master`; the revision niri upstream pins. |
-| smithay-drm-extras | `fram446742/better-smithay` | same `a38bb709…` | Must always match `smithay`. |
-| niri-config / niri-ipc | workspace | `26.4.0` | Version follows the workspace. |
-| Rust | toolchain | MSRV 1.88 | Smithay raised its MSRV to 1.88; niri matches. |
+| smithay-drm-extras | same better-smithay commit | `a38bb709…` | Must always match `smithay`. |
 
-`LIBCLANG_PATH=/usr/lib cargo check --workspace` passes at this pin (2026-11-23,
-24 s incremental, Rust 1.102.0-nightly).
+### Integration branch (`integration/elite-base`)
 
-## 2. Planned pin after Smithay consolidation
+| Component | Source | Revision | Notes |
+| --- | --- | --- | --- |
+| better-niri | `fram446742/better-niri` | branch `integration/elite-base` | niri upstream + niri-elite feature base, reconciled. |
+| better-smithay | `fram446742/better-smithay` | `2e8e9edbe8a89af91d6bf3369c379cff21af76ff` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
+| smithay-drm-extras | same better-smithay commit | `2e8e9edb…` | |
+| niri-config / niri-ipc | workspace | `26.4.0-elite` | Elitish version string; to be renamed for better-niri. |
+| Rust | toolchain | MSRV 1.88 | |
 
-The exact commit will be filled in when the consolidated branch is reviewed and
-pushed. The rules are more important than the hash:
+Verified at this pin: `cargo check --workspace`, `cargo test --workspace`
+(652 tests), `cargo clippy --workspace --all-targets` (no errors) and
+`cargo fmt --check`. Hardware is still untested.
 
-| Component | Required state |
+## 2. Integration-branch API adaptation
+
+Porting the niri-elite base onto current upstream required these changes:
+
+| Area | Adaptation |
 | --- | --- |
-| `smithay` | better-smithay `master`, one commit |
-| `smithay-drm-extras` | the **same** better-smithay commit |
-| Smithay features | upstream set niri already enables, plus `renderer_vulkan`/`backend_vulkan` when niri's `vulkan` feature is on |
-| Niri `vulkan` feature | off by default until parity tests pass; GLES remains the reference renderer |
-| Protocol XMLs | `wp-color-management-v1`, `wp-tearing-control-v1`, `ext-background-effect-v1` (upstream), KDE blur XML only if the KDE protocol is enabled |
+| DRM frame submission | `frame_submitted()` returns the feedback tuple directly; async DMABUF feedback is built from plane `formats_async`. |
+| `PresentationMode` | `render_frame()` passes `PresentationMode::VSync` until tearing is wired. |
+| Layout move actions | focus flag added to window/column moves; elite's grid `MoveTargets` kept alongside it. |
+| Bind table | upstream `pass_through` field added to elite-created binds. |
+| HDR screencopy | upstream's `CaptureBuffer`/damage-tracker path retained, with reference luminance passed to `render_to_dmabuf`/`render_to_shm`. |
+| Native portal cast | uses `node_sink.deliver()`; the generic Mutter signal emitter path is no longer used on the native portal path. |
+| Config | `force-tearing` restored as a KDL child; `nested-show-host-cursor` kept from upstream. |
+| Capture paths | ext-image-copy (upstream) kept; elite's window-copy HDR hooks adapted to `capture_bbox`. |
+
+The full integration registry is in `UPSTREAM.md`.
 
 ## 3. Source-fork combinations (do not mix blindly)
 
 | Fork | Niri base | Smithay dependency | Compatibility note |
 | --- | --- | --- | --- |
-| niri-elite | `fcbc971c` | MEKCCK/smithay `66b0670` | Works for its HDR/protocol set; lacks Vulkan. |
-| niri-spicy | `5f4469b6` | `Smithay/smithay` `79bbed5e` **patched by path** to losnoco `spicy-master` | A fresh clone without `../smithay` builds against upstream Smithay and fails: the `rev` and the local patch disagree. Do not reproduce this layout in better-niri. |
-| biri | `2fbc6f3b` | upstream Smithay `a38bb709` | No graphics fork; shaders are GLES on upstream Smithay. |
+| niri-elite | `fcbc971c` | MEKCCK/smithay `66b0670` | The feature base chosen for better-niri; lacks Vulkan, so losnoco is merged on top in better-smithay. |
+| niri-spicy | `5f4469b6` | `Smithay/smithay` `79bbed5e` **patched by path** to losnoco `spicy-master` | A fresh clone without `../smithay` builds against upstream Smithay and fails. Not reproduced here. |
+| biri | `2fbc6f3b` | upstream Smithay `a38bb709` | Next source: layout, hidden/virtual/isolated outputs, per-keyboard, shaders. |
 | kde-niri | `54c7fdcd` (2025-11) | path `../smithay` | One year of upstream drift; cherry-pick only. |
-| losnoco/smithay | Smithay `79bbed5e` | — | 84 commits behind current Smithay. |
-| MEKCCK/smithay | Smithay `8a270232` | — | 50 behind; colour code partially adapted to newer surface cache. |
+| losnoco/smithay | Smithay `79bbed5e` | — | Merged into better-smithay for Vulkan/DRM colour/SurfaceBarrier. |
+| MEKCCK/smithay | Smithay `8a270232` | — | First parent of better-smithay `integration/elite-base`. |
 
 ## 4. Single-Smithay policy
 

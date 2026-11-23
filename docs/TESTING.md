@@ -8,16 +8,21 @@ when the row says so.
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Workspace check | `LIBCLANG_PATH=/usr/lib cargo check --workspace` | **Pass** (baseline, better-smithay pin `a38bb709`) |
-| Unit/integration tests | `cargo test --workspace` | Not run in this audit |
-| Clippy | `cargo clippy --workspace --all-targets -- -D warnings` | Not run in this audit |
-| Format | `cargo fmt --check` | Not run in this audit |
-| Release build | `cargo build --release` | Not run in this audit |
-| Headless visual tests | `cargo test -p niri-visual-tests` | Not run in this audit |
-| Any HDR/VRR/DRM feature | — | **Not tested**; no feature is integrated yet |
+| Workspace check (safe `main`) | `cargo check --workspace` with Smithay `a38bb709` | **Pass** |
+| Workspace check (elite branch) | `cargo check --workspace` with Smithay `2e8e9edb` | **Pass** |
+| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 652 tests, 0 failed |
+| Clippy (elite branch) | `cargo clippy --workspace --all-targets` | **Pass**, no errors; warnings remain in elite-derived code |
+| Format (elite branch) | `cargo fmt --check` | **Pass** |
+| Smithay consolidated, GLES | `cargo check -p smithay` with niri's feature set | **Pass** |
+| Smithay consolidated, Vulkan | `cargo check -p smithay --all-features` | **Pass** (warnings only) |
+| Release build | `cargo build --release` | Not re-run after the elite merge |
+| Hardware features (HDR/VRR/tearing/explicit sync/Vulkan) | — | **Not tested** |
 
-Update this table after every series. Do not mark hardware features as tested
-based on a build.
+Note: `cargo check --workspace --all-features` in better-smithay fails inside
+the `profiling` crate because puffin and tracy backends are mutually exclusive;
+that is feature unification, not project code.
+
+Do not mark hardware features as tested based on a build.
 
 ## 2. CI checks (no GPU required)
 
