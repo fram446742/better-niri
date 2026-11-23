@@ -138,6 +138,18 @@ Rules:
   per-keyboard config.
 - Hidden/parked state must be observable so tools can reconcile after restart.
 
+### Action registry
+
+Both the compositor and better-companion expose a machine-readable action
+registry grouped by category:
+
+- `better-niri` IPC: module/capability query plus the native actions.
+- `better-companion`: `companionctl actions --json`, UDS `core.api.actions`.
+- Each action has a stable name, category, owner, argument schema, permissions
+  and whether it is runtime-available.
+- Tools and Noctalia plugins should query this registry instead of hardcoding
+  feature detection.
+
 ### Companion APIs
 
 - Versioned JSON over Unix sockets under `$XDG_RUNTIME_DIR/better-<name>/`.

@@ -141,6 +141,30 @@ A built-in module must:
 7. Be removable at compile time without breaking core builds (if it is a Tier 2
    module). Core may not depend on a module.
 
+## 4.1 Action ownership inside the compositor
+
+The same category rule applies to built-in compositor modules. Each module owns
+its action namespace and registers it once; core action matching stays small.
+
+| Module | Owned actions (examples) |
+| --- | --- |
+| core (`layout`, `outputs`, `input`, `presentation`) | window/column/workspace moves, float/fullscreen/minimise, sticky primitive, hidden workspaces, virtual/isolated outputs, per-output HDR/VRR/tearing |
+| `effects` | toggle/cycle global, region, window and output shaders; reload presets; list shader status |
+| `navigation` | toggle/open/close grid; overview zoom; carousel rotate; magnifier toggle/move/zoom |
+| `cursor` | SVG theme reload/selection, shake actions/status |
+| `agent` | agent seat enable/disable, agent input/actions, capture receipts, take-over |
+| `kde` | KDE output order, screenshot/colour-picker requests, blur capability |
+| `vulkan` | renderer selection/status/diagnostics (not a user-facing visual feature) |
+
+Rules:
+
+- One owner per action name; duplicates are a build/startup error.
+- Modules may invoke core actions (for example `effects` needs a redraw), but do
+  not reimplement them.
+- Disabled modules do not register actions and are absent from the action list.
+- IPC capability discovery reports module/action availability so tools can
+  degrade gracefully.
+
 ## 5. Performance rules by tier
 
 - **Core**: no regression versus upstream on the default path. Effects and
