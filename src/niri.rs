@@ -5281,12 +5281,19 @@ impl Niri {
             HotCornerAction::GridOverview => {
                 // Without grid-all-monitors, the grid toggles on the active monitor, so make that
                 // the monitor whose hot corner was hit.
-                if !self.config.borrow().grid_overview.grid_all_monitors {
-                    if let Some(output) = output {
-                        self.layout.focus_output(output);
+                #[cfg(feature = "navigation")]
+                {
+                    if !self.config.borrow().grid_overview.grid_all_monitors {
+                        if let Some(output) = output {
+                            self.layout.focus_output(output);
+                        }
                     }
+                    self.layout.toggle_grid_overview();
                 }
-                self.layout.toggle_grid_overview();
+                #[cfg(not(feature = "navigation"))]
+                {
+                    let _ = output;
+                }
             }
         }
     }
