@@ -66,8 +66,12 @@ pub struct OffscreenData {
     pub id: Id,
     /// States for the render into the offscreen buffer.
     pub states: RenderElementStates,
-    /// Whether the texture pixels changed compared to the previous `render` call on this buffer.
-    /// Buffer (re)creation resets the tracker and reports `true`.
+    /// Whether this render actually changed the texture contents, i.e. the inner
+    /// `OutputDamageTracker` reported damage. `false` means the render was a pure diff no-op and
+    /// the texture pixels are bit-identical to the previous `render` call on this buffer. Buffer
+    /// (re)creation (first render, size growth, lost uniqueness, renderer context change) resets
+    /// the tracker and thus always reports `true` via full damage. Callers that retain the
+    /// returned element across frames (e.g. `PanelSource`'s publish-on-damage) key off this.
     pub damaged: bool,
 }
 
@@ -200,9 +204,9 @@ impl OffscreenBuffer {
                 .context("error rendering")?
         };
 
-        // Add the resulting damage to the outer tracker. `render_output` returns `damage: None`
-        // exactly when there was no damage, so `is_some()` is a reliable "contents changed"
-        // signal.
+        // Add the resulting damage to the outer tracker. `OutputDamageTracker::render_output`
+        // returns `damage: None` exactly when there was no damage (a `Some` is never empty), so
+        // `is_some()` is a reliable "contents changed" signal.
         let damaged = res.damage.is_some();
         if let Some(damage) = res.damage {
             // OutputDamageTracker gives us Physical coordinate space, but it's actually the Buffer
@@ -248,6 +252,13 @@ impl Default for OffscreenBuffer {
 impl OffscreenRenderElement {
     pub fn texture(&self) -> &GlesTexture {
         &self.texture
+    }
+
+    /// Renderer context this element's texture was created against. Callers building their own
+    /// render elements from this texture (e.g. `PanelRenderElement`) need this to guard their own
+    /// `draw` against cross-context rendering, the same way `Self::draw` guards itself below.
+    pub fn context_id(&self) -> ContextId<GlesTexture> {
+        self.renderer_context_id.clone()
     }
 
     pub fn offset(&self) -> Point<f64, Logical> {
