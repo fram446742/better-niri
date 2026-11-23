@@ -390,7 +390,9 @@ impl Headless {
     }
 
     pub fn seat_name(&self) -> String {
-        self.udev_seat.clone()
+        // Keep the historical Wayland seat name. `udev_seat` is only the libinput seat used when
+        // NIRI_HEADLESS_INPUT is enabled.
+        "headless".to_owned()
     }
 
     pub fn with_primary_renderer<T>(
