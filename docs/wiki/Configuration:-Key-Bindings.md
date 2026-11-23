@@ -515,8 +515,6 @@ binds {
 }
 ```
 
-<<<<<<< HEAD
-=======
 #### `toggle-window-shader`
 
 Toggle the focused window's shader on or off.
@@ -568,20 +566,6 @@ binds {
 }
 ```
 
-#### `toggle-window-sticky`
-
-<sup>Since: 25.11</sup>
-
-Toggle whether a window is sticky across all workspaces on the current output.
-Sticky windows are floating windows.
-
-```kdl
-binds {
-    Mod+S { toggle-window-sticky; }
-}
-```
-
->>>>>>> 29cc754c (feat: add toggle-window-shader and cycle-window-shader actions)
 #### `screenshot`, `screenshot-screen`, `screenshot-window`
 
 Actions for taking screenshots.

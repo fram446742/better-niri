@@ -72,8 +72,8 @@ pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, 
 pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::screen_cast_picker::ScreenCastPicker;
 pub use crate::shader_presets::{builtin_preset_source, ShaderPresetRefPart, BUILTIN_PRESET_NAMES};
-pub use crate::utils::{BoolOrFloat, FloatOrInt};
 use crate::utils::{expand_home_path, Flag, MergeWith as _};
+pub use crate::utils::{BoolOrFloat, FloatOrInt};
 pub use crate::window_rule::{
     FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, ShaderRule,
     TearingContentType, WindowRule,

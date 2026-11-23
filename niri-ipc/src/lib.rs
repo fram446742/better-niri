@@ -1173,6 +1173,22 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Toggle the output's shader on or off.
+    ToggleOutputShader {
+        /// Name of the output to toggle.
+        ///
+        /// If `None`, uses the focused output.
+        #[cfg_attr(feature = "clap", arg(long))]
+        output: Option<String>,
+    },
+    /// Cycle the output's shader through the configured output-shaders presets.
+    CycleOutputShader {
+        /// Name of the output to cycle.
+        ///
+        /// If `None`, uses the focused output.
+        #[cfg_attr(feature = "clap", arg(long))]
+        output: Option<String>,
+    },
     /// Move the focused window to the floating layout.
     MoveWindowToFloating {
         /// Id of the window to move.

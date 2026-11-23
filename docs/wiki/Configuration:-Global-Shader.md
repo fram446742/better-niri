@@ -566,8 +566,6 @@ The selection is per-window runtime state: it survives config reloads (presets a
 
 ---
 
-<<<<<<< HEAD
-=======
 ## Per-output shaders
 
 A `shader {}` block inside an `output {}` block applies a post-process shader to that single output, without writing any GLSL. It takes the same source fields as `region-shader` (`source`, `path`, `mode`, `pass`), minus `geometry` — an output shader always covers the whole output it's attached to.
@@ -697,7 +695,6 @@ When the flag is present, the global shader, all region shaders, and all per-win
 
 ---
 
->>>>>>> 9292e554 (docs: document per-output shaders and the built-in colour filters)
 ### Scope and Limitations
 
 - **TTY/DRM only.** The effect applies on the real (DRM/KMS) output. It is intentionally **not** applied on the nested winit backend (running niri in a window), nor to screenshots or screen recordings (screencast/screencopy) — those render without the effect.

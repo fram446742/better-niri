@@ -528,6 +528,8 @@ pub enum Action {
     CycleWindowShader,
     #[knuffel(skip)]
     CycleWindowShaderById(u64),
+    ToggleOutputShader(#[knuffel(argument)] Option<String>),
+    CycleOutputShader(#[knuffel(argument)] Option<String>),
     MoveWindowToFloating,
     #[knuffel(skip)]
     MoveWindowToFloatingById(u64),
@@ -950,6 +952,8 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::CycleWindowShader { id: None } => Self::CycleWindowShader,
             niri_ipc::Action::CycleWindowShader { id: Some(id) } => Self::CycleWindowShaderById(id),
+            niri_ipc::Action::ToggleOutputShader { output } => Self::ToggleOutputShader(output),
+            niri_ipc::Action::CycleOutputShader { output } => Self::CycleOutputShader(output),
             niri_ipc::Action::MoveWindowToFloating { id: None } => Self::MoveWindowToFloating,
             niri_ipc::Action::MoveWindowToFloating { id: Some(id) } => {
                 Self::MoveWindowToFloatingById(id)
@@ -1546,7 +1550,10 @@ mod tests {
         let actions: Vec<_> = config.binds.0.iter().map(|b| b.action.clone()).collect();
         assert_eq!(
             actions,
-            [Action::ToggleWindowShader, Action::CycleWindowShader]
+            [
+                BoundAction::Press(Action::ToggleWindowShader),
+                BoundAction::Press(Action::CycleWindowShader),
+            ]
         );
 
         assert_eq!(
