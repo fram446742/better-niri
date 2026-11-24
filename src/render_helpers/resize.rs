@@ -11,7 +11,7 @@ use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform};
 
-use super::renderer::{AsGlesFrame, NiriRenderer};
+use super::renderer::NiriRenderer;
 use super::shader_element::ShaderRenderElement;
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};

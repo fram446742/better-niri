@@ -14,7 +14,6 @@ use super::renderer::NiriRenderer;
 use super::shader_element::ShaderRenderElement;
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
-use crate::render_helpers::renderer::AsGlesFrame as _;
 
 /// Comparable snapshot of everything that feeds into the panel's shader uniforms + texture, so
 /// `update()` can skip rebuilding (and thus skip damaging) the retained element when nothing
