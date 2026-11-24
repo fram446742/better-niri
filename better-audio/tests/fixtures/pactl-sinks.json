@@ -1,0 +1,39 @@
+[
+  {
+    "index": 1,
+    "state": "RUNNING",
+    "name": "alsa_output.usb-headset",
+    "description": "Headset",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "front-left": { "value": 65536, "value_percent": "100%", "db": "0.00 dB" },
+      "front-right": { "value": 65536, "value_percent": "100%", "db": "0.00 dB" }
+    },
+    "properties": { "device.description": "Headset" }
+  },
+  {
+    "index": 2,
+    "state": "IDLE",
+    "name": "alsa_output.hdmi",
+    "description": "HDMI",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "front-left": { "value": 65536, "value_percent": "100%", "db": "0.00 dB" }
+    },
+    "properties": { "device.description": "HDMI" }
+  },
+  {
+    "index": 3,
+    "state": "SUSPENDED",
+    "name": "bluez_output.headphones",
+    "description": "BT",
+    "driver": "PipeWire",
+    "mute": true,
+    "volume": {
+      "front-left": { "value": 32768, "value_percent": "50%", "db": "-6.00 dB" }
+    },
+    "properties": { "device.description": "BT" }
+  }
+]

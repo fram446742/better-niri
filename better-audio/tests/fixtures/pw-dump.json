@@ -1,0 +1,290 @@
+[
+  {
+    "id": 21,
+    "type": "PipeWire:Interface:Factory",
+    "version": 3,
+    "permissions": ["r", "w", "x", "m"],
+    "info": {
+      "props": {
+        "factory.name": "link-factory",
+        "factory.type.name": "PipeWire:Interface:Link"
+      }
+    }
+  },
+  {
+    "id": 40,
+    "type": "PipeWire:Interface:Metadata",
+    "version": 3,
+    "permissions": ["r", "w", "x", "m"],
+    "info": {
+      "props": { "metadata.name": "default" }
+    }
+  },
+  {
+    "id": 52,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "easyeffects_sink",
+        "node.description": "Easy Effects Sink"
+      },
+      "params": {
+        "Props": [{ "volume": 1.0, "mute": false, "channelVolumes": [1.0, 1.0] }]
+      }
+    }
+  },
+  {
+    "id": 58,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "alsa_output.usb-headset",
+        "node.description": "Headset"
+      },
+      "params": {
+        "Props": [{ "volume": 1.0, "mute": false }]
+      }
+    }
+  },
+  {
+    "id": 59,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "alsa_output.hdmi",
+        "node.description": "HDMI"
+      },
+      "params": {
+        "Props": [{ "volume": 1.0, "mute": false }]
+      }
+    }
+  },
+  {
+    "id": 165,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "application.name": "Zen",
+        "application.process.binary": "zen-bin",
+        "media.name": "Song",
+        "node.name": "Zen"
+      },
+      "params": {
+        "Props": [{ "volume": 0.5, "mute": false, "channelVolumes": [0.5, 0.5] }]
+      }
+    }
+  },
+  {
+    "id": 146,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "application.name": "pw-cat",
+        "application.process.binary": "pw-cat",
+        "media.name": "silence.wav",
+        "node.name": "pw-cat"
+      },
+      "params": {
+        "Props": [{ "volume": 1.0, "mute": true, "channelVolumes": [1.0, 1.0] }]
+      }
+    }
+  },
+  {
+    "id": 63,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "52",
+        "port.id": "0",
+        "port.direction": "in",
+        "port.name": "playback_FL",
+        "audio.channel": "FL"
+      }
+    }
+  },
+  {
+    "id": 64,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "52",
+        "port.id": "1",
+        "port.direction": "in",
+        "port.name": "playback_FR",
+        "audio.channel": "FR"
+      }
+    }
+  },
+  {
+    "id": 89,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "58",
+        "port.id": "0",
+        "port.direction": "in",
+        "port.name": "playback_FL",
+        "audio.channel": "FL"
+      }
+    }
+  },
+  {
+    "id": 90,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "58",
+        "port.id": "1",
+        "port.direction": "in",
+        "port.name": "playback_FR",
+        "audio.channel": "FR"
+      }
+    }
+  },
+  {
+    "id": 93,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "59",
+        "port.id": "0",
+        "port.direction": "in",
+        "port.name": "playback_FL",
+        "audio.channel": "FL"
+      }
+    }
+  },
+  {
+    "id": 94,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "59",
+        "port.id": "1",
+        "port.direction": "in",
+        "port.name": "playback_FR",
+        "audio.channel": "FR"
+      }
+    }
+  },
+  {
+    "id": 161,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "165",
+        "port.id": "0",
+        "port.direction": "out",
+        "port.name": "output_FL",
+        "audio.channel": "FL"
+      }
+    }
+  },
+  {
+    "id": 135,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "165",
+        "port.id": "1",
+        "port.direction": "out",
+        "port.name": "output_FR",
+        "audio.channel": "FR"
+      }
+    }
+  },
+  {
+    "id": 134,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "146",
+        "port.id": "0",
+        "port.direction": "out",
+        "port.name": "output_FL",
+        "audio.channel": "FL"
+      }
+    }
+  },
+  {
+    "id": 133,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "info": {
+      "props": {
+        "node.id": "146",
+        "port.id": "1",
+        "port.direction": "out",
+        "port.name": "output_FR",
+        "audio.channel": "FR"
+      }
+    }
+  },
+  {
+    "id": 117,
+    "type": "PipeWire:Interface:Link",
+    "version": 3,
+    "info": {
+      "output-node-id": 165,
+      "output-port-id": 161,
+      "input-node-id": 52,
+      "input-port-id": 63,
+      "state": "active"
+    }
+  },
+  {
+    "id": 104,
+    "type": "PipeWire:Interface:Link",
+    "version": 3,
+    "info": {
+      "output-node-id": 165,
+      "output-port-id": 135,
+      "input-node-id": 52,
+      "input-port-id": 64,
+      "state": "active"
+    }
+  },
+  {
+    "id": 77,
+    "type": "PipeWire:Interface:Link",
+    "version": 3,
+    "info": {
+      "output-node-id": 146,
+      "output-port-id": 134,
+      "input-node-id": 52,
+      "input-port-id": 63,
+      "state": "active"
+    }
+  },
+  {
+    "id": 128,
+    "type": "PipeWire:Interface:Link",
+    "version": 3,
+    "info": {
+      "output-node-id": 146,
+      "output-port-id": 133,
+      "input-node-id": 52,
+      "input-port-id": 64,
+      "state": "active"
+    }
+  }
+]

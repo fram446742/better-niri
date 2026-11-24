@@ -1,21 +1,26 @@
-//! `better-audio`: rule-based audio routing for PipeWire (via `pactl`).
+//! `better-audio`: rule-based audio routing for PipeWire.
 //!
-//! Rules match an application (case-insensitive substring or `*` wildcard) and
-//! name a target sink (exact name, or a unique substring). `apply` moves every
-//! matching playback stream whose current sink differs, and optionally sets the
-//! default sink. `watch` repeats `apply` on an interval so new streams are
-//! routed as they appear.
+//! Rules match an application (case-insensitive substring or `*`/`?` glob) and
+//! name a target sink (exact name, or a unique substring), plus an optional
+//! per-stream profile (volume and mute). `apply` moves every matching playback
+//! stream whose current sink differs and applies the profile; `restore` puts
+//! streams back where they were before the first rule moved them.
 //!
-//! Streams without a matching rule are left alone. The backend is a single
-//! external `pactl` executable (`$BETTER_AUDIO_PACTL`), which keeps the tool
-//! compositor-agnostic and easy to test with a fake program.
+//! Three interchangeable backends are available (see [`backends`]):
+//! native `libpipewire-0.3`, `pactl`, and a CLI fallback built on `pw-dump`,
+//! `pw-cli` and `wpctl`. [`backends::select`] probes them in order and degrades
+//! gracefully when one is unavailable.
+//!
+//! Streams without a matching rule are left alone.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+pub mod backends;
+
+pub use backends::{AudioBackend, BackendConfig, BackendKind, BackendStatus, Selection};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sink {
@@ -25,7 +30,7 @@ pub struct Sink {
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stream {
     pub id: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,9 +38,14 @@ pub struct Stream {
     pub app: String,
     #[serde(default)]
     pub media_name: String,
+    /// Current linear volume (1.0 == 100%), when the backend reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     /// Case-insensitive app match; `*` matches anything, otherwise a substring.
     pub app: String,
@@ -43,6 +53,31 @@ pub struct Rule {
     pub sink: String,
     #[serde(default)]
     pub priority: i32,
+    /// Optional linear volume (1.0 == 100%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<bool>,
+}
+
+/// Where a stream was before a rule moved it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreEntry {
+    pub app: String,
+    #[serde(default)]
+    pub media_name: String,
+    pub sink: String,
+}
+
+impl RestoreEntry {
+    pub fn key(&self) -> String {
+        restore_key(&self.app, &self.media_name)
+    }
+}
+
+/// Streams are matched across runs by app name and media name; node ids change.
+pub fn restore_key(app: &str, media_name: &str) -> String {
+    format!("{app}\u{1f}{media_name}")
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,6 +86,9 @@ pub struct Store {
     pub default_sink: Option<String>,
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Original sinks remembered by the first successful move.
+    #[serde(default)]
+    pub restore: Vec<RestoreEntry>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -80,6 +118,26 @@ impl Store {
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         std::fs::write(&tmp, bytes)?;
         std::fs::rename(tmp, path)
+    }
+
+    /// Adds restore entries that are not already remembered.
+    pub fn remember(&mut self, entries: impl IntoIterator<Item = RestoreEntry>) {
+        let mut known: BTreeSet<String> = self.restore.iter().map(RestoreEntry::key).collect();
+        for entry in entries {
+            if known.insert(entry.key()) {
+                self.restore.push(entry);
+            }
+        }
+    }
+
+    /// Drops restore entries by key.
+    pub fn forget(&mut self, keys: &BTreeSet<String>) {
+        self.restore.retain(|entry| !keys.contains(&entry.key()));
+    }
+
+    pub fn restore_entry(&self, app: &str, media_name: &str) -> Option<&RestoreEntry> {
+        let key = restore_key(app, media_name);
+        self.restore.iter().find(|entry| entry.key() == key)
     }
 }
 
@@ -161,15 +219,32 @@ pub struct Move {
     pub sink: String,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    pub stream_id: u32,
+    pub app: String,
+    pub volume: Option<f32>,
+    pub mute: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Plan {
     pub moves: Vec<Move>,
+    pub profiles: Vec<Profile>,
     pub default: Option<(String, String)>,
     /// Streams that matched a rule whose sink does not exist.
     pub unresolved: Vec<String>,
+    /// Original sinks to remember for `restore` once the moves succeed.
+    pub remember: Vec<RestoreEntry>,
 }
 
-/// Computes the moves needed to satisfy the rules.
+const VOLUME_EPSILON: f32 = 0.005;
+
+fn volume_differs(current: Option<f32>, target: f32) -> bool {
+    current.is_none_or(|current| (current - target).abs() > VOLUME_EPSILON)
+}
+
+/// Computes the moves and profile changes needed to satisfy the rules.
 pub fn plan(
     store: &Store,
     sinks: &[Sink],
@@ -178,6 +253,8 @@ pub fn plan(
 ) -> Plan {
     let mut plan = Plan::default();
     let mut unresolved = BTreeSet::new();
+    let mut remembered: BTreeSet<String> = store.restore.iter().map(RestoreEntry::key).collect();
+
     for stream in streams {
         let Some(rule) = resolve_rule(&store.rules, &stream.app) else {
             continue;
@@ -186,16 +263,43 @@ pub fn plan(
             unresolved.insert(format!("{} -> {}", stream.app, rule.sink));
             continue;
         };
-        if stream.sink_id == Some(sink.id) {
-            continue;
+
+        if stream.sink_id != Some(sink.id) {
+            if !remembered.contains(&restore_key(&stream.app, &stream.media_name))
+                && let Some(from) = stream
+                    .sink_id
+                    .and_then(|id| sinks.iter().find(|sink| sink.id == id))
+                && from.name != sink.name
+            {
+                let entry = RestoreEntry {
+                    app: stream.app.clone(),
+                    media_name: stream.media_name.clone(),
+                    sink: from.name.clone(),
+                };
+                remembered.insert(entry.key());
+                plan.remember.push(entry);
+            }
+            plan.moves.push(Move {
+                stream_id: stream.id,
+                app: stream.app.clone(),
+                from: stream.sink_id,
+                to: sink.id,
+                sink: sink.name.clone(),
+            });
         }
-        plan.moves.push(Move {
-            stream_id: stream.id,
-            app: stream.app.clone(),
-            from: stream.sink_id,
-            to: sink.id,
-            sink: sink.name.clone(),
-        });
+
+        let volume = rule
+            .volume
+            .filter(|target| volume_differs(stream.volume, *target));
+        let mute = rule.mute.filter(|target| stream.mute != Some(*target));
+        if volume.is_some() || mute.is_some() {
+            plan.profiles.push(Profile {
+                stream_id: stream.id,
+                app: stream.app.clone(),
+                volume,
+                mute,
+            });
+        }
     }
     plan.unresolved = unresolved.into_iter().collect();
 
@@ -211,166 +315,70 @@ pub fn plan(
     plan
 }
 
-#[derive(Debug, Clone)]
-pub struct Backend {
-    program: String,
+/// A restore operation derived from [`Store::restore`].
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RestorePlan {
+    pub moves: Vec<Move>,
+    pub unresolved: Vec<String>,
+    /// Restore entries that can be dropped afterwards (restored or stale).
+    pub done: BTreeSet<String>,
 }
 
-impl Default for Backend {
-    fn default() -> Self {
-        Self::new(std::env::var("BETTER_AUDIO_PACTL").unwrap_or_else(|_| "pactl".to_owned()))
-    }
-}
-
-impl Backend {
-    pub fn new(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
+impl RestorePlan {
+    pub fn into_plan(self) -> Plan {
+        Plan {
+            moves: self.moves,
+            ..Plan::default()
         }
-    }
-
-    pub fn program(&self) -> &str {
-        &self.program
-    }
-
-    fn run(&self, args: &[&str]) -> Result<String, String> {
-        // A just-written script can briefly fail with ETXTBSY; retry it.
-        let mut attempts = 0;
-        let output = loop {
-            match Command::new(&self.program).args(args).output() {
-                Ok(output) => break output,
-                Err(err) if err.raw_os_error() == Some(26) && attempts < 20 => {
-                    attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(err) => return Err(format!("cannot run {}: {err}", self.program)),
-            }
-        };
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "{} {} failed ({}): {}",
-                self.program,
-                args.join(" "),
-                output.status,
-                stderr.trim()
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
-
-    pub fn sinks(&self) -> Result<Vec<Sink>, String> {
-        parse_sinks(&self.run(&["-f", "json", "list", "sinks"])?)
-    }
-
-    pub fn streams(&self) -> Result<Vec<Stream>, String> {
-        parse_streams(&self.run(&["-f", "json", "list", "sink-inputs"])?)
-    }
-
-    pub fn default_sink(&self) -> Result<Option<String>, String> {
-        match self.run(&["get-default-sink"]) {
-            Ok(name) => {
-                let name = name.trim().to_owned();
-                Ok((!name.is_empty()).then_some(name))
-            }
-            // Older pactl builds lack `get-default-sink`.
-            Err(_) => Ok(None),
-        }
-    }
-
-    pub fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String> {
-        self.run(&["move-sink-input", &stream_id.to_string(), sink])
-            .map(|_| ())
-    }
-
-    pub fn set_default_sink(&self, sink: &str) -> Result<(), String> {
-        self.run(&["set-default-sink", sink]).map(|_| ())
     }
 }
 
-pub fn parse_sinks(json: &str) -> Result<Vec<Sink>, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|err| format!("invalid sinks JSON: {err}"))?;
-    let array = value
-        .as_array()
-        .ok_or_else(|| "sinks JSON is not an array".to_owned())?;
-    let mut sinks = Vec::new();
-    for entry in array {
-        let Some(id) = entry.get("index").and_then(Value::as_u64) else {
+/// Plans moving remembered streams back to their original sinks.
+///
+/// Entries whose stream is gone are reported and dropped; entries whose sink is
+/// missing are reported and kept for a later attempt.
+pub fn plan_restore(store: &Store, sinks: &[Sink], streams: &[Stream]) -> RestorePlan {
+    let mut plan = RestorePlan::default();
+    for entry in &store.restore {
+        let key = entry.key();
+        let matching: Vec<&Stream> = streams
+            .iter()
+            .filter(|stream| restore_key(&stream.app, &stream.media_name) == key)
+            .collect();
+        if matching.is_empty() {
+            plan.unresolved
+                .push(format!("{} ({}) is gone", entry.app, entry.media_name));
+            plan.done.insert(key);
+            continue;
+        }
+        let Some(sink) = resolve_sink(sinks, &entry.sink) else {
+            plan.unresolved
+                .push(format!("{} -> {} (missing)", entry.app, entry.sink));
             continue;
         };
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        sinks.push(Sink {
-            id: id as u32,
-            name,
-            description,
-        });
+        plan.done.insert(key);
+        for stream in matching {
+            if stream.sink_id == Some(sink.id) {
+                continue;
+            }
+            plan.moves.push(Move {
+                stream_id: stream.id,
+                app: stream.app.clone(),
+                from: stream.sink_id,
+                to: sink.id,
+                sink: sink.name.clone(),
+            });
+        }
     }
-    Ok(sinks)
-}
-
-pub fn parse_streams(json: &str) -> Result<Vec<Stream>, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|err| format!("invalid streams JSON: {err}"))?;
-    let array = value
-        .as_array()
-        .ok_or_else(|| "streams JSON is not an array".to_owned())?;
-    let mut streams = Vec::new();
-    for entry in array {
-        let Some(id) = entry.get("index").and_then(Value::as_u64) else {
-            continue;
-        };
-        let sink_id = entry
-            .get("sink")
-            .and_then(Value::as_u64)
-            .map(|id| id as u32);
-        let properties = entry.get("properties").cloned().unwrap_or(Value::Null);
-        let app = [
-            "application.name",
-            "application.process.binary",
-            "media.name",
-        ]
-        .iter()
-        .find_map(|key| {
-            properties
-                .get(*key)
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .or_else(|| {
-            entry
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.starts_with("Sink Input"))
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| format!("stream {id}"));
-        let media_name = properties
-            .get("media.name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        streams.push(Stream {
-            id: id as u32,
-            sink_id,
-            app,
-            media_name,
-        });
-    }
-    Ok(streams)
+    plan
 }
 
 /// Applies a plan through the backend. With `dry_run`, nothing is executed.
-pub fn execute(backend: &Backend, plan: &Plan, dry_run: bool) -> Result<Vec<String>, String> {
+pub fn execute(
+    backend: &dyn AudioBackend,
+    plan: &Plan,
+    dry_run: bool,
+) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
     for movement in &plan.moves {
         if dry_run {
@@ -386,20 +394,56 @@ pub fn execute(backend: &Backend, plan: &Plan, dry_run: bool) -> Result<Vec<Stri
             ));
         }
     }
-    if let Some((from, to)) = &plan.default {
-        if dry_run {
-            log.push(format!("default {from} -> {to}"));
-        } else {
-            backend.set_default_sink(to)?;
-            log.push(format!("default {from} -> {to}"));
+    for profile in &plan.profiles {
+        if let Some(volume) = profile.volume {
+            if dry_run {
+                log.push(format!(
+                    "volume {} ({}) -> {:.0}%",
+                    profile.stream_id,
+                    profile.app,
+                    volume * 100.0
+                ));
+            } else {
+                backend.set_stream_volume(profile.stream_id, volume)?;
+                log.push(format!(
+                    "volume {} ({}) -> {:.0}%",
+                    profile.stream_id,
+                    profile.app,
+                    volume * 100.0
+                ));
+            }
         }
+        if let Some(mute) = profile.mute {
+            if dry_run {
+                log.push(format!(
+                    "mute {} ({}) -> {}",
+                    profile.stream_id,
+                    profile.app,
+                    if mute { "on" } else { "off" }
+                ));
+            } else {
+                backend.set_stream_mute(profile.stream_id, mute)?;
+                log.push(format!(
+                    "mute {} ({}) -> {}",
+                    profile.stream_id,
+                    profile.app,
+                    if mute { "on" } else { "off" }
+                ));
+            }
+        }
+    }
+    if let Some((from, to)) = &plan.default {
+        if !dry_run {
+            backend.set_default_sink(to)?;
+        }
+        log.push(format!("default {from} -> {to}"));
     }
     Ok(log)
 }
 
 /// Queries the backend and applies the current rules once.
 pub fn apply_once(
-    backend: &Backend,
+    backend: &dyn AudioBackend,
     store: &Store,
     dry_run: bool,
 ) -> Result<(Plan, Vec<String>), String> {
@@ -411,20 +455,21 @@ pub fn apply_once(
     Ok((plan, log))
 }
 
+/// Executes a restore plan (moves only) and returns its log.
+pub fn execute_restore(
+    backend: &dyn AudioBackend,
+    restore: &RestorePlan,
+    dry_run: bool,
+) -> Result<Vec<String>, String> {
+    execute(backend, &restore.clone().into_plan(), dry_run)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use serde_json::json;
 
+    use self::backend_fakes::FakeBackend;
     use super::*;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("better-audio-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn sinks() -> Vec<Sink> {
         vec![
@@ -452,6 +497,8 @@ mod tests {
             sink_id: Some(sink),
             app: app.to_owned(),
             media_name: String::new(),
+            volume: None,
+            mute: None,
         }
     }
 
@@ -460,6 +507,8 @@ mod tests {
             app: app.to_owned(),
             sink: sink.to_owned(),
             priority,
+            volume: None,
+            mute: None,
         }
     }
 
@@ -495,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_moves_only_mismatched_streams() {
+    fn plan_moves_only_mismatched_streams_and_remembers_origin() {
         let store = Store {
             default_sink: Some("headset".to_owned()),
             rules: vec![
@@ -503,6 +552,7 @@ mod tests {
                 rule("game", "hdmi", 0),
                 rule("missing-app", "nope", 0),
             ],
+            restore: vec![],
         };
         let streams = vec![
             stream(10, "Spotify", 2),
@@ -517,6 +567,63 @@ mod tests {
         assert_eq!(plan.moves[0].from, Some(2));
         assert_eq!(plan.default.as_ref().unwrap().1, "alsa_output.usb-headset");
         assert_eq!(plan.unresolved, ["missing-app -> nope"]);
+        // The first move records where Spotify came from.
+        assert_eq!(plan.remember.len(), 1);
+        assert_eq!(plan.remember[0].sink, "alsa_output.hdmi");
+    }
+
+    #[test]
+    fn plan_does_not_overwrite_remembered_sink() {
+        let store = Store {
+            default_sink: None,
+            rules: vec![rule("spotify", "headset", 0)],
+            restore: vec![RestoreEntry {
+                app: "Spotify".to_owned(),
+                media_name: String::new(),
+                sink: "bluez_output.headphones".to_owned(),
+            }],
+        };
+        let plan = plan(&store, &sinks(), &[stream(10, "Spotify", 2)], None);
+        assert_eq!(plan.moves.len(), 1);
+        assert!(plan.remember.is_empty());
+    }
+
+    #[test]
+    fn plan_is_idempotent_when_stream_already_at_target() {
+        let store = Store {
+            default_sink: None,
+            rules: vec![rule("spotify", "headset", 0)],
+            restore: vec![],
+        };
+        let plan = plan(&store, &sinks(), &[stream(10, "Spotify", 1)], None);
+        assert!(plan.moves.is_empty());
+        assert!(plan.profiles.is_empty());
+        assert!(plan.remember.is_empty());
+    }
+
+    #[test]
+    fn plan_applies_profile_and_skips_equal_values() {
+        let mut profile_rule = rule("spotify", "headset", 0);
+        profile_rule.volume = Some(0.5);
+        profile_rule.mute = Some(true);
+        let store = Store {
+            default_sink: None,
+            rules: vec![profile_rule],
+            restore: vec![],
+        };
+        let mut playing = stream(10, "Spotify", 1);
+        playing.volume = Some(0.8);
+        let result = plan(&store, &sinks(), &[playing], None);
+        assert!(result.moves.is_empty());
+        assert_eq!(result.profiles.len(), 1);
+        assert_eq!(result.profiles[0].volume, Some(0.5));
+        assert_eq!(result.profiles[0].mute, Some(true));
+
+        let mut equal = stream(10, "Spotify", 1);
+        equal.volume = Some(0.5);
+        equal.mute = Some(true);
+        let result = plan(&store, &sinks(), &[equal], None);
+        assert!(result.profiles.is_empty());
     }
 
     #[test]
@@ -524,6 +631,7 @@ mod tests {
         let store = Store {
             default_sink: Some("alsa_output.hdmi".to_owned()),
             rules: vec![],
+            restore: vec![],
         };
         let plan = plan(&store, &sinks(), &[], Some("alsa_output.hdmi"));
         assert!(plan.moves.is_empty());
@@ -531,117 +639,286 @@ mod tests {
     }
 
     #[test]
-    fn parses_pactl_json() {
-        let sinks = parse_sinks(
-            r#"[{"index":1,"name":"alsa_output.hdmi","description":"HDMI"},
-                {"index":2,"name":"bluez","description":"BT"}]"#,
-        )
-        .unwrap();
-        assert_eq!(sinks.len(), 2);
-        assert_eq!(sinks[1].name, "bluez");
+    fn restore_plan_moves_back_and_marks_done() {
+        let store = Store {
+            default_sink: None,
+            rules: vec![],
+            restore: vec![
+                RestoreEntry {
+                    app: "Spotify".to_owned(),
+                    media_name: "Song".to_owned(),
+                    sink: "alsa_output.usb-headset".to_owned(),
+                },
+                RestoreEntry {
+                    app: "Gone".to_owned(),
+                    media_name: String::new(),
+                    sink: "alsa_output.hdmi".to_owned(),
+                },
+            ],
+        };
+        let mut playing = stream(10, "Spotify", 2);
+        playing.media_name = "Song".to_owned();
+        let restore = plan_restore(&store, &sinks(), &[playing]);
+        assert_eq!(restore.moves.len(), 1);
+        assert_eq!(restore.moves[0].to, 1);
+        assert_eq!(restore.done.len(), 2);
+        assert!(restore.unresolved.iter().any(|line| line.contains("Gone")));
 
-        let streams = parse_streams(
-            r#"[{"index":5,"sink":2,"properties":{"application.name":"Spotify","media.name":"Song"}},
-                {"index":6,"sink":1,"properties":{"application.process.binary":"mpv"}},
-                {"index":7,"sink":1}]"#,
-        )
-        .unwrap();
-        assert_eq!(streams[0].app, "Spotify");
-        assert_eq!(streams[0].media_name, "Song");
-        assert_eq!(streams[1].app, "mpv");
-        assert_eq!(streams[2].app, "stream 7");
+        let mut store = store;
+        store.forget(&restore.done);
+        assert!(store.restore.is_empty());
+    }
+
+    #[test]
+    fn restore_skips_streams_already_home() {
+        let store = Store {
+            default_sink: None,
+            rules: vec![],
+            restore: vec![RestoreEntry {
+                app: "Spotify".to_owned(),
+                media_name: String::new(),
+                sink: "alsa_output.usb-headset".to_owned(),
+            }],
+        };
+        let restore = plan_restore(&store, &sinks(), &[stream(10, "Spotify", 1)]);
+        assert!(restore.moves.is_empty());
+        assert_eq!(restore.done.len(), 1);
     }
 
     #[test]
     fn store_round_trips() {
-        let path = temp_dir("store").join("rules.json");
+        let path = std::env::temp_dir()
+            .join(format!("better-audio-store-{}", std::process::id()))
+            .join("rules.json");
         let store = Store {
             default_sink: Some("alsa_output.usb-headset".to_owned()),
-            rules: vec![rule("spotify", "headset", 5)],
+            rules: vec![Rule {
+                app: "spotify".to_owned(),
+                sink: "headset".to_owned(),
+                priority: 5,
+                volume: Some(0.5),
+                mute: Some(true),
+            }],
+            restore: vec![RestoreEntry {
+                app: "Spotify".to_owned(),
+                media_name: "Song".to_owned(),
+                sink: "alsa_output.hdmi".to_owned(),
+            }],
         };
         store.save(&path).unwrap();
         let reloaded = Store::load(&path).unwrap();
         assert_eq!(reloaded, store);
     }
 
-    /// Fake `pactl` that answers JSON queries and records mutations.
-    fn fake_pactl(dir: &Path, default: &str) -> (String, PathBuf) {
-        let log = dir.join("calls.log");
-        let program = dir.join("pactl");
-        let script = format!(
-            r#"#!/bin/sh
-printf '%s\n' "$*" >> {log}
-case "$*" in
-  "-f json list sinks")
-    printf '%s' '[{{"index":1,"name":"alsa_output.usb-headset","description":"Headset"}},{{"index":2,"name":"alsa_output.hdmi","description":"HDMI"}}]'
-    ;;
-  "-f json list sink-inputs")
-    printf '%s' '[{{"index":10,"sink":2,"properties":{{"application.name":"Spotify"}}}},{{"index":11,"sink":2,"properties":{{"application.name":"Chromium"}}}},{{"index":12,"sink":1,"properties":{{"application.name":"Spotify"}}}}]'
-    ;;
-  "get-default-sink")
-    printf '%s\n' {default}
-    ;;
-  *)
-    printf 'ok\n'
-    ;;
-esac
-"#,
-            log = log.display(),
-            default = default
-        );
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (program.display().to_string(), log)
+    #[test]
+    fn store_accepts_legacy_rules_without_profile_or_restore() {
+        let store: Store = serde_json::from_value(json!({
+            "default_sink": "headset",
+            "rules": [{ "app": "spotify", "sink": "headset" }]
+        }))
+        .unwrap();
+        assert_eq!(store.rules[0].volume, None);
+        assert!(store.restore.is_empty());
     }
 
     #[test]
-    fn apply_moves_streams_and_sets_default() {
-        let dir = temp_dir("apply");
-        let (program, log) = fake_pactl(&dir, "alsa_output.hdmi");
-        let backend = Backend::new(program);
+    fn fake_backend_executes_moves_profiles_and_default() {
+        let backend = FakeBackend::new(BackendKind::Pactl, Vec::new(), Vec::new(), None);
         let store = Store {
             default_sink: Some("headset".to_owned()),
-            rules: vec![rule("spotify", "headset", 0)],
+            rules: vec![Rule {
+                app: "spotify".to_owned(),
+                sink: "headset".to_owned(),
+                priority: 0,
+                volume: Some(0.5),
+                mute: Some(true),
+            }],
+            restore: vec![],
         };
-        let (plan, executed) = apply_once(&backend, &store, false).unwrap();
+        backend.set_state(sinks(), vec![stream(10, "Spotify", 2)], Some("hdmi"));
+        let (plan, log) = apply_once(&backend, &store, false).unwrap();
         assert_eq!(plan.moves.len(), 1);
-        assert_eq!(executed.len(), 2);
-        let calls = std::fs::read_to_string(&log).unwrap();
-        assert!(calls.contains("move-sink-input 10 alsa_output.usb-headset"));
-        assert!(calls.contains("set-default-sink alsa_output.usb-headset"));
-        // Chromium has no rule and must not be moved.
-        assert!(!calls.contains("move-sink-input 11"));
+        assert_eq!(plan.profiles.len(), 1);
+        assert_eq!(log.len(), 4);
+        let calls = backend.calls();
+        assert!(calls.contains(&"move 10 alsa_output.usb-headset".to_owned()));
+        assert!(calls.contains(&"volume 10 0.5".to_owned()));
+        assert!(calls.contains(&"mute 10 true".to_owned()));
+        assert!(calls.contains(&"default alsa_output.usb-headset".to_owned()));
     }
 
     #[test]
-    fn dry_run_queries_but_does_not_mutate() {
-        let dir = temp_dir("dry");
-        let (program, log) = fake_pactl(&dir, "alsa_output.hdmi");
-        let backend = Backend::new(program);
+    fn dry_run_executes_nothing() {
+        let backend = FakeBackend::new(BackendKind::Wpctl, Vec::new(), Vec::new(), None);
+        backend.set_state(sinks(), vec![stream(10, "Spotify", 2)], Some("hdmi"));
         let store = Store {
             default_sink: Some("headset".to_owned()),
             rules: vec![rule("spotify", "headset", 0)],
+            restore: vec![],
         };
-        let (_, executed) = apply_once(&backend, &store, true).unwrap();
-        assert!(executed.iter().any(|line| line.starts_with("move 10")));
-        let calls = std::fs::read_to_string(&log).unwrap();
-        assert!(!calls.contains("move-sink-input"));
-        assert!(!calls.contains("set-default-sink"));
-        assert!(calls.contains("-f json list sinks"));
+        let (_, log) = apply_once(&backend, &store, true).unwrap();
+        assert!(log.iter().any(|line| line.starts_with("move 10")));
+        assert!(backend.calls().is_empty());
     }
 
     #[test]
-    fn failed_pactl_surfaces_stderr() {
-        let dir = temp_dir("fail");
-        let program = dir.join("pactl");
-        let mut file = std::fs::File::create(&program).unwrap();
-        writeln!(file, "#!/bin/sh").unwrap();
-        writeln!(file, "echo 'connection refused' >&2").unwrap();
-        writeln!(file, "exit 1").unwrap();
-        drop(file);
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let backend = Backend::new(program.display().to_string());
-        let error = backend.sinks().unwrap_err();
-        assert!(error.contains("connection refused"), "{error}");
+    fn backend_selection_auto_prefers_native() {
+        let selection = backends::select_backend(BackendKind::Auto, |kind| {
+            Ok(Box::new(FakeBackend::new(
+                kind,
+                Vec::new(),
+                Vec::new(),
+                None,
+            )))
+        })
+        .unwrap();
+        assert_eq!(selection.status.active, BackendKind::Native);
+        assert!(!selection.status.degraded);
+        assert_eq!(selection.status.attempts.len(), 1);
+    }
+
+    #[test]
+    fn backend_selection_degrades_when_native_is_unavailable() {
+        let selection = backends::select_backend(BackendKind::Auto, |kind| match kind {
+            BackendKind::Native => Err("cannot connect to PipeWire".to_owned()),
+            other => Ok(Box::new(FakeBackend::new(
+                other,
+                Vec::new(),
+                Vec::new(),
+                None,
+            ))),
+        })
+        .unwrap();
+        assert_eq!(selection.status.active, BackendKind::Pactl);
+        assert!(!selection.status.degraded);
+        assert!(selection.status.attempts[0].error.is_some());
+        assert!(
+            selection
+                .status
+                .explanation()
+                .contains("native unavailable")
+        );
+    }
+
+    #[test]
+    fn backend_selection_marks_explicit_fallback_degraded() {
+        let selection = backends::select_backend(BackendKind::Pactl, |kind| match kind {
+            BackendKind::Pactl => Err("pactl: command not found".to_owned()),
+            other => Ok(Box::new(FakeBackend::new(
+                other,
+                Vec::new(),
+                Vec::new(),
+                None,
+            ))),
+        })
+        .unwrap();
+        assert_eq!(selection.status.active, BackendKind::Native);
+        assert!(selection.status.degraded);
+        assert!(selection.status.explanation().contains("pactl unavailable"));
+    }
+
+    #[test]
+    fn backend_selection_reports_every_failure() {
+        let result = backends::select_backend(BackendKind::Auto, |kind| {
+            Err(format!("{} is missing", kind.as_str()))
+        });
+        let Err(error) = result else {
+            panic!("selection unexpectedly succeeded");
+        };
+        assert!(error.contains("native is missing"), "{error}");
+        assert!(error.contains("pactl is missing"), "{error}");
+        assert!(error.contains("wpctl is missing"), "{error}");
+    }
+
+    /// Fake backend used by routing and selection tests. It records every
+    /// mutation so tests can assert on dry-run and idempotency.
+    pub mod backend_fakes {
+        use std::cell::RefCell;
+
+        use crate::backends::AudioBackend;
+        use crate::{BackendKind, Sink, Stream};
+
+        pub struct FakeBackend {
+            kind: BackendKind,
+            sinks: RefCell<Vec<Sink>>,
+            streams: RefCell<Vec<Stream>>,
+            default: RefCell<Option<String>>,
+            calls: RefCell<Vec<String>>,
+        }
+
+        impl FakeBackend {
+            pub fn new(
+                kind: BackendKind,
+                sinks: Vec<Sink>,
+                streams: Vec<Stream>,
+                default: Option<String>,
+            ) -> Self {
+                Self {
+                    kind,
+                    sinks: RefCell::new(sinks),
+                    streams: RefCell::new(streams),
+                    default: RefCell::new(default),
+                    calls: RefCell::new(Vec::new()),
+                }
+            }
+
+            pub fn set_state(&self, sinks: Vec<Sink>, streams: Vec<Stream>, default: Option<&str>) {
+                *self.sinks.borrow_mut() = sinks;
+                *self.streams.borrow_mut() = streams;
+                *self.default.borrow_mut() = default.map(str::to_owned);
+            }
+
+            pub fn calls(&self) -> Vec<String> {
+                self.calls.borrow().clone()
+            }
+        }
+
+        impl AudioBackend for FakeBackend {
+            fn kind(&self) -> BackendKind {
+                self.kind
+            }
+
+            fn description(&self) -> String {
+                format!("fake {}", self.kind.as_str())
+            }
+
+            fn sinks(&self) -> Result<Vec<Sink>, String> {
+                Ok(self.sinks.borrow().clone())
+            }
+
+            fn streams(&self) -> Result<Vec<Stream>, String> {
+                Ok(self.streams.borrow().clone())
+            }
+
+            fn default_sink(&self) -> Result<Option<String>, String> {
+                Ok(self.default.borrow().clone())
+            }
+
+            fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String> {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("move {stream_id} {sink}"));
+                Ok(())
+            }
+
+            fn set_default_sink(&self, sink: &str) -> Result<(), String> {
+                self.calls.borrow_mut().push(format!("default {sink}"));
+                Ok(())
+            }
+
+            fn set_stream_volume(&self, stream_id: u32, volume: f32) -> Result<(), String> {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("volume {stream_id} {volume}"));
+                Ok(())
+            }
+
+            fn set_stream_mute(&self, stream_id: u32, mute: bool) -> Result<(), String> {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("mute {stream_id} {mute}"));
+                Ok(())
+            }
+        }
     }
 }

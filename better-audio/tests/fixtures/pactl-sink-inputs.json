@@ -1,0 +1,42 @@
+[
+  {
+    "index": 10,
+    "driver": "PipeWire",
+    "client": "2043",
+    "sink": 2,
+    "corked": false,
+    "mute": false,
+    "volume": {
+      "front-left": { "value": 32768, "value_percent": "50%", "db": "-6.00 dB" },
+      "front-right": { "value": 32768, "value_percent": "50%", "db": "-6.00 dB" }
+    },
+    "properties": {
+      "application.name": "Spotify",
+      "application.process.binary": "spotify",
+      "media.name": "Song"
+    }
+  },
+  {
+    "index": 11,
+    "driver": "PipeWire",
+    "client": "2044",
+    "sink": 2,
+    "corked": false,
+    "mute": true,
+    "volume": {
+      "front-left": { "value": 65536, "value_percent": "100%", "db": "0.00 dB" }
+    },
+    "properties": {
+      "application.process.binary": "mpv",
+      "media.name": "Movie"
+    }
+  },
+  {
+    "index": 12,
+    "driver": "PipeWire",
+    "client": "2045",
+    "sink": 1,
+    "corked": true,
+    "properties": {}
+  }
+]
