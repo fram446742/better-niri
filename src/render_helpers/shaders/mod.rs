@@ -971,49 +971,52 @@ pub fn init_vulkan(renderer: &mut VulkanRenderer, config: &niri_config::Config) 
         }
     }
 
-    // Global and per-window scoped shader passes: compile the same sources and
-    // keep them keyed exactly like the GLES registries so the element draw path
-    // can look them up by ProgramType.
-    let passes = crate::niri::global_shader_pass_sources(&config.global_shader);
-    let mut global_passes = Vec::new();
-    let mut global_buffers = Vec::new();
-    for (source, hyprland) in &passes {
-        match compile_vulkan_global(renderer, source, *hyprland) {
-            Ok(program) => global_passes.push(program),
-            Err(err) => {
-                warn!("error compiling Vulkan global shader pass: {err:?}");
-                global_passes.clear();
-                break;
-            }
-        }
-        let buffer = match (source.contains("global_buffer"), *hyprland) {
-            (true, false) => compile_vulkan_global(renderer, source, false).ok(),
-            _ => None,
-        };
-        global_buffers.push(buffer);
-    }
-    *shaders.global_passes.get_mut() = global_passes;
-    *shaders.global_buffers.get_mut() = global_buffers;
-
-    for chain in crate::niri::scoped_shader_chains(config) {
-        if chain.is_empty() {
-            continue;
-        }
-        let key = scoped_key(&chain);
-        let mut compiled = Vec::with_capacity(chain.len());
-        let mut ok = true;
-        for (source, hyprland) in &chain {
+    #[cfg(feature = "effects")]
+    {
+        // Global and per-window scoped shader passes: compile the same sources and
+        // keep them keyed exactly like the GLES registries so the element draw path
+        // can look them up by ProgramType.
+        let passes = crate::niri::global_shader_pass_sources(&config.global_shader);
+        let mut global_passes = Vec::new();
+        let mut global_buffers = Vec::new();
+        for (source, hyprland) in &passes {
             match compile_vulkan_global(renderer, source, *hyprland) {
-                Ok(program) => compiled.push(program),
+                Ok(program) => global_passes.push(program),
                 Err(err) => {
-                    warn!("error compiling Vulkan scoped shader: {err:?}");
-                    ok = false;
+                    warn!("error compiling Vulkan global shader pass: {err:?}");
+                    global_passes.clear();
                     break;
                 }
             }
+            let buffer = match (source.contains("global_buffer"), *hyprland) {
+                (true, false) => compile_vulkan_global(renderer, source, false).ok(),
+                _ => None,
+            };
+            global_buffers.push(buffer);
         }
-        if ok {
-            shaders.scoped.get_mut().insert(key, compiled);
+        *shaders.global_passes.get_mut() = global_passes;
+        *shaders.global_buffers.get_mut() = global_buffers;
+
+        for chain in crate::niri::scoped_shader_chains(config) {
+            if chain.is_empty() {
+                continue;
+            }
+            let key = scoped_key(&chain);
+            let mut compiled = Vec::with_capacity(chain.len());
+            let mut ok = true;
+            for (source, hyprland) in &chain {
+                match compile_vulkan_global(renderer, source, *hyprland) {
+                    Ok(program) => compiled.push(program),
+                    Err(err) => {
+                        warn!("error compiling Vulkan scoped shader: {err:?}");
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                shaders.scoped.get_mut().insert(key, compiled);
+            }
         }
     }
 
@@ -1151,7 +1154,7 @@ fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str])
             || trimmed.starts_with("#extension")
             || trimmed.starts_with("precision ")
             || trimmed.starts_with("varying ")
-            || (trimmed.starts_with("uniform ") && trimmed.trim_end().ends_with(';'))
+            || trimmed.starts_with("uniform ")
         {
             continue;
         }
@@ -1353,10 +1356,18 @@ mod tests {
                 "clipped-surface shader failed to compile on {}",
                 device.name()
             );
-            // Global/scoped programs need five samplers; better-smithay's
-            // custom pixel pipeline currently exposes MAX_CUSTOM_TEXTURES = 2,
-            // so they cannot be created yet (the init path warns and skips).
-            // See docs/STATUS.md for the follow-up in the Smithay fork.
+            // Global/scoped programs need five samplers; better-smithay now
+            // exposes MAX_CUSTOM_TEXTURES = 8, so they compile for real.
+            assert!(
+                compile_vulkan_global(
+                    &mut renderer,
+                    "vec4 global_color(vec3 coord) { return vec4(coord, 1.0); }",
+                    false
+                )
+                .is_ok(),
+                "global shader failed to compile on {}",
+                device.name()
+            );
             eprintln!(
                 "compiled Vulkan border, shadow and clipped-surface shaders on {}",
                 device.name()
