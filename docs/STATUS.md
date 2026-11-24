@@ -319,11 +319,14 @@ picked up without re-auditing.
    marks, workspace-triggered rules, automation history and an optional config
    file; and the Noctalia plugin source (manifest + Lua syntax checked, live
    shell check pending).
-   Still open across the ecosystem: settings tabs for the other apps, wallpaper
-   transitions/playlists, sidepanel auto-hide/profiles, audio input/profile
-   management, the graphical monitor arrangement editor, nsticky delegating
-   sticky to the compositor when the capability is present, systemd units for
-   companion daemons and CI jobs for the companion workspaces. On the compositor side all planned core
+   App depth also landed: sidepanels auto-hide/peek, floating panels,
+   app/workspace rules, named layouts, session state and SIGHUP reload;
+   audio sources, named profiles, focus/workspace context rules, hotplug gating
+   and `diagnose`; wallpaper cross-fades, playlists, time rules, per-session
+   scenes and scene import/export. Still open across the ecosystem: settings
+   tabs for the other apps, the graphical monitor arrangement editor, nsticky
+   delegating sticky to the compositor when the capability is present, systemd
+   units for companion daemons and CI jobs for the companion workspaces. On the compositor side all planned core
    protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
    DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
