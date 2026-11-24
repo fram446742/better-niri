@@ -1328,6 +1328,93 @@ mod tests {
     /// device; on real hardware this catches GLSL→SPIR-V regressions without
     /// needing a compositor.
     #[test]
+    fn vulkan_offscreen_capture_and_custom_draw() {
+        use smithay::backend::renderer::vulkan::{
+            CustomUniform, CustomUniformValue, VulkanRenderer,
+        };
+        use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
+        use smithay::utils::{Rectangle, Size, Transform};
+
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+
+            // Compile a trivial red-fill pixel program (the shape of the
+            // global/scoped passes, without textures).
+            let program = compile_vulkan_program(
+                &mut renderer,
+                "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }",
+                &[],
+                &[],
+            )
+            .expect("custom program");
+
+            let buffer_size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((8, 8));
+            let mut target = renderer
+                .create_buffer(smithay::backend::allocator::Fourcc::Argb8888, buffer_size)
+                .expect("offscreen buffer");
+            let mut framebuffer = renderer.bind(&mut target).expect("bind");
+
+            let mut frame = renderer
+                .render(&mut framebuffer, output_size, Transform::Normal)
+                .expect("begin frame");
+            let dst = Rectangle::from_size(output_size);
+            let damage = [dst];
+            let mut uniforms = vec![
+                CustomUniform {
+                    name: "niri_size",
+                    value: CustomUniformValue::Vec2([8.0, 8.0]),
+                },
+                CustomUniform {
+                    name: "niri_scale",
+                    value: CustomUniformValue::Float(1.0),
+                },
+            ];
+            for (name, value) in [
+                ("niri_hdr_pq", 0.0),
+                ("niri_ref_lum_scale", 1.0),
+                ("niri_linear", 0.0),
+                ("niri_linear_scale", 0.0),
+                ("niri_linear_to_ref", 0.0),
+                ("niri_hdr_to_sdr", 0.0),
+            ] {
+                uniforms.push(CustomUniform {
+                    name,
+                    value: CustomUniformValue::Float(value),
+                });
+            }
+            frame
+                .render_custom(&program, dst, &damage, &uniforms, &[], 1.0)
+                .expect("custom draw");
+            frame.finish().expect("finish");
+
+            let mapping = renderer
+                .copy_framebuffer(
+                    &framebuffer,
+                    Rectangle::from_size(buffer_size),
+                    smithay::backend::allocator::Fourcc::Argb8888,
+                )
+                .expect("copy framebuffer");
+            let pixels = renderer.map_texture(&mapping).expect("map");
+            // Argb8888 little-endian: B, G, R, A.
+            assert_eq!(&pixels[0..4], &[0, 0, 255, 255], "unexpected pixel");
+            eprintln!(
+                "Vulkan offscreen capture + custom draw OK on {}",
+                device.name()
+            );
+            return;
+        }
+    }
+
+    #[test]
     fn vulkan_border_and_shadow_shaders_compile() {
         let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
             return;
