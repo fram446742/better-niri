@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use better_shot::cli::{self, CliAction};
-use better_shot::run;
+use better_shot::{record, run};
 
 fn main() -> ExitCode {
     match run_cli() {
@@ -18,9 +18,22 @@ fn run_cli() -> Result<(), String> {
     let parsed = match cli::parse(std::env::args().skip(1))? {
         CliAction::Help => {
             print!("{}", cli::USAGE);
+            print!("\n{}", record::USAGE);
             return Ok(());
         }
         CliAction::Run(parsed) => parsed,
+        CliAction::Record(options) => {
+            let outcome = record::run(&record::Env::from_process(), &options)?;
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&outcome.to_json()).unwrap()
+                );
+            } else {
+                println!("{}", outcome.summary());
+            }
+            return Ok(());
+        }
     };
     let socket = parsed
         .socket
