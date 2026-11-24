@@ -115,6 +115,7 @@ installing a subset never rebuilds niri or another Rust crate.
 | `better-settings` | `better-settings`, `better-settingsctl` | GTK4 settings UI, CLI and desktop entry | `gtk4`, `gcc-libs`, `glibc` |
 | `better-audio` | `better-audio` | rule-based PipeWire routing and default sink | `libpipewire`, `gcc-libs`, `glibc`; optional `pipewire`, `wireplumber`, `libpulse`, `pulseaudio` |
 | `better-sidepanels` | `better-sidepanels` | layer-shell panels with exclusive zones | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
+| `better-noctalia-plugins` | — | Noctalia plugin source (Luau bar widgets) installed under `/usr/share/better-desktop/noctalia-plugins` | optional `noctalia`, `better-companion`, `better-monitor`, `better-session`, `better-shot`, `better-audio`, `better-wallpaper`, `better-sidepanels` |
 | `better-desktop` | — | meta package, post-install notes | depends on every package above |
 
 `better-monitor`, `better-session` and `better-sidepanels` need no niri package
@@ -166,7 +167,7 @@ subpackages. Both use the same boundaries:
 | Profile | Roughly equivalent Arch package set |
 | --- | --- |
 | `minimal` | build niri with no optional features; install `niri-better` for the default-feature compositor binary |
-| `desktop` | `niri-better` + `better-portal`, `better-shot`, `better-settings`, `better-monitor`, `better-session`, `better-wallpaper`, `better-audio`, `better-sidepanels` |
+| `desktop` | `niri-better` + `better-portal`, `better-shot`, `better-settings`, `better-monitor`, `better-session`, `better-wallpaper`, `better-audio`, `better-sidepanels`, `better-noctalia-plugins` |
 | `full` | `better-desktop` (every split, including `better-companion`) |
 
 The packages always build the compositor with its default Cargo features; use
@@ -287,7 +288,8 @@ that the combination was hardware-tested in this tree.
 Two split recipes live under `packaging/aur/`. Both produce the same package
 names: `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
 `better-session`, `better-shot`, `better-wallpaper`, `better-settings`,
-`better-audio`, `better-sidepanels` and the `better-desktop` meta package.
+`better-audio`, `better-sidepanels`, `better-noctalia-plugins` and the
+`better-desktop` meta package.
 
 | Package base | Source | Version |
 | --- | --- | --- |
@@ -311,6 +313,8 @@ one build.
 Each recipe directory also carries the local recipe files that are not in the
 source checkout: `better-settings.desktop`, `better-desktop.README.md` and
 `better-desktop.install`. Keep them next to `PKGBUILD` when publishing.
+`better-noctalia-plugins` installs the same directory shipped in the repository;
+add `/usr/share/better-desktop/noctalia-plugins` as a Noctalia plugin source.
 
 Regenerate `.SRCINFO` after changing any recipe:
 

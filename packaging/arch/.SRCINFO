@@ -134,6 +134,19 @@ pkgname = better-sidepanels
 	optdepends = wireplumber: wpctl backend for the volume module
 	optdepends = libnotify: notify-send actions
 
+pkgname = better-noctalia-plugins
+	pkgdesc = Noctalia bar plugins for the Better Desktop companion apps
+	arch = any
+	depends = 
+	optdepends = noctalia: shell that loads these Luau plugins
+	optdepends = better-companion: status and action widgets
+	optdepends = better-monitor: output profile widget
+	optdepends = better-session: context switcher widget
+	optdepends = better-shot: screenshot widget
+	optdepends = better-audio: default sink widget
+	optdepends = better-wallpaper: scene widget
+	optdepends = better-sidepanels: panel reload widget
+
 pkgname = better-desktop
 	pkgdesc = Meta package for the Better Niri desktop: compositor, portal and companion apps
 	install = better-desktop.install
@@ -147,6 +160,7 @@ pkgname = better-desktop
 	depends = better-settings
 	depends = better-audio
 	depends = better-sidepanels
+	depends = better-noctalia-plugins
 	optdepends = xdg-desktop-portal: portal broker for niri.portal and better.portal
 	optdepends = xdg-desktop-portal-gtk: fallback portal for file chooser and friends
 	optdepends = pipewire: audio and screencasting server
