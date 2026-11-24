@@ -74,7 +74,11 @@ impl OpenAnimation {
             // OffscreenBuffer renders with Transform::Normal and the scale that we passed, so we
             // can assume that below.
             let offset = elem.offset();
-            let texture = elem.texture();
+            // The open shader is GLES-only (`OpenAnimation::render` takes a `GlesRenderer`).
+            let texture = elem
+                .texture_gles()
+                .cloned()
+                .context("opening window offscreen texture is not GLES")?;
             let texture_size = elem.logical_size();
 
             let mut area = Rectangle::new(location + offset, texture_size);

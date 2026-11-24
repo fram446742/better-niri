@@ -12,15 +12,15 @@ use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{
     CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
-use smithay::backend::renderer::{
-    Bind as _, Color32F, ContextId, Frame as _, Offscreen as _, Renderer, Texture as _,
-};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{VulkanError, VulkanFrame, VulkanRenderer, VulkanTexture};
+use smithay::backend::renderer::{Color32F, ContextId, ErasedContextId, Frame as _, Texture as _};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::encompassing_geo;
-use super::renderer::AsGlesFrame as _;
-use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use super::renderer::{AsGlesFrame as _, NiriRenderer};
+use crate::backend::tty::{TtyFrame, TtyOffscreen, TtyRenderer, TtyRendererError};
 
 /// Buffer for offscreen rendering.
 #[derive(Debug)]
@@ -36,9 +36,14 @@ pub struct OffscreenBuffer {
 #[derive(Debug)]
 struct Inner {
     /// The texture with offscreened contents.
-    texture: GlesTexture,
-    /// Id of the renderer context that the texture comes from.
-    renderer_context_id: ContextId<GlesTexture>,
+    ///
+    /// Backend-agnostic: GLES renderers wrap their `GlesTexture` as
+    /// [`TtyOffscreen::Gles`], the TTY renderer uses whatever its active API produced
+    /// (`Gles`/`Vulkan`), and the Vulkan renderer wraps a `VulkanTexture`.
+    texture: TtyOffscreen,
+    /// Id of the renderer context that the texture comes from (type-erased, so the same
+    /// offscreen element can be compared against GLES and Vulkan renderer contexts).
+    renderer_context_id: ErasedContextId,
     /// Scale of the texture.
     scale: Scale<f64>,
     /// Damage tracker for drawing to the texture.
@@ -50,8 +55,8 @@ struct Inner {
 #[derive(Debug, Clone)]
 pub struct OffscreenRenderElement {
     id: Id,
-    texture: GlesTexture,
-    renderer_context_id: ContextId<GlesTexture>,
+    texture: TtyOffscreen,
+    renderer_context_id: ErasedContextId,
     scale: Scale<f64>,
     damage: DamageSnapshot<i32, Buffer>,
     offset: Point<f64, Logical>,
@@ -80,33 +85,38 @@ impl OffscreenBuffer {
         self.inner.borrow_mut().take();
     }
 
-    pub fn render(
+    /// Renders `elements` into this buffer's cached texture.
+    ///
+    /// Generic over the renderer: GLES callers pass a `GlesRenderer` (the buffer stores a
+    /// [`TtyOffscreen::Gles`] and behaves exactly as before), while the TTY backend can pass its
+    /// `TtyRenderer` to bake on Vulkan as well.
+    pub fn render<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         scale: Scale<f64>,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
         let geo = encompassing_geo(scale, elements.iter());
         self.render_with_geometry(renderer, scale, geo, false, elements)
     }
 
-    pub fn render_with_bounds(
+    pub fn render_with_bounds<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         scale: Scale<f64>,
         bounds: Rectangle<i32, Physical>,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
         self.render_with_geometry(renderer, scale, bounds, true, elements)
     }
 
-    fn render_with_geometry(
+    fn render_with_geometry<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         scale: Scale<f64>,
         geo: Rectangle<i32, Physical>,
         exact_size: bool,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
         let _span = tracy_client::span!("OffscreenBuffer::render");
 
@@ -150,7 +160,7 @@ impl OffscreenBuffer {
                 reason = "not unique";
 
                 *inner = None;
-            } else if *renderer_context_id != renderer.context_id() {
+            } else if *renderer_context_id != ContextId::erased(&renderer.context_id()) {
                 reason = "renderer id changed";
 
                 *inner = None;
@@ -166,16 +176,17 @@ impl OffscreenBuffer {
             let span = tracy_client::span!("creating offscreen buffer");
             span.emit_text(reason);
 
-            let texture: GlesTexture = renderer
+            let texture = renderer
                 .create_buffer(Fourcc::Abgr8888, src_size)
                 .context("error creating texture")?;
+            let texture = R::wrap_offscreen(texture);
 
             let buffer_size = src_size.to_logical(1, Transform::Normal).to_physical(1);
             let damage = OutputDamageTracker::new(buffer_size, scale, Transform::Normal);
 
             inner.insert(Inner {
                 texture,
-                renderer_context_id: renderer.context_id(),
+                renderer_context_id: ContextId::erased(&renderer.context_id()),
                 scale,
                 damage,
                 outer_damage: DamageBag::default(),
@@ -197,7 +208,9 @@ impl OffscreenBuffer {
         }
 
         let res = {
-            let mut target = renderer.bind(&mut inner.texture)?;
+            let target = R::unwrap_offscreen(&mut inner.texture)
+                .context("offscreen texture variant does not match the active renderer")?;
+            let mut target = renderer.bind(target)?;
             inner
                 .damage
                 .render_output(renderer, &mut target, 1, &elements, Color32F::TRANSPARENT)
@@ -256,14 +269,37 @@ impl Default for OffscreenBuffer {
 }
 
 impl OffscreenRenderElement {
-    pub fn texture(&self) -> &GlesTexture {
+    /// The backend-agnostic offscreen texture.
+    ///
+    /// GLES producers get a [`TtyOffscreen::Gles`], a Vulkan (or Vulkan-capable TTY) producer a
+    /// [`TtyOffscreen::Vulkan`]. Consumers that require a raw GLES texture (the GLES-only blur and
+    /// shader chains) use [`Self::texture_gles`] instead.
+    pub fn texture(&self) -> &TtyOffscreen {
         &self.texture
     }
 
-    /// Renderer context this element's texture was created against. Callers building their own
-    /// render elements from this texture (e.g. `PanelRenderElement`) need this to guard their own
-    /// `draw` against cross-context rendering, the same way `Self::draw` guards itself below.
-    pub fn context_id(&self) -> ContextId<GlesTexture> {
+    /// The offscreen texture as a raw GLES texture, if it was produced by a GLES renderer.
+    pub fn texture_gles(&self) -> Option<&GlesTexture> {
+        match &self.texture {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            _ => None,
+        }
+    }
+
+    /// The offscreen texture as a raw Vulkan texture, if it was produced by a Vulkan renderer.
+    #[cfg(feature = "vulkan")]
+    pub fn texture_vulkan(&self) -> Option<&VulkanTexture> {
+        match &self.texture {
+            TtyOffscreen::Vulkan(texture) => Some(texture),
+            _ => None,
+        }
+    }
+
+    /// Renderer context this element's texture was created against (type-erased from the
+    /// creating renderer's `TextureId`). Callers building their own render elements from this
+    /// texture (e.g. `PanelRenderElement`) need this to guard their own `draw` against
+    /// cross-context rendering, the same way `Self::draw` guards itself below.
+    pub fn context_id(&self) -> ErasedContextId {
         self.renderer_context_id.clone()
     }
 
@@ -351,23 +387,26 @@ impl Element for OffscreenRenderElement {
     }
 }
 
-impl RenderElement<GlesRenderer> for OffscreenRenderElement {
-    fn draw(
+impl OffscreenRenderElement {
+    /// Draws the offscreen texture into a GLES frame without checking the renderer context.
+    ///
+    /// Skips silently for a non-GLES texture (e.g. a Vulkan-baked offscreen drawn through a GLES
+    /// frame, which cannot sample it).
+    fn draw_gles(
         &self,
         frame: &mut GlesFrame<'_, '_>,
         src: Rectangle<f64, Buffer>,
         dest: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        if frame.context_id() != self.renderer_context_id {
-            warn!("trying to render texture from different renderer");
+        let Some(texture) = self.texture_gles() else {
+            warn!("trying to render a non-GLES offscreen texture through GLES");
             return Ok(());
-        }
+        };
 
         frame.render_texture_from_to(
-            &self.texture,
+            texture,
             src,
             dest,
             damage,
@@ -379,7 +418,78 @@ impl RenderElement<GlesRenderer> for OffscreenRenderElement {
         )
     }
 
+    /// Draws the offscreen texture into a Vulkan frame without checking the renderer context.
+    #[cfg(feature = "vulkan")]
+    fn draw_vulkan_raw(
+        &self,
+        frame: &mut VulkanFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dest: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), VulkanError> {
+        let Some(texture) = self.texture_vulkan() else {
+            warn!("trying to render a non-Vulkan offscreen texture through Vulkan");
+            return Ok(());
+        };
+
+        frame.render_texture_from_to(
+            texture,
+            src,
+            dest,
+            damage,
+            opaque_regions,
+            Transform::Normal,
+            self.alpha,
+        )
+    }
+}
+
+impl RenderElement<GlesRenderer> for OffscreenRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dest: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), GlesError> {
+        if ContextId::erased(&frame.context_id()) != self.renderer_context_id {
+            warn!("trying to render texture from different renderer");
+            return Ok(());
+        }
+
+        self.draw_gles(frame, src, dest, damage, opaque_regions)
+    }
+
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        // If scanout for things other than Wayland buffers is implemented, this will need to take
+        // the target GPU into account.
+        None
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl RenderElement<VulkanRenderer> for OffscreenRenderElement {
+    fn draw(
+        &self,
+        frame: &mut VulkanFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dest: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), VulkanError> {
+        if ContextId::erased(&frame.context_id()) != self.renderer_context_id {
+            warn!("trying to render texture from different renderer");
+            return Ok(());
+        }
+
+        self.draw_vulkan_raw(frame, src, dest, damage, opaque_regions)
+    }
+
+    fn underlying_storage(&self, _renderer: &mut VulkanRenderer) -> Option<UnderlyingStorage<'_>> {
         // If scanout for things other than Wayland buffers is implemented, this will need to take
         // the target GPU into account.
         None
@@ -396,18 +506,45 @@ impl<'render> RenderElement<TtyRenderer<'render>> for OffscreenRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
+        // Offscreens baked through `TtyRenderer` itself carry the TTY renderer's own
+        // (MultiTexture-typed) context id; the inner frames below report their concrete API's
+        // texture type instead, so match the outer frame first.
+        let created_by_tty = ContextId::erased(&frame.context_id()) == self.renderer_context_id;
+
+        #[cfg(feature = "vulkan")]
+        if let TtyFrame::Vulkan(multi) = frame {
+            if !created_by_tty {
+                warn!("trying to render texture from different renderer");
+                return Ok(());
+            }
+            let vk_frame: &mut VulkanFrame<'_, '_> = multi.as_mut();
+            return self
+                .draw_vulkan_raw(vk_frame, src, dst, damage, opaque_regions)
+                .map_err(|err| {
+                    TtyRendererError::Vulkan(smithay::backend::renderer::multigpu::Error::Render(
+                        err,
+                    ))
+                });
+        }
+
         let Some(gles_frame) = frame.as_gles_frame() else {
             return Ok(());
         };
-        RenderElement::<GlesRenderer>::draw(
-            &self,
-            gles_frame,
-            src,
-            dst,
-            damage,
-            opaque_regions,
-            cache,
-        )?;
+        if created_by_tty {
+            self.draw_gles(gles_frame, src, dst, damage, opaque_regions)?;
+        } else {
+            // Produced by a raw `GlesRenderer` (e.g. `RenderCtx::as_gles`): delegate so the
+            // typed impl still performs its own context check.
+            RenderElement::<GlesRenderer>::draw(
+                self,
+                gles_frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            )?;
+        }
         Ok(())
     }
 
@@ -418,5 +555,191 @@ impl<'render> RenderElement<TtyRenderer<'render>> for OffscreenRenderElement {
         // If scanout for things other than Wayland buffers is implemented, this will need to take
         // the target GPU into account.
         None
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen, Renderer, Texture};
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Point, Rectangle, Scale, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::panel::PanelRenderElement;
+    use crate::render_helpers::panel_quad::tilted_panel_corners;
+    use crate::render_helpers::shaders::init_vulkan;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+
+    /// Runs `test` on the first Vulkan device that can create a renderer, silently skipping when
+    /// there is no Vulkan loader/device/driver (CI without a GPU).
+    fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                test(&mut renderer);
+                return;
+            }
+        }
+    }
+
+    /// Reads back a frame region drawn into `target` and returns the raw bytes.
+    fn read_back(
+        renderer: &mut VulkanRenderer,
+        target: &mut smithay::backend::renderer::vulkan::VulkanTexture,
+        size: Size<i32, smithay::utils::Buffer>,
+    ) -> Vec<u8> {
+        let format = target.format().expect("target texture has a format");
+        let fb = renderer.bind(target).expect("bind readback target");
+        let mapping = renderer
+            .copy_framebuffer(&fb, Rectangle::from_size(size), format)
+            .expect("copy framebuffer");
+        let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+        let bytes = pixels.to_vec();
+        drop(fb);
+        bytes
+    }
+
+    /// A Vulkan `OffscreenBuffer` render must allocate a real Vulkan texture, report damage on
+    /// the first render, and the element must be drawable with its own texture contents. A second
+    /// identical render (after dropping the returned element) must be a damage no-op, proving the
+    /// generic damage/`is_unique_reference` path still works on Vulkan.
+    #[test]
+    fn vulkan_offscreen_buffer_renders_and_reads_back() {
+        for_each_vulkan_renderer(|renderer| {
+            let size = Size::<i32, smithay::utils::Buffer>::from((4, 4));
+            let buffer = OffscreenBuffer::default();
+            let color = SolidColorBuffer::new((4., 4.), [1., 0., 0., 1.]);
+            let element = SolidColorRenderElement::from_buffer(
+                &color,
+                Point::from((0., 0.)),
+                1.,
+                Kind::Unspecified,
+            );
+
+            let (elem, _sync, data) = buffer
+                .render(renderer, Scale::from(1.), &[element.clone()])
+                .expect("render into the generic offscreen buffer");
+            assert!(elem.texture_vulkan().is_some(), "expected a Vulkan texture");
+            assert!(data.damaged, "first offscreen render must report damage");
+
+            let mut target = renderer
+                .create_buffer(Fourcc::Abgr8888, size)
+                .expect("readback target");
+            {
+                let mut fb = renderer.bind(&mut target).expect("bind target");
+                let mut frame = renderer
+                    .render(&mut fb, Size::from((4, 4)), Transform::Normal)
+                    .expect("begin frame");
+                let dst = Rectangle::from_size(Size::from((4, 4)));
+                frame
+                    .clear(Color32F::TRANSPARENT, &[dst])
+                    .expect("clear frame");
+                RenderElement::<VulkanRenderer>::draw(
+                    &elem,
+                    &mut frame,
+                    elem.src(),
+                    dst,
+                    &[dst],
+                    &[],
+                    None,
+                )
+                .expect("draw the offscreen element");
+                let _sync = frame.finish().expect("finish frame");
+            }
+
+            let pixels = read_back(renderer, &mut target, size);
+            assert_eq!(
+                &pixels[0..4],
+                &[255, 0, 0, 255],
+                "the offscreen texture did not reach the readback target"
+            );
+
+            drop(elem);
+            let (_elem, _sync, data) = buffer
+                .render(renderer, Scale::from(1.), &[element])
+                .expect("second render into the generic offscreen buffer");
+            assert!(
+                !data.damaged,
+                "an unchanged second offscreen render must report no damage"
+            );
+        });
+    }
+
+    /// End-to-end carousel-panel shape on Vulkan: bake a source through the generic
+    /// `OffscreenBuffer` (the panel prepass), then build a `PanelRenderElement` from that
+    /// `TtyOffscreen::Vulkan` texture (the host-side retained element) and draw it. The centre of
+    /// the quad must sample the baked red source.
+    #[test]
+    fn vulkan_panel_bake_then_draw_samples_baked_texture() {
+        for_each_vulkan_renderer(|renderer| {
+            init_vulkan(renderer, &niri_config::Config::default());
+
+            let source = SolidColorBuffer::new((4., 4.), [1., 0., 0., 1.]);
+            let source_elem = SolidColorRenderElement::from_buffer(
+                &source,
+                Point::from((0., 0.)),
+                1.,
+                Kind::Unspecified,
+            );
+            let buffer = OffscreenBuffer::default();
+            let (baked, _sync, data) = buffer
+                .render(renderer, Scale::from(1.), &[source_elem])
+                .expect("bake the panel source");
+            assert!(data.damaged);
+
+            let corners = tilted_panel_corners((4., 4.), (8., 8.), 0., 1000.);
+            let panel = PanelRenderElement::new(
+                corners,
+                baked.texture().clone(),
+                baked.id().clone(),
+                1,
+                baked.context_id(),
+                1.,
+                1.,
+                1.,
+            )
+            .expect("build the panel element");
+
+            let buffer_size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let mut target = renderer
+                .create_buffer(Fourcc::Abgr8888, buffer_size)
+                .expect("panel readback target");
+            {
+                let mut fb = renderer.bind(&mut target).expect("bind target");
+                let mut frame = renderer
+                    .render(&mut fb, Size::from((8, 8)), Transform::Normal)
+                    .expect("begin frame");
+                let dst = Rectangle::from_size(Size::from((8, 8)));
+                frame
+                    .clear(Color32F::TRANSPARENT, &[dst])
+                    .expect("clear frame");
+                RenderElement::<VulkanRenderer>::draw(
+                    &panel,
+                    &mut frame,
+                    Rectangle::from_size(Size::from((1., 1.))),
+                    dst,
+                    &[dst],
+                    &[],
+                    None,
+                )
+                .expect("draw the panel element");
+                let _sync = frame.finish().expect("finish frame");
+            }
+
+            let pixels = read_back(renderer, &mut target, buffer_size);
+            let center = (4 * 8 + 4) * 4;
+            assert_eq!(
+                &pixels[center..center + 4],
+                &[255, 0, 0, 255],
+                "the panel did not sample the baked offscreen texture"
+            );
+        });
     }
 }

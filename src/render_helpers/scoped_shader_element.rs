@@ -245,7 +245,13 @@ impl RenderElement<GlesRenderer> for ScopedShaderElement {
                     &[element],
                 ) {
                     Ok((off_elem, _sync, _data)) => {
-                        let next = off_elem.texture().clone();
+                        let next = match off_elem.texture_gles() {
+                            Some(texture) => texture.clone(),
+                            None => {
+                                warn!("scoped pass {i} produced a non-GLES texture");
+                                input.clone()
+                            }
+                        };
                         drop(guard);
                         input = next;
                     }

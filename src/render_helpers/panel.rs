@@ -2,18 +2,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
-use smithay::backend::renderer::{ContextId, Frame as _};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{VulkanError, VulkanFrame, VulkanRenderer};
+use smithay::backend::renderer::{ContextId, ErasedContextId, Frame as _};
 use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::panel_quad::{bounding_box, sampling_matrix};
 use super::renderer::NiriRenderer;
-use super::shader_element::{ShaderRenderElement, gles_texture_map};
+use super::shader_element::ShaderRenderElement;
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
-use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty::{TtyFrame, TtyOffscreen, TtyRenderer, TtyRendererError};
 
 /// Comparable snapshot of everything that feeds into the panel's shader uniforms + texture, so
 /// `update()` can skip rebuilding (and thus skip damaging) the retained element when nothing
@@ -35,12 +37,15 @@ struct Parameters {
     /// really does mean "same published texture, same pixels".
     generation: u64,
     /// Renderer context the texture was created against, checked in `draw` the same way
-    /// `OffscreenRenderElement::draw` guards against cross-context textures (`GlesTexture`
+    /// `OffscreenRenderElement::draw` guards against cross-context textures (`TtyOffscreen`
     /// carries no such id itself, so the caller must supply it). A context change forces
     /// offscreen buffer recreation, which reports full damage and thus publishes with a
     /// `generation` bump — so this can never change while the other params compare equal;
     /// keeping it in `Parameters` makes that assumption checked rather than assumed.
-    context_id: ContextId<GlesTexture>,
+    ///
+    /// Type-erased so a panel baked on either backend (`GlesTexture`/`VulkanTexture`, or the
+    /// TTY renderer's `MultiTexture` context) compares against its own draw frame's context.
+    context_id: ErasedContextId,
     dim: f32,
     scale: f64,
     alpha: f32,
@@ -48,9 +53,10 @@ struct Parameters {
 
 /// A texture drawn as a perspective-tilted quad (carousel panel).
 ///
-/// `Clone` (cheap: `ShaderRenderElement`'s texture map holds `GlesTexture`s, which are
-/// `Rc`-backed) so a retained instance in `OutputState::panel_elems` can be pushed into the
-/// render element list while the original stays in the map for next frame's `update()` call.
+/// `Clone` (cheap: `ShaderRenderElement`'s texture map holds `TtyOffscreen`s, whose GLES/Vulkan
+/// handles are cheaply clonable) so a retained instance in `OutputState::panel_elems` can be
+/// pushed into the render element list while the original stays in the map for next frame's
+/// `update()` call.
 #[derive(Debug, Clone)]
 pub struct PanelRenderElement {
     inner: ShaderRenderElement,
@@ -61,10 +67,10 @@ impl PanelRenderElement {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         corners: [[f64; 2]; 4],
-        texture: GlesTexture,
+        texture: TtyOffscreen,
         source_id: Id,
         generation: u64,
-        context_id: ContextId<GlesTexture>,
+        context_id: ErasedContextId,
         dim: f32,
         scale: f64,
         alpha: f32,
@@ -83,7 +89,7 @@ impl PanelRenderElement {
                 mat3_uniform("niri_panel_inv", inv),
                 Uniform::new("niri_panel_dim", dim),
             ]),
-            gles_texture_map(textures),
+            textures,
             Kind::Unspecified,
         )
         .with_location(Point::from((bx, by)));
@@ -122,10 +128,10 @@ impl PanelRenderElement {
     pub fn update(
         &mut self,
         corners: [[f64; 2]; 4],
-        texture: GlesTexture,
+        texture: TtyOffscreen,
         source_id: Id,
         generation: u64,
-        context_id: ContextId<GlesTexture>,
+        context_id: ErasedContextId,
         dim: f32,
         scale: f64,
         alpha: f32,
@@ -170,7 +176,7 @@ impl PanelRenderElement {
                 mat3_uniform("niri_panel_inv", inv),
                 Uniform::new("niri_panel_dim", dim),
             ]),
-            gles_texture_map(textures),
+            textures,
         );
 
         // `ShaderRenderElement::update` doesn't touch location (only `with_location`, a
@@ -241,7 +247,7 @@ impl RenderElement<GlesRenderer> for PanelRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        if frame.context_id() != self.params.context_id {
+        if ContextId::erased(&frame.context_id()) != self.params.context_id {
             warn!("trying to render panel texture from different renderer");
             return Ok(());
         }
@@ -261,6 +267,39 @@ impl RenderElement<GlesRenderer> for PanelRenderElement {
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.inner.underlying_storage(renderer)
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl RenderElement<VulkanRenderer> for PanelRenderElement {
+    fn draw(
+        &self,
+        frame: &mut VulkanFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
+    ) -> Result<(), VulkanError> {
+        if ContextId::erased(&frame.context_id()) != self.params.context_id {
+            warn!("trying to render panel texture from different renderer");
+            return Ok(());
+        }
+
+        let _span = tracy_client::span!("PanelRenderElement::draw");
+        RenderElement::<VulkanRenderer>::draw(
+            &self.inner,
+            frame,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            cache,
+        )
+    }
+
+    fn underlying_storage(&self, renderer: &mut VulkanRenderer) -> Option<UnderlyingStorage<'_>> {
         self.inner.underlying_storage(renderer)
     }
 }

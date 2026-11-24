@@ -346,8 +346,10 @@ impl FocusRing {
             return None;
         };
         // The decoration-light *program* compiles on Vulkan, but its producer
-        // (`DecorationLight::render`) renders emission through a GLES `OffscreenBuffer` and blurs
-        // it with the GLES `Blur`, so there is no Vulkan texture to feed the composite yet.
+        // (`DecorationLight::render`) blurs its emission with the raw-GLES dual-Kawase `Blur`,
+        // which has no Vulkan counterpart yet. The emission `OffscreenBuffer` itself is now
+        // backend-agnostic, but the result is still a GLES texture, so there is nothing valid to
+        // feed the Vulkan composite.
         let Some(renderer) = renderer.as_gles_renderer() else {
             self.light.borrow_mut().clear();
             return None;
