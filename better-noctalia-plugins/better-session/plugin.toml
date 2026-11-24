@@ -1,0 +1,10 @@
+id = "better-desktop/better-session"
+name = "Better Session"
+version = "1.0.0"
+plugin_api = 24
+author = "Better Desktop"
+description = "Restore saved work contexts from the bar."
+
+[[widget]]
+id = "contexts"
+entry = "widget.luau"
