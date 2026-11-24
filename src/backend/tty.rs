@@ -1128,7 +1128,18 @@ impl Tty {
 
                 niri.update_shaders();
             } else {
-                debug!("Vulkan renderer: GLES-only shader and effect pipelines are disabled");
+                #[cfg(feature = "vulkan")]
+                if let Some(vulkan_renderer) =
+                    crate::render_helpers::renderer::AsVulkanRenderer::as_vulkan_renderer(
+                        &mut renderer,
+                    )
+                {
+                    shaders::init_vulkan(vulkan_renderer);
+                    debug!(
+                        "Vulkan renderer: compiled border and shadow pixel shaders; \
+                         GLES-only effect pipelines remain disabled"
+                    );
+                }
             }
 
             // Create the dmabuf global.
