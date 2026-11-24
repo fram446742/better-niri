@@ -805,24 +805,22 @@ impl LayoutElement for Mapped {
                 effect.xray = Some(false);
             }
             let xray_pos = xray_pos.offset(offset.to_f64());
-            if let Some(mut gles_ctx) = ctx.as_gles() {
-                background_effect::render_for_tile(
-                    gles_ctx.r(),
-                    None,
-                    geometry,
-                    scale.x,
-                    false,
-                    surface,
-                    surface_off,
-                    surface_anim_scale,
-                    self.blur_config,
-                    popup_rules.geometry_corner_radius.unwrap_or_default(),
-                    effect,
-                    false,
-                    xray_pos,
-                    &mut |elem| push(elem.into()),
-                );
-            }
+            background_effect::render_for_tile(
+                ctx.r(),
+                None,
+                geometry,
+                scale.x,
+                false,
+                surface,
+                surface_off,
+                surface_anim_scale,
+                self.blur_config,
+                popup_rules.geometry_corner_radius.unwrap_or_default(),
+                effect,
+                false,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
         }
     }
 

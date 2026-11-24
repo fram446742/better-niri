@@ -794,7 +794,10 @@ mod vulkan_tests {
     use smithay::utils::{Point, Rectangle, Size, Transform};
 
     use super::*;
+    use crate::render_helpers::background_effect::{BackgroundEffect, BackgroundEffectElement};
     use crate::render_helpers::shaders::init_vulkan;
+    use crate::render_helpers::xray::XrayPos;
+    use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget};
 
     /// End-to-end Vulkan background blur: capture the framebuffer, run the Dual-Kawase
     /// down/up ladder, composite through the background-effect program, and check that a
@@ -995,6 +998,133 @@ mod vulkan_tests {
             );
             eprintln!(
                 "Vulkan liquid-glass uniforms affect {differing} pixels on {}",
+                device.name()
+            );
+            return;
+        }
+    }
+
+    /// Popup-style background effect: blur on, xray off, no surface blur region. This goes
+    /// through the same `BackgroundEffect` wrapper the popup and layer-popup render path uses,
+    /// so it exercises the non-xray `FramebufferEffectElement` Vulkan capture/composite that
+    /// used to be gated behind a GLES renderer. Skips silently without a device.
+    #[test]
+    fn vulkan_popup_background_effect_draws_blur() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            init_vulkan(&mut renderer, &niri_config::Config::default());
+
+            let buffer_size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((8, 8));
+
+            let mut effect = BackgroundEffect::new();
+            effect.update_config(niri_config::Blur {
+                noise: 0.,
+                saturation: 1.,
+                ..Default::default()
+            });
+            effect.update_render_elements(
+                niri_config::CornerRadius::default(),
+                niri_config::BackgroundEffect {
+                    blur: Some(true),
+                    xray: Some(false),
+                    ..Default::default()
+                },
+                false,
+            );
+            assert!(effect.is_visible(), "popup blur effect should be visible");
+
+            let geometry = Rectangle::from_size(Size::from((8., 8.)));
+            let params = RenderParams {
+                geometry,
+                original_geometry: geometry,
+                subregion: None,
+                // Popups render with `clip_to_geometry = false`; without a surface blur
+                // region that means no clip, which `FramebufferEffect::render` fills in.
+                clip: None,
+                scale: 1.0,
+            };
+            let ctx = RenderCtx {
+                renderer: &mut renderer,
+                target: RenderTarget::Output,
+                intent: RenderIntent::Normal,
+                xray: None,
+                shader_time: 0.,
+            };
+
+            let mut elements = Vec::new();
+            effect.render(
+                ctx,
+                None,
+                params,
+                XrayPos::default(),
+                0.,
+                None,
+                &mut |elem| elements.push(elem),
+            );
+            assert_eq!(elements.len(), 1, "popup effect should push one element");
+            let BackgroundEffectElement::FramebufferEffect(elem) = &elements[0] else {
+                panic!("popup effect with xray off must use the framebuffer path");
+            };
+
+            // Build the scene only after the element exists: `RenderCtx` borrows the renderer
+            // mutably, while a live frame holds that same borrow.
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, buffer_size)
+                .expect("offscreen target");
+            let mut fb = renderer.bind(&mut target).expect("bind target");
+            let mut frame = renderer
+                .render(&mut fb, output_size, Transform::Normal)
+                .expect("begin frame");
+            let dst = Rectangle::from_size(output_size);
+            frame
+                .clear(
+                    Color32F::new(1., 0., 0., 1.),
+                    &[Rectangle::new(Point::from((0, 0)), Size::from((4, 8)))],
+                )
+                .expect("clear red half");
+            frame
+                .clear(
+                    Color32F::new(0., 0., 1., 1.),
+                    &[Rectangle::new(Point::from((4, 0)), Size::from((4, 8)))],
+                )
+                .expect("clear blue half");
+
+            let cache = UserDataMap::default();
+            let src = elem.src();
+            elem.capture_framebuffer_vulkan(&mut frame, src, dst, &cache)
+                .expect("vulkan popup background capture");
+            elem.draw_vulkan(&mut frame, src, dst, &[dst], Some(&cache))
+                .expect("vulkan popup background composite");
+            frame.finish().expect("finish frame");
+
+            let mapping = renderer
+                .copy_framebuffer(&fb, Rectangle::from_size(buffer_size), Fourcc::Argb8888)
+                .expect("copy framebuffer");
+            let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+            let center = (4 * 8 + 4) * 4;
+            let (b, g, r, a) = (
+                pixels[center],
+                pixels[center + 1],
+                pixels[center + 2],
+                pixels[center + 3],
+            );
+            assert_eq!(g, 0, "unexpected green channel: {g}");
+            assert_eq!(a, 255, "popup composite should be opaque, got alpha {a}");
+            assert!(
+                (24..=231).contains(&b) && (24..=231).contains(&r),
+                "popup blur did not mix the boundary: B={b} R={r}"
+            );
+            eprintln!(
+                "Vulkan popup background blur composite OK on {} (B={b} R={r})",
                 device.name()
             );
             return;

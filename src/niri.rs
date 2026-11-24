@@ -8232,9 +8232,10 @@ impl Niri {
                         warn!("error baking magnified screenshot UI: {err:?}");
                     }
                 } else {
-                    // Bake in the output's untransformed mode space; the output frame applies the
-                    // rotation when compositing.
-                    let bake_size = output.current_mode().unwrap().size;
+                    // Bake in logical space, like the GLES capture above: elements are laid out
+                    // post-transform, so a rotated output needs the transformed size. The output
+                    // frame applies the rotation when compositing.
+                    let bake_size = size;
                     let bounds = Rectangle::from_size(bake_size);
                     let buffer = crate::render_helpers::offscreen::OffscreenBuffer::default();
                     match buffer.render_with_bounds(ctx.renderer, scale, bounds, &ui_elements) {
@@ -12289,8 +12290,10 @@ impl Niri {
 
     /// Screen transition capture for renderers without a GLES path (the Vulkan TTY renderer).
     ///
-    /// The full output is baked through the generic offscreen buffer, unrotated; the transition
-    /// element keeps `Transform::Normal`, so the output frame applies the rotation once.
+    /// The full output is baked through the generic offscreen buffer in logical space: the bake
+    /// uses the transform-composed output size, so 90/270 and flipped outputs capture an upright
+    /// image of the right dimensions. The transition element keeps `Transform::Normal` and the
+    /// output frame applies the rotation when compositing.
     pub fn do_screen_transition_vulkan<R>(&mut self, renderer: &mut R, delay_ms: Option<u16>)
     where
         R: NiriRenderer,
@@ -12310,6 +12313,7 @@ impl Niri {
             .cloned()
             .filter_map(|output| {
                 let size = output.current_mode().unwrap().size;
+                let transform = output.current_transform();
 
                 let scale = Scale::from(output.current_scale().fractional_scale());
                 let targets = [
@@ -12327,13 +12331,9 @@ impl Niri {
                     };
                     let elements = self.render_to_vec(ctx, &output, false);
 
-                    let bounds = Rectangle::from_size(size);
-                    let buffer = crate::render_helpers::offscreen::OffscreenBuffer::default();
-                    let res = buffer
-                        .render_with_bounds(renderer, scale, bounds, &elements)
-                        .map(|(elem, _sync, _data)| {
-                            elem.texture_buffer(Transform::Normal, Vec::new())
-                        });
+                    let res = screen_transition::bake_transition_texture(
+                        renderer, size, scale, transform, &elements,
+                    );
 
                     if let Err(err) = &res {
                         warn!("error rendering output {}: {err:?}", output.name());

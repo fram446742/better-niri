@@ -462,13 +462,11 @@ impl FocusRing {
         }
 
         if let Some(key) = self.custom_key {
-            self.custom_shader_available
-                .set(renderer.as_gles_renderer().is_some_and(|renderer| {
-                    crate::render_helpers::shaders::Shaders::get(renderer)
-                        .decorations
-                        .borrow()
-                        .contains_key(&key)
-                }));
+            // `Shaders` dispatches to whichever backend drives this output, so decoration
+            // shaders compiled for Vulkan count too.
+            self.custom_shader_available.set(
+                crate::render_helpers::shaders::Shaders::has_decoration(renderer, key),
+            );
         }
         let has_border_shader = BorderRenderElement::has_shader(renderer);
 
