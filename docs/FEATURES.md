@@ -108,7 +108,7 @@ state.
 | Disable-while-typing controls | Upstream config | biri | biri | Integrated (core input) | Runtime `toggle-dwt`, composes with config; resets on restart; applies to hot-plugged touchpads. |
 | Pointer behaviour | Upstream | upstream + urayde | urayde | Integrated | Pointer warp; niri-elite's confine-to-fullscreen. |
 | Gestures | Upstream | upstream + niri-elite/biri | combine | Integrated | Grid and carousel gestures reuse input plumbing. |
-| Accessibility | Upstream | upstream + niri-elite | hybrid | Partial | Existing a11y plus agent/AT-SPI tooling. |
+| Accessibility | Upstream | upstream + niri-elite | hybrid | Integrated | AccessKit tree covers workspaces, windows, overview, MRU, screenshot UI and the exit dialog; no separate AT-SPI helper is bundled. |
 | Press/release binds | Absent | niri-elite | niri-elite | Integrated | Guarantees release after press. |
 | Bare modifier triggers | Absent | niri-elite | niri-elite | Integrated | `Mod` as a bind trigger. |
 | Raw/ASCII keysym fallback | Absent | niri-elite | niri-elite | Integrated | Non-ASCII layouts keep working. |
