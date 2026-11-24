@@ -186,7 +186,7 @@ impl PanelRenderElement {
     }
 
     pub fn has_shader(renderer: &mut impl NiriRenderer) -> bool {
-        Shaders::get(renderer).program(ProgramType::Panel).is_some()
+        Shaders::has_program(renderer, ProgramType::Panel)
     }
 }
 
@@ -276,7 +276,9 @@ impl<'render> RenderElement<TtyRenderer<'render>> for PanelRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        let frame = frame.as_gles_frame();
+        let Some(frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
         RenderElement::<GlesRenderer>::draw(self, frame, src, dst, damage, opaque_regions, cache)?;
         Ok(())
     }

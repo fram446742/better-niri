@@ -1,16 +1,25 @@
+use smithay::backend::renderer::Frame;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::VulkanRenderer;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Transform};
+use tracing::warn;
 
 use super::renderer::AsGlesFrame;
 use super::texture::TextureRenderElement;
-use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty::{TtyFrame, TtyOffscreen, TtyRenderer, TtyRendererError};
 
-/// Wrapper for a texture from the primary GPU for rendering with the primary GPU.
+/// Wrapper for a texture from the primary GPU for rendering with the primary
+/// GPU.
+///
+/// Despite the historical name, the inner texture is a [`TtyOffscreen`], so the
+/// element draws with the GLES renderer (winit/headless/TTY GLES) and with the
+/// Vulkan TTY renderer, matching the texture arm to the frame.
 #[derive(Debug, Clone)]
-pub struct PrimaryGpuTextureRenderElement(pub TextureRenderElement<GlesTexture>);
+pub struct PrimaryGpuTextureRenderElement(pub TextureRenderElement<TtyOffscreen>);
 
 impl Element for PrimaryGpuTextureRenderElement {
     fn id(&self) -> &Id {
@@ -62,19 +71,25 @@ impl RenderElement<GlesRenderer> for PrimaryGpuTextureRenderElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let gles_frame = frame.as_gles_frame();
-        RenderElement::<GlesRenderer>::draw(
-            &self.0,
-            gles_frame,
+        let buffer = self.0.buffer();
+        let TtyOffscreen::Gles(texture) = buffer.texture() else {
+            warn!("trying to render a non-GLES texture with the GLES renderer");
+            return Ok(());
+        };
+
+        frame.render_texture_from_to(
+            texture,
             src,
             dst,
             damage,
             opaque_regions,
-            cache,
-        )?;
-        Ok(())
+            buffer.texture_transform(),
+            self.0.alpha(),
+            None,
+            &[],
+        )
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -84,27 +99,126 @@ impl RenderElement<GlesRenderer> for PrimaryGpuTextureRenderElement {
     }
 }
 
-impl<'render> RenderElement<TtyRenderer<'render>> for PrimaryGpuTextureRenderElement {
+#[cfg(feature = "vulkan")]
+impl RenderElement<VulkanRenderer> for PrimaryGpuTextureRenderElement {
     fn draw(
         &self,
-        frame: &mut TtyFrame<'_, '_, '_>,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
         src: Rectangle<f64, Buffer>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
-        cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
-        RenderElement::<GlesRenderer>::draw(
-            &self.0,
-            gles_frame,
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        let buffer = self.0.buffer();
+        let TtyOffscreen::Vulkan(texture) = buffer.texture() else {
+            warn!("trying to render a non-Vulkan texture with the Vulkan renderer");
+            return Ok(());
+        };
+
+        frame.render_texture_from_to(
+            texture,
             src,
             dst,
             damage,
             opaque_regions,
-            cache,
-        )?;
-        Ok(())
+            buffer.texture_transform(),
+            self.0.alpha(),
+        )
+    }
+
+    fn underlying_storage(&self, _renderer: &mut VulkanRenderer) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
+impl<'render> RenderElement<TtyRenderer<'render>> for PrimaryGpuTextureRenderElement {
+    fn draw(
+        &self,
+        frame: &mut TtyFrame<'render, '_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), TtyRendererError<'render>> {
+        let buffer = self.0.buffer();
+        let transform = buffer.texture_transform();
+        let alpha = self.0.alpha();
+
+        #[cfg(feature = "vulkan")]
+        {
+            match (&mut *frame, buffer.texture()) {
+                (frame, TtyOffscreen::Multi(texture)) => frame.render_texture_from_to(
+                    texture,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    transform,
+                    alpha,
+                ),
+                (TtyFrame::Gles(_), TtyOffscreen::Gles(texture)) => {
+                    let Some(gles_frame) = frame.as_gles_frame() else {
+                        return Ok(());
+                    };
+                    gles_frame
+                        .render_texture_from_to(
+                            texture,
+                            src,
+                            dst,
+                            damage,
+                            opaque_regions,
+                            transform,
+                            alpha,
+                            None,
+                            &[],
+                        )
+                        .map_err(Into::into)
+                }
+                (TtyFrame::Vulkan(multi), TtyOffscreen::Vulkan(texture)) => {
+                    let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
+                        multi.as_mut();
+                    vk_frame
+                        .render_texture_from_to(
+                            texture,
+                            src,
+                            dst,
+                            damage,
+                            opaque_regions,
+                            transform,
+                            alpha,
+                        )
+                        .map_err(|err| {
+                            TtyRendererError::Vulkan(
+                                smithay::backend::renderer::multigpu::Error::Render(err),
+                            )
+                        })
+                }
+                _ => {
+                    warn!("texture arm does not match the TTY renderer variant");
+                    Ok(())
+                }
+            }
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            match buffer.texture() {
+                TtyOffscreen::Multi(texture) => frame.render_texture_from_to(
+                    texture,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    transform,
+                    alpha,
+                ),
+                TtyOffscreen::Gles(_) => {
+                    warn!("GLES offscreen texture on the multi-GPU TTY renderer");
+                    Ok(())
+                }
+            }
+        }
     }
 
     fn underlying_storage(

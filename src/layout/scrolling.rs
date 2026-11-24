@@ -3995,7 +3995,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 self.view_size,
             ));
             for closing in self.closing_windows.iter().rev() {
-                if let Some(elem) = closing.render(ctx.as_gles(), view_rect, scale) {
+                if let Some(gles) = ctx.as_gles()
+                    && let Some(elem) = closing.render(gles, view_rect, scale)
+                {
                     push(elem.into());
                 }
             }

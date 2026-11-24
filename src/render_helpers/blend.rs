@@ -198,7 +198,11 @@ impl FrameBlendState {
 /// solid colors are encoded on the CPU, and niri's own shader programs read the frame blend
 /// state for their `niri_blend` stage. Call with `None` after rendering the output so
 /// screencasts, screenshots and other outputs stay SDR.
-pub fn set_frame_blend(renderer: &mut GlesRenderer, reference_luminance: Option<f64>) {
+pub fn set_frame_blend(renderer: Option<&mut GlesRenderer>, reference_luminance: Option<f64>) {
+    // The blend-space override is GLES-only; the Vulkan renderer handles HDR itself.
+    let Some(renderer) = renderer else {
+        return;
+    };
     FrameBlendState::set(renderer, reference_luminance);
 
     match reference_luminance {
@@ -456,11 +460,24 @@ impl<'render> RenderElement<TtyRenderer<'render>>
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
+        let Some(gles_frame) = frame.as_gles_frame() else {
+            // The blend program is GLSL; draw the surface unmodified on Vulkan.
+            return RenderElement::draw(
+                &self.inner,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            );
+        };
         let saved = adjust_tex_program_for_content(gles_frame, self.content);
         let res = RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache);
-        if let Some(saved) = saved {
-            frame.as_gles_frame().set_tex_program_override(saved);
+        if let Some(saved) = saved
+            && let Some(frame) = frame.as_gles_frame()
+        {
+            frame.set_tex_program_override(saved);
         }
         res
     }

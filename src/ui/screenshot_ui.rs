@@ -694,14 +694,17 @@ impl ScreenshotUi {
                 .to_f64()
                 .to_logical(scale);
 
-            let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
-                buffer.clone(),
-                location,
-                alpha * progress,
-                None,
-                None,
-                Kind::Unspecified,
-            ));
+            let elem = PrimaryGpuTextureRenderElement(
+                TextureRenderElement::from_texture_buffer(
+                    buffer.clone(),
+                    location,
+                    alpha * progress,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                )
+                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+            );
             push(elem.into());
         }
 
@@ -1122,36 +1125,42 @@ impl OutputScreenshot {
         texture: GlesTexture,
         pointer: Option<(GlesTexture, Rectangle<i32, Physical>)>,
     ) -> Self {
-        let buffer = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
-            TextureBuffer::from_texture(
-                renderer,
-                texture.clone(),
-                scale,
-                Transform::Normal,
-                Vec::new(),
-            ),
-            (0., 0.),
-            1.,
-            None,
-            None,
-            Kind::Unspecified,
-        ));
-
-        let pointer = pointer.map(|(texture, geo)| {
-            PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+        let buffer = PrimaryGpuTextureRenderElement(
+            TextureRenderElement::from_texture_buffer(
                 TextureBuffer::from_texture(
                     renderer,
-                    texture,
+                    texture.clone(),
                     scale,
                     Transform::Normal,
                     Vec::new(),
                 ),
-                geo.to_f64().to_logical(scale).loc,
+                (0., 0.),
                 1.,
                 None,
                 None,
                 Kind::Unspecified,
-            ))
+            )
+            .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+        );
+
+        let pointer = pointer.map(|(texture, geo)| {
+            PrimaryGpuTextureRenderElement(
+                TextureRenderElement::from_texture_buffer(
+                    TextureBuffer::from_texture(
+                        renderer,
+                        texture,
+                        scale,
+                        Transform::Normal,
+                        Vec::new(),
+                    ),
+                    geo.to_f64().to_logical(scale).loc,
+                    1.,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                )
+                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+            )
         });
 
         Self {

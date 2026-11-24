@@ -345,6 +345,11 @@ impl FocusRing {
             self.light.borrow_mut().clear();
             return None;
         };
+        // Decoration light is a GLSL program; skip on Vulkan.
+        let Some(renderer) = renderer.as_gles_renderer() else {
+            self.light.borrow_mut().clear();
+            return None;
+        };
         let shaders = Shaders::get(renderer);
         if !shaders
             .decorations
@@ -368,7 +373,7 @@ impl FocusRing {
             })
             .collect();
         match self.light.borrow_mut().render(
-            renderer.as_gles_renderer(),
+            renderer,
             sources,
             config,
             self.config.width,
@@ -401,12 +406,13 @@ impl FocusRing {
         }
 
         if let Some(key) = self.custom_key {
-            self.custom_shader_available.set(
-                crate::render_helpers::shaders::Shaders::get(renderer)
-                    .decorations
-                    .borrow()
-                    .contains_key(&key),
-            );
+            self.custom_shader_available
+                .set(renderer.as_gles_renderer().is_some_and(|renderer| {
+                    crate::render_helpers::shaders::Shaders::get(renderer)
+                        .decorations
+                        .borrow()
+                        .contains_key(&key)
+                }));
         }
         let has_border_shader = BorderRenderElement::has_shader(renderer);
 

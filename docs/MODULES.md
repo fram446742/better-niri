@@ -326,12 +326,15 @@ compositor IPC fallback.
   buffers, per-host panel caches and click hits, panel rendering and
   prepasses, and the panel element variants. Only thin layout plumbing and
   no-op stubs remain.
-- `vulkan` (default on): compiles better-smithay's Vulkan backend/renderer,
-  probes physical devices at startup (`Instance` → `PhysicalDevice` set →
-  `VulkanRenderer::new` per device), applies `NIRI_RENDERER` (`auto`/`gles`/
-  `vulkan`) and falls back to EGL/GLES with a logged reason. `niri
-  --check-vulkan` prints preference, active path, render-tree capability,
-  per-device support and the fallback reason as JSON. The output render tree
-  remains `GlesRenderer` until the renderer-generic refactor; the feature makes
-  that switch a focused change and gives users a real readiness report today.
+- `vulkan` (default on): compiles better-smithay's Vulkan backend/renderer and
+  wires the TTY backend through `TtyGpuManager` (`GbmGlesBackend` or
+  `VulkanBackend`) plus the `TtyRenderer`/`TtyFrame` enums. `NIRI_RENDERER`
+  (`auto`/`gles`/`vulkan`) selects the path: `auto` stays on GLES, `vulkan`
+  uses the Vulkan renderer when a device/driver can instantiate it, otherwise
+  it logs the reason and falls back to GLES. `niri --check-vulkan` prints
+  preference, active path, render-tree capability, per-device support and the
+  fallback reason as JSON. Core output rendering (windows, layers, UI textures)
+  is renderer-agnostic; GLSL-only visuals (niri shader programs, blur/xray,
+  liquid glass, carousel panels, decoration light, magnified screenshot
+  capture, screen transitions) are skipped on Vulkan and keep their GLES path.
 - `agent` (off by default): the automation seat.

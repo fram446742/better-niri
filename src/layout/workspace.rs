@@ -4171,7 +4171,8 @@ impl<W: LayoutElement> Workspace<W> {
             let view_rect = Rectangle::new(Point::from((0., 0.)), self.view_size);
             if self.is_floating_visible() {
                 for closing in self.floating.closing_windows() {
-                    if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale))
+                    if let Some(gles) = ctx.as_gles()
+                        && let Some(elem) = closing.render(gles, view_rect, Scale::from(scale))
                     {
                         let elem: FloatingSpaceRenderElement<R> = elem.into();
                         push(elem.into());
@@ -4179,7 +4180,9 @@ impl<W: LayoutElement> Workspace<W> {
                 }
             }
             for closing in self.scrolling.closing_windows() {
-                if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale)) {
+                if let Some(gles) = ctx.as_gles()
+                    && let Some(elem) = closing.render(gles, view_rect, Scale::from(scale))
+                {
                     let elem: ScrollingSpaceRenderElement<R> = elem.into();
                     push(elem.into());
                 }

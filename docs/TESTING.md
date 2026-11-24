@@ -49,6 +49,10 @@ Additional CI gates:
   (preference, active path, render-tree capability, per-device support and the
   fallback reason). It does not need a running compositor, so it can run in CI
   and on user machines when diagnosing drivers.
+- Vulkan TTY output: start niri on a spare TTY with `NIRI_RENDERER=vulkan`.
+  Expect core window/layer rendering to work and a startup log naming any
+  GLSL-only visual that is disabled. This is a manual check because it owns a
+  DRM device and cannot run in the normal test suite.
 
 Debug and release must both build; debug for tests, release for the performance
 smoke.

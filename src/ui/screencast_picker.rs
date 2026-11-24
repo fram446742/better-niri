@@ -847,7 +847,9 @@ mod enabled {
             }
 
             let scale = output.current_scale().fractional_scale();
-            let mut ctx = ctx.as_gles();
+            let Some(mut ctx) = ctx.as_gles() else {
+                return;
+            };
             let mut elements = Vec::new();
             self.render_contents(niri, output, ctx.r(), 1., &mut |element| {
                 elements.push(element)
@@ -934,14 +936,11 @@ mod enabled {
                     || entry.blocked_window_ids != blocked_window_ids
             });
             if stale {
+                let Some(gles_renderer) = ctx.renderer.as_gles_renderer() else {
+                    return;
+                };
                 cache.remove(&cache_key);
-                match render_panel(
-                    ctx.renderer.as_gles_renderer(),
-                    output,
-                    state,
-                    &palette,
-                    &blocked_window_ids,
-                ) {
+                match render_panel(gles_renderer, output, state, &palette, &blocked_window_ids) {
                     Ok(buffer) => {
                         cache.insert(
                             cache_key.clone(),
@@ -972,7 +971,9 @@ mod enabled {
                 Kind::Unspecified,
             );
             push(ScreenCastPickerRenderElement::<R>::Texture(
-                PrimaryGpuTextureRenderElement(element),
+                PrimaryGpuTextureRenderElement(
+                    element.map_texture(crate::backend::tty::TtyOffscreen::Gles),
+                ),
             ));
 
             if state.view == PickerView::Window {
@@ -1027,8 +1028,11 @@ mod enabled {
                 let key = WindowPreviewCacheKey { scale, items };
                 let mut cache = self.window_previews.borrow_mut();
                 if cache.should_refresh(key, self.clock.now_unadjusted()) {
+                    let Some(gles_renderer) = ctx.renderer.as_gles_renderer() else {
+                        return;
+                    };
                     let mut preview_ctx = RenderCtx {
-                        renderer: ctx.renderer.as_gles_renderer(),
+                        renderer: gles_renderer,
                         target: RenderTarget::Screencast,
                         intent: RenderIntent::PickerPreview,
                         xray: ctx.xray,

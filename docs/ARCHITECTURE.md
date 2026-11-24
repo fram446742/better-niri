@@ -89,7 +89,7 @@ Only heavy or platform-specific dependencies are optional:
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `vulkan` | on | Compiles better-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. `niri --check-vulkan` prints the plan as JSON. The output render tree is still GLES-typed; switching it is the next Vulkan milestone. |
+| `vulkan` | on | Compiles better-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. The TTY backend renders through `TtyRenderer`/`TtyFrame` enums over the GLES and Vulkan multi-GPU renderers, so `vulkan` drives outputs with `VulkanRenderer`; GLSL-only visuals stay on GLES and are skipped. `niri --check-vulkan` prints the plan as JSON. |
 | `agent` | on | Agent seat, agent IPC socket, automation helpers. No heavy dependency; default-on so the compositor is complete. |
 | `portal` | on | Built-in XDG portal backend (`zbus` already optional upstream). |
 | `svg-cursors` | on | SVG cursor themes (`resvg`/`usvg`). |
@@ -205,11 +205,11 @@ These rules apply to every visual feature:
 5. **One colour contract.** Define a single working space and encode stage for
    HDR/SDR before adding shaders or Vulkan. Shader code must not guess whether it
    receives sRGB-encoded or linear data.
-6. **GLES is the reference.** Every effect works on GLES first. Vulkan parity is
-   required before switching the output render tree to `VulkanRenderer`. Today
-   the `vulkan` feature validates and reports device readiness (`--check-vulkan`,
-   startup log) but keeps GLES for outputs; requesting Vulkan logs a clear
-   fallback instead of failing.
+6. **GLES is the reference.** Every effect works on GLES first. The TTY output
+   path is renderer-generic and can run on `VulkanRenderer`; GLSL-only effects
+   still feature-detect through `AsGlesRenderer`/`AsGlesFrame` and skip
+   themselves on Vulkan with a warning instead of misrendering. New visuals must
+   either work on both renderers or follow that same explicit skip.
 7. **No per-frame allocations** in steady state: reuse offscreen textures and
    element vectors; avoid `Vec` growth in `render_inner`.
 8. **Outputs are independent.** Effects and feedback buffers are per output;

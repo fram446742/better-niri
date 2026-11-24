@@ -256,7 +256,9 @@ impl ClosingWindow {
                     Kind::Unspecified,
                 );
 
-                let elem = PrimaryGpuTextureRenderElement(elem);
+                let elem = PrimaryGpuTextureRenderElement(
+                    elem.map_texture(crate::backend::tty::TtyOffscreen::Gles),
+                );
                 let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), 1.);
 
                 let location = self.position_in_view(view_rect.loc) + offset;
@@ -331,7 +333,9 @@ impl ClosingWindow {
             Kind::Unspecified,
         );
 
-        let elem = PrimaryGpuTextureRenderElement(elem);
+        let elem = PrimaryGpuTextureRenderElement(
+            elem.map_texture(crate::backend::tty::TtyOffscreen::Gles),
+        );
 
         let center = self.geo_size.to_point().downscale(2.);
         let elem = RescaleRenderElement::from_element(

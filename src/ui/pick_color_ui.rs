@@ -220,7 +220,8 @@ impl PickColorUi {
                     None,
                     None,
                     Kind::Unspecified,
-                ),
+                )
+                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
             ));
         }
     }

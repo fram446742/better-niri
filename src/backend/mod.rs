@@ -13,6 +13,8 @@ use crate::niri::Niri;
 use crate::utils::id::IdCounter;
 
 pub mod tty;
+#[cfg(feature = "vulkan")]
+pub mod tty_renderer;
 pub use tty::Tty;
 
 mod libinput_plugins;
