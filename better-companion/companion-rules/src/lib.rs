@@ -8,23 +8,54 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use companion_core::{AUTO_WINDOWS, ActionInfo, Context, Step, load_json, save_json};
+use companion_core::{
+    AUTO_WINDOWS, AUTO_WORKSPACES, ActionInfo, Context, Step, load_json, save_json,
+};
 use companion_parking::Parking;
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Window/workspace match conditions.
+///
+/// Substring conditions are case-insensitive. Regex conditions use
+/// case-insensitive matching. Negated conditions (`*_not`) pass when the field
+/// is absent. Every populated field is ANDed.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Match {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id_regex: Option<String>,
+    /// App id must *not* contain this substring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id_not: Option<String>,
+    /// App id must *not* match this regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id_not_regex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_regex: Option<String>,
+    /// Title must *not* contain this substring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_not: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<u64>,
+    /// Workspace name substring, resolved from `auto:workspaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
+    /// Workspace name regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name_regex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_floating: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_minimized: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_sticky: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_urgent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,8 +96,18 @@ impl Rules {
         save_json(&self.path, state).map_err(|err| format!("cannot save rules: {err}"))
     }
 
-    fn matching_rules(&self, window: Option<u64>) -> Result<Vec<(u64, String, Vec<Step>)>, String> {
+    fn matching_rules(&self, window: Option<u64>) -> Result<Vec<RuleMatch>, String> {
         let windows = self.parking.lot(AUTO_WINDOWS);
+        let workspace_names: BTreeMap<u64, String> = self
+            .parking
+            .lot(AUTO_WORKSPACES)
+            .into_iter()
+            .filter_map(|(id, value)| {
+                let id = id.parse().ok()?;
+                let name = value.get("name").and_then(Value::as_str)?;
+                Some((id, name.to_owned()))
+            })
+            .collect();
         let state = self
             .state
             .lock()
@@ -80,9 +121,20 @@ impl Rules {
             if window.is_some_and(|want| want != id) {
                 continue;
             }
+            let workspace_name = value
+                .get("workspace_id")
+                .and_then(Value::as_u64)
+                .and_then(|workspace_id| workspace_names.get(&workspace_id))
+                .map(String::as_str);
             for (name, rule) in &state.rules {
-                if rule_matches(&rule.matcher, value) {
-                    matches.push((id, name.clone(), rule.steps.clone()));
+                if rule_matches_with(&rule.matcher, value, workspace_name) {
+                    matches.push(RuleMatch {
+                        window: id,
+                        name: name.clone(),
+                        matcher: rule.matcher.clone(),
+                        steps: rule.steps.clone(),
+                        window_state: window_state(value, workspace_name),
+                    });
                 }
             }
         }
@@ -93,9 +145,17 @@ impl Rules {
         Ok(self
             .matching_rules(window)?
             .into_iter()
-            .flat_map(|(_, _, steps)| steps)
+            .flat_map(|rule| rule.steps)
             .collect())
     }
+}
+
+struct RuleMatch {
+    window: u64,
+    name: String,
+    matcher: Match,
+    steps: Vec<Step>,
+    window_state: Value,
 }
 
 fn contains(haystack: &Value, field: &str, needle: &str) -> bool {
@@ -109,9 +169,92 @@ fn bool_is(value: &Value, field: &str, want: bool) -> bool {
     value.get(field).and_then(Value::as_bool) == Some(want)
 }
 
+fn regex_matches(haystack: &Value, field: &str, pattern: &str) -> bool {
+    haystack
+        .get(field)
+        .and_then(Value::as_str)
+        .is_some_and(|value| {
+            RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+                .is_ok_and(|regex| regex.is_match(value))
+        })
+}
+
+fn string_regex_matches(value: Option<&str>, pattern: &str) -> bool {
+    value.is_some_and(|value| {
+        RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .is_ok_and(|regex| regex.is_match(value))
+    })
+}
+
+fn name_contains(value: Option<&str>, needle: &str) -> bool {
+    value.is_some_and(|value| value.to_lowercase().contains(&needle.to_lowercase()))
+}
+
+fn window_state(window: &Value, workspace_name: Option<&str>) -> Value {
+    json!({
+        "id": window.get("id").cloned().unwrap_or(Value::Null),
+        "app_id": window.get("app_id").cloned().unwrap_or(Value::Null),
+        "title": window.get("title").cloned().unwrap_or(Value::Null),
+        "workspace_id": window.get("workspace_id").cloned().unwrap_or(Value::Null),
+        "workspace_name": workspace_name,
+        "is_floating": window.get("is_floating").and_then(Value::as_bool),
+        "is_minimized": window.get("is_minimized").and_then(Value::as_bool),
+        "is_sticky": window.get("is_sticky").and_then(Value::as_bool),
+        "is_urgent": window.get("is_urgent").and_then(Value::as_bool),
+    })
+}
+
+fn validate_matcher(matcher: &Match) -> Result<(), String> {
+    let patterns = [
+        ("app_id_regex", matcher.app_id_regex.as_deref()),
+        ("app_id_not_regex", matcher.app_id_not_regex.as_deref()),
+        ("title_regex", matcher.title_regex.as_deref()),
+        (
+            "workspace_name_regex",
+            matcher.workspace_name_regex.as_deref(),
+        ),
+    ];
+    for (field, pattern) in patterns {
+        let Some(pattern) = pattern else {
+            continue;
+        };
+        RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .map_err(|err| format!("invalid `{field}` regex `{pattern}`: {err}"))?;
+    }
+    Ok(())
+}
+
+/// Matches `window` using only fields carried by the window value itself.
 pub fn rule_matches(matcher: &Match, window: &Value) -> bool {
+    rule_matches_with(matcher, window, None)
+}
+
+/// Matches `window`, optionally resolving `workspace_name` from the
+/// auto-tracked workspace lot (or a `workspace_name` field on the window).
+pub fn rule_matches_with(matcher: &Match, window: &Value, workspace_name: Option<&str>) -> bool {
     if let Some(app_id) = &matcher.app_id
         && !contains(window, "app_id", app_id)
+    {
+        return false;
+    }
+    if let Some(pattern) = &matcher.app_id_regex
+        && !regex_matches(window, "app_id", pattern)
+    {
+        return false;
+    }
+    if let Some(app_id) = &matcher.app_id_not
+        && contains(window, "app_id", app_id)
+    {
+        return false;
+    }
+    if let Some(pattern) = &matcher.app_id_not_regex
+        && regex_matches(window, "app_id", pattern)
     {
         return false;
     }
@@ -120,8 +263,30 @@ pub fn rule_matches(matcher: &Match, window: &Value) -> bool {
     {
         return false;
     }
+    if let Some(pattern) = &matcher.title_regex
+        && !regex_matches(window, "title", pattern)
+    {
+        return false;
+    }
+    if let Some(title) = &matcher.title_not
+        && contains(window, "title", title)
+    {
+        return false;
+    }
     if let Some(workspace) = matcher.workspace
         && window.get("workspace_id").and_then(Value::as_u64) != Some(workspace)
+    {
+        return false;
+    }
+    let workspace_name =
+        workspace_name.or_else(|| window.get("workspace_name").and_then(Value::as_str));
+    if let Some(name) = &matcher.workspace_name
+        && !name_contains(workspace_name, name)
+    {
+        return false;
+    }
+    if let Some(pattern) = &matcher.workspace_name_regex
+        && !string_regex_matches(workspace_name, pattern)
     {
         return false;
     }
@@ -132,6 +297,16 @@ pub fn rule_matches(matcher: &Match, window: &Value) -> bool {
     }
     if let Some(minimized) = matcher.is_minimized
         && !bool_is(window, "is_minimized", minimized)
+    {
+        return false;
+    }
+    if let Some(sticky) = matcher.is_sticky
+        && !bool_is(window, "is_sticky", sticky)
+    {
+        return false;
+    }
+    if let Some(urgent) = matcher.is_urgent
+        && !bool_is(window, "is_urgent", urgent)
     {
         return false;
     }
@@ -148,8 +323,14 @@ impl Context for Rules {
             ActionInfo::new("set", "Define/replace `name` with `match` and `steps`"),
             ActionInfo::new("remove", "Delete rule `name`"),
             ActionInfo::new("list", "List rules"),
-            ActionInfo::new("explain", "Show rules, or matching rules for `window`"),
-            ActionInfo::new("apply", "Show which rules match (no execution)"),
+            ActionInfo::new(
+                "explain",
+                "Matching rules for `window`, with matcher and window state",
+            ),
+            ActionInfo::new(
+                "apply",
+                "Show which rules match and their step counts (no execution)",
+            ),
             ActionInfo::new("run", "Execute the steps of matching rules"),
         ]
     }
@@ -178,6 +359,7 @@ impl Context for Rules {
                 if steps.is_empty() {
                     return Err("rules.set needs at least one step".to_owned());
                 }
+                validate_matcher(&matcher)?;
                 state.rules.insert(
                     name.clone(),
                     Rule {
@@ -204,7 +386,15 @@ impl Context for Rules {
                 let matches = self.matching_rules(window)?;
                 let matches: Vec<Value> = matches
                     .into_iter()
-                    .map(|(id, rule, steps)| json!({ "window": id, "rule": rule, "steps": steps }))
+                    .map(|matched| {
+                        json!({
+                            "window": matched.window,
+                            "rule": matched.name,
+                            "match": matched.matcher,
+                            "window_state": matched.window_state,
+                            "steps": matched.steps,
+                        })
+                    })
                     .collect();
                 Ok(json!({ "window": window, "matches": matches }))
             }
@@ -214,7 +404,15 @@ impl Context for Rules {
                 let matches = self.matching_rules(window)?;
                 let matches: Vec<Value> = matches
                     .into_iter()
-                    .map(|(id, rule, _)| json!({ "window": id, "rule": rule }))
+                    .map(|matched| {
+                        json!({
+                            "window": matched.window,
+                            "rule": matched.name,
+                            "match": matched.matcher,
+                            "window_state": matched.window_state,
+                            "step_count": matched.steps.len(),
+                        })
+                    })
                     .collect();
                 Ok(json!({ "window": window, "matches": matches }))
             }
@@ -370,6 +568,163 @@ mod tests {
         });
         assert!(matches!(ran, Response::Value { .. }), "{ran:?}");
         assert_eq!(*log.lock().unwrap(), ["browser"]);
+    }
+
+    fn with_workspaces(parking: &Parking) {
+        parking
+            .replace_lot(
+                AUTO_WORKSPACES,
+                [
+                    ("1".to_owned(), json!({ "id": 1, "name": "dev" })),
+                    ("2".to_owned(), json!({ "id": 2, "name": "web" })),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn matches_regex_negation_workspace_name_and_flags() {
+        let firefox = json!({
+            "id": 10,
+            "app_id": "firefox",
+            "title": "Mozilla",
+            "workspace_id": 1,
+            "is_floating": false,
+            "is_minimized": false,
+            "is_sticky": false,
+            "is_urgent": true,
+        });
+        assert!(rule_matches_with(
+            &Match {
+                app_id_regex: Some("^fire".into()),
+                title_regex: Some("zilla$".into()),
+                app_id_not: Some("chrome".into()),
+                ..Match::default()
+            },
+            &firefox,
+            Some("dev"),
+        ));
+        assert!(!rule_matches_with(
+            &Match {
+                app_id_not: Some("FIRE".into()),
+                ..Match::default()
+            },
+            &firefox,
+            None,
+        ));
+        assert!(!rule_matches_with(
+            &Match {
+                app_id_not_regex: Some("fox$".into()),
+                ..Match::default()
+            },
+            &firefox,
+            None,
+        ));
+        assert!(rule_matches_with(
+            &Match {
+                workspace_name: Some("DEV".into()),
+                is_sticky: Some(false),
+                is_urgent: Some(true),
+                is_minimized: Some(false),
+                ..Match::default()
+            },
+            &firefox,
+            Some("dev"),
+        ));
+        assert!(!rule_matches_with(
+            &Match {
+                workspace_name_regex: Some("^web".into()),
+                ..Match::default()
+            },
+            &firefox,
+            Some("dev"),
+        ));
+        // A window carrying its own workspace_name works without the lot.
+        let with_name = json!({ "id": 10, "workspace_name": "dev" });
+        assert!(rule_matches(
+            &Match {
+                workspace_name: Some("dev".into()),
+                ..Match::default()
+            },
+            &with_name,
+        ));
+    }
+
+    #[test]
+    fn explain_and_apply_report_matcher_and_window_state() {
+        let parking = parking_with_windows("explain");
+        with_workspaces(&parking);
+        let rules = Rules::load(temp_dir("explain-rules").join("rules.json"), parking).unwrap();
+        rules
+            .call(
+                "set",
+                &json!({
+                    "name": "browser",
+                    "match": { "title_regex": "^moz", "app_id_not": "chrome" },
+                    "steps": [{ "namespace": "system", "action": "ping" }]
+                }),
+            )
+            .unwrap();
+
+        let explained = rules.call("explain", &json!({ "window": 10 })).unwrap();
+        let matched = &explained["matches"][0];
+        assert_eq!(matched["rule"], "browser");
+        assert_eq!(matched["match"]["title_regex"], "^moz");
+        assert_eq!(matched["match"]["app_id_not"], "chrome");
+        assert_eq!(matched["window_state"]["workspace_name"], "dev");
+        assert_eq!(matched["window_state"]["title"], "Mozilla");
+        assert_eq!(matched["steps"][0]["action"], "ping");
+
+        let applied = rules.call("apply", &json!({ "window": 10 })).unwrap();
+        let matched = &applied["matches"][0];
+        assert_eq!(matched["window"], 10);
+        assert_eq!(matched["step_count"], 1);
+        assert_eq!(matched["match"]["app_id_not"], "chrome");
+    }
+
+    #[test]
+    fn invalid_regex_is_rejected_and_legacy_rules_load() {
+        let parking = parking_with_windows("legacy");
+        let path = temp_dir("legacy-rules").join("rules.json");
+        let rules = Rules::load(&path, parking.clone()).unwrap();
+        let error = rules
+            .call(
+                "set",
+                &json!({
+                    "name": "bad",
+                    "match": { "title_regex": "[" },
+                    "steps": [{ "namespace": "system", "action": "ping" }]
+                }),
+            )
+            .unwrap_err();
+        assert!(error.contains("invalid `title_regex`"), "{error}");
+        assert!(
+            rules.call("list", &Value::Null).unwrap()["rules"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+
+        // A rule file written before the new matcher fields still loads.
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "rules": {
+                    "old": {
+                        "match": { "app_id": "fire" },
+                        "steps": [{ "namespace": "system", "action": "ping" }]
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let legacy = Rules::load(&path, parking).unwrap();
+        let explained = legacy.call("explain", &json!({ "window": 10 })).unwrap();
+        assert_eq!(explained["matches"][0]["rule"], "old");
+        assert!(explained["matches"][0]["match"]["title_regex"].is_null());
     }
 
     #[test]
