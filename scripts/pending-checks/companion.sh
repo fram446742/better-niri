@@ -1,7 +1,10 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Exercise better-companion rules/park/swallow plumbing against the current
 # niri session. Build: cargo build --manifest-path better-companion/Cargo.toml
 set -u
+LOG=${PENDING_LOG:-/tmp/pending-companion.log}
+exec > >(tee -a "$LOG") 2>&1
+echo "logging to $LOG"
 BASE=${BETTER_COMPANION:-./better-companion/target/debug}
 SOCK=/tmp/better-companion-test.sock
 export BETTER_COMPANION_SOCKET=$SOCK

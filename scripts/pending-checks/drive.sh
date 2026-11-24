@@ -1,8 +1,11 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Drive a running niri session (run inside the session, e.g. from foot on tty3)
 # and exercise the Vulkan visuals that still have pending parity work.
 # Usage: ./scripts/pending-checks/drive.sh [/path/to/niri]
 set -u
+LOG=${PENDING_LOG:-/tmp/pending-drive.log}
+exec > >(tee -a "$LOG") 2>&1
+echo "logging to $LOG"
 NIRI=${1:-niri}
 say() { printf '\n== %s ==\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }

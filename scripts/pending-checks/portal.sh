@@ -1,7 +1,10 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Exercise better-portal from a user session bus. Build it first:
 #   cargo build --manifest-path better-portal/Cargo.toml
 set -u
+LOG=${PENDING_LOG:-/tmp/pending-portal.log}
+exec > >(tee -a "$LOG") 2>&1
+echo "logging to $LOG"
 BIN=${BETTER_PORTAL_BIN:-./better-portal/target/debug/better-portal}
 BUS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}
 export DBUS_SESSION_BUS_ADDRESS=$BUS
