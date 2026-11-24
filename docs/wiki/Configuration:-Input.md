@@ -161,7 +161,11 @@ Keep all of your `keyboard` blocks together in one `input` section (ideally in o
 
 > [!TIP]
 >
-> Since the Wayland protocol only lets a compositor advertise one active keymap per seat at a time, niri implements this by switching the active keymap whenever a different keyboard device sends a key press than the one that sent the last one. This is transparent for normal use, but note that XWayland applications generally only see one X11-wide keymap, so per-keyboard layouts may not be reflected correctly in X11-only clients.
+> Since the Wayland protocol only lets a compositor advertise one active keymap per seat at a time, niri implements this by switching the active keymap whenever a different keyboard device sends a key press than the one that sent the last one.
+> The first keyboard that appears (at startup or hotplug) gets its config applied immediately, so its first keystroke already uses the right layout and repeat settings.
+> Keyboards that appear later keep the active config until they are actually used, and unplugging the keyboard that provided the active config reverts to the unnamed `keyboard { }` block (or to the locale1 XKB fallback when that block leaves `xkb` unset).
+>
+> This is transparent for normal use, but note that XWayland applications generally only see one X11-wide keymap, so per-keyboard layouts may not be reflected correctly in X11-only clients.
 
 > [!TIP]
 >

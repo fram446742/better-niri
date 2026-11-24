@@ -284,14 +284,30 @@ impl State {
                     }
                 }
 
-                if device.has_capability(input::DeviceCapability::Keyboard)
-                    && let Some(led_state) = self
+                if device.has_capability(input::DeviceCapability::Keyboard) {
+                    if let Some(led_state) = self
                         .niri
                         .seat
                         .get_keyboard()
                         .map(|keyboard| keyboard.led_state())
-                {
-                    device.led_update(led_state.into());
+                    {
+                        device.led_update(led_state.into());
+                    }
+
+                    // Apply the device's resolved config as soon as the first keyboard
+                    // appears, so the very first keystroke already uses its keymap
+                    // instead of the fallback. Keyboards that show up later keep the
+                    // active config until they are actually used.
+                    if self.niri.current_keyboard_device.is_none() {
+                        let keyboard_config = self
+                            .niri
+                            .config
+                            .borrow()
+                            .input
+                            .keyboard_named(&device.name());
+                        self.niri.current_keyboard_device = Some(device.clone());
+                        self.switch_keyboard_config(keyboard_config);
+                    }
                 }
 
                 if device.has_capability(input::DeviceCapability::Touch) {
@@ -309,6 +325,12 @@ impl State {
                 self.niri.touch.remove(device);
                 self.niri.tablets.remove(device);
                 self.niri.devices.remove(device);
+
+                // The device that provided the active keymap is gone: revert to the
+                // fallback config until another keyboard is used.
+                if self.niri.current_keyboard_device.as_ref() == Some(device) {
+                    self.revert_to_fallback_keyboard();
+                }
             }
             _ => (),
         }
@@ -1047,9 +1069,10 @@ impl State {
     {
         let device = event.device();
 
-        let keyboard_config = match (&device as &dyn Any).downcast_ref::<input::Device>() {
+        let (keyboard_config, device) = match (&device as &dyn Any).downcast_ref::<input::Device>()
+        {
             Some(input_device) => {
-                match self.niri.keyboard_device_cache.entry(input_device.clone()) {
+                let config = match self.niri.keyboard_device_cache.entry(input_device.clone()) {
                     Entry::Occupied(entry) => entry.get().clone(),
                     Entry::Vacant(entry) => {
                         let config = self
@@ -1061,13 +1084,15 @@ impl State {
                         entry.insert(config.clone());
                         config
                     }
-                }
+                };
+                (config, Some(input_device.clone()))
             }
             // Backends without a real libinput device (e.g. winit, used for nested test
             // sessions) always get the fallback keyboard config.
-            None => self.niri.config.borrow().input.fallback_keyboard(),
+            None => (self.niri.config.borrow().input.fallback_keyboard(), None),
         };
 
+        self.niri.current_keyboard_device = device;
         self.switch_keyboard_config(keyboard_config);
     }
 
@@ -1112,6 +1137,16 @@ impl State {
         }
 
         self.niri.current_keyboard = keyboard_config;
+    }
+
+    /// Reverts the active keyboard to the unnamed (`input { keyboard { } }`) config.
+    ///
+    /// Used when the device that supplied the current keymap disappears; the next
+    /// keystroke from another keyboard re-resolves its own config.
+    pub(crate) fn revert_to_fallback_keyboard(&mut self) {
+        self.niri.current_keyboard_device = None;
+        let fallback = self.niri.config.borrow().input.fallback_keyboard();
+        self.switch_keyboard_config(fallback);
     }
 
     pub fn handle_bind(&mut self, bind: Bind, pressed: bool, time: InputTime) {

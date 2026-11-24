@@ -95,3 +95,67 @@ fn switching_back_to_an_unset_xkb_uses_locale1_settings() {
     state.switch_keyboard_config(fallback);
     assert_eq!(active_layout_name(state), "German");
 }
+
+#[test]
+fn switching_keyboard_config_applies_repeat_settings() {
+    let config = config(
+        r#"
+        input {
+            keyboard {
+                repeat-delay 600
+                repeat-rate 25
+            }
+            keyboard "Ext" {
+                repeat-delay 200
+                repeat-rate 60
+            }
+        }
+        "#,
+    );
+    let ext = config.input.keyboard_named("Ext");
+    let mut f = Fixture::with_config(config);
+    let state = f.niri_state();
+    assert_eq!(state.niri.current_keyboard.repeat_rate, 25);
+    assert_eq!(state.niri.current_keyboard.repeat_delay, 600);
+
+    state.switch_keyboard_config(ext.clone());
+
+    assert_eq!(state.niri.current_keyboard.repeat_rate, 60);
+    assert_eq!(state.niri.current_keyboard.repeat_delay, 200);
+    assert_eq!(state.niri.current_keyboard, ext);
+}
+
+#[test]
+fn switching_the_same_config_twice_keeps_the_layout() {
+    let config = config(TWO_KEYBOARDS);
+    let ext = config.input.keyboard_named("Ext");
+    let mut f = Fixture::with_config(config);
+    let state = f.niri_state();
+
+    state.switch_keyboard_config(ext.clone());
+    assert_eq!(active_layout_name(state), "English (US)");
+
+    // A second switch with an identical config is a no-op (it must not reset
+    // the keymap or the modifiers).
+    state.switch_keyboard_config(ext.clone());
+    assert_eq!(active_layout_name(state), "English (US)");
+    assert_eq!(state.niri.current_keyboard, ext);
+}
+
+#[test]
+fn reverting_to_the_fallback_restores_the_default_layout() {
+    let config = config(TWO_KEYBOARDS);
+    let ext = config.input.keyboard_named("Ext");
+    let fallback = config.input.fallback_keyboard();
+    let mut f = Fixture::with_config(config);
+    let state = f.niri_state();
+    state.switch_keyboard_config(ext);
+    assert_eq!(active_layout_name(state), "English (US)");
+
+    // Simulates the active keyboard being unplugged.
+    state.revert_to_fallback_keyboard();
+
+    assert_eq!(active_layout_name(state), "English (UK)");
+    assert_eq!(state.niri.current_keyboard, fallback);
+    assert!(state.niri.current_keyboard_device.is_none());
+}
