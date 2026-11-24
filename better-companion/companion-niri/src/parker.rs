@@ -12,6 +12,7 @@ use companion_parking::Parking;
 use niri_ipc::{Action, Request, Response, Window, Workspace, WorkspaceReferenceArg};
 use serde_json::{Value, json};
 
+use crate::layout::{self, WorkspaceTarget};
 use crate::{AUTO_WINDOWS, AUTO_WORKSPACES, Compositor};
 
 pub const DEFAULT_LOT: &str = "parker";
@@ -120,7 +121,7 @@ impl Parker {
     }
 
     fn workspace_window_ids(&self, workspace_id: u64) -> Result<Vec<u64>, String> {
-        let from_auto: Vec<u64> = self
+        let mut from_auto: Vec<u64> = self
             .auto_windows()
             .iter()
             .filter_map(|(id, value)| {
@@ -130,14 +131,45 @@ impl Parker {
             })
             .collect();
         if !from_auto.is_empty() {
+            from_auto.sort_unstable();
             return Ok(from_auto);
         }
-        Ok(self
+        let mut ids: Vec<u64> = self
             .window_query()?
             .into_iter()
             .filter(|window| window.workspace_id == Some(workspace_id))
             .map(|window| window.id)
-            .collect())
+            .collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    /// Resolves an optional workspace selector to a stable id.
+    ///
+    /// A plain id uses the auto-tracked workspace state when it is present and
+    /// does not require an extra niri query; names and indices resolve through
+    /// the live workspace list (falling back to the cache when IPC is down).
+    fn workspace_target_id(&self, params: &Value) -> Result<Option<u64>, String> {
+        let Some(target) = WorkspaceTarget::from_params(params)? else {
+            return Ok(None);
+        };
+        if let Some(id) = target.id
+            && target.name.is_none()
+            && target.index.is_none()
+            && target.output.is_none()
+        {
+            // niri validates the id; the auto lot is only a fast path.
+            return Ok(Some(id));
+        }
+        let workspaces = layout::query_or_cached_workspaces(&self.compositor, &self.parking)?;
+        layout::resolve_workspace(&target, &workspaces)
+            .map(|workspace| Some(workspace.id))
+            .map_err(|err| {
+                format!(
+                    "{err}; known workspaces: {}",
+                    layout::describe_workspaces(&workspaces)
+                )
+            })
     }
 
     fn send_action(&self, action: Action) -> Result<(), String> {
@@ -172,7 +204,7 @@ impl Context for Parker {
             ),
             ActionInfo::new(
                 "park-workspace",
-                "Minimize every window on `workspace` and record the group",
+                "Minimize every window on `workspace` (id, name or index) and record the group",
             ),
             ActionInfo::new(
                 "restore-workspace",
@@ -201,15 +233,24 @@ impl Context for Parker {
             "restore" => {
                 let id = Self::param_id(params)
                     .ok_or_else(|| "parker.restore needs a `window` id".to_owned())?;
-                let entry = self.parking.call(
-                    "unpark",
-                    &json!({ "lot": lot, "id": format!("window:{id}") }),
-                )?;
+                // Atomically remove: a repeated or concurrent restore reports
+                // `restored: false` and sends no second unminimize.
+                let Some(entry) = self
+                    .parking
+                    .take(&lot, &format!("window:{id}"))
+                    .map_err(|err| format!("cannot restore window {id}: {err}"))?
+                else {
+                    return Ok(json!({
+                        "lot": lot,
+                        "window": id,
+                        "restored": false,
+                    }));
+                };
                 self.send_action(Action::UnminimizeWindow { id: Some(id) })?;
-                Ok(json!({ "lot": lot, "window": id, "restored": true, "entry": entry["value"] }))
+                Ok(json!({ "lot": lot, "window": id, "restored": true, "entry": entry }))
             }
             "park-workspace" => {
-                let workspace_id = match params.get("workspace").and_then(Value::as_u64) {
+                let workspace_id = match self.workspace_target_id(params)? {
                     Some(id) => id,
                     None => self.focused_workspace_id()?,
                 };
@@ -237,30 +278,40 @@ impl Context for Parker {
                 Ok(json!({ "lot": lot, "workspace": workspace_id, "windows": minimized }))
             }
             "restore-workspace" => {
-                let workspace_id = params
-                    .get("workspace")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| "parker.restore-workspace needs a `workspace` id".to_owned())?;
-                let entry = self.parking.call(
-                    "unpark",
-                    &json!({ "lot": lot, "id": format!("workspace:{workspace_id}") }),
-                )?;
-                let windows = entry["value"]["windows"]
-                    .as_array()
-                    .cloned()
+                let workspace_id = self.workspace_target_id(params)?.ok_or_else(|| {
+                    "parker.restore-workspace needs a `workspace` id, \
+                         `workspace_name` or `workspace_idx`"
+                        .to_owned()
+                })?;
+                let Some(entry) = self
+                    .parking
+                    .take(&lot, &format!("workspace:{workspace_id}"))
+                    .map_err(|err| format!("cannot restore workspace {workspace_id}: {err}"))?
+                else {
+                    return Ok(json!({
+                        "lot": lot,
+                        "workspace": workspace_id,
+                        "windows": [],
+                        "restored": false,
+                        "focused": false,
+                    }));
+                };
+                let mut windows: Vec<u64> = entry
+                    .get("windows")
+                    .and_then(Value::as_array)
+                    .map(|windows| windows.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
                     .unwrap_or_default();
+                windows.sort_unstable();
                 let mut restored = Vec::with_capacity(windows.len());
                 for id in windows {
-                    if let Some(id) = id.as_u64() {
-                        self.send_action(Action::UnminimizeWindow { id: Some(id) })?;
-                        restored.push(id);
-                    }
+                    self.send_action(Action::UnminimizeWindow { id: Some(id) })?;
+                    restored.push(id);
                 }
-                if params
+                let focus = params
                     .get("focus")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+                if focus {
                     self.send_action(Action::FocusWorkspace {
                         reference: WorkspaceReferenceArg::Id(workspace_id),
                     })?;
@@ -269,7 +320,8 @@ impl Context for Parker {
                     "lot": lot,
                     "workspace": workspace_id,
                     "windows": restored,
-                    "focused": params.get("focus").and_then(Value::as_bool).unwrap_or(false),
+                    "restored": true,
+                    "focused": focus,
                 }))
             }
             "list" => Ok(json!({ "lot": lot, "entries": self.parking.lot(&lot) })),
@@ -432,5 +484,136 @@ mod tests {
         let parker = Parker::new(parking, Compositor::at(dir.join("unused.sock")));
         assert!(parker.call("restore", &json!({})).is_err());
         assert!(parker.call("restore-workspace", &json!({})).is_err());
+    }
+
+    fn workspace_json(id: u64, idx: u8, name: &str, output: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "idx": idx,
+            "name": name,
+            "output": output,
+            "is_urgent": false,
+            "is_active": true,
+            "is_focused": true,
+            "active_window_id": null,
+            "is_hidden": false
+        })
+    }
+
+    fn fake_sequence(
+        path: &PathBuf,
+        responses: Vec<serde_json::Value>,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let listener = UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                requests.push(serde_json::from_str(line.trim()).unwrap());
+                let mut stream = stream;
+                stream
+                    .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                    .unwrap();
+                stream.write_all(b"\n").unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        })
+    }
+
+    #[test]
+    fn parks_and_restores_a_workspace_by_name() {
+        let dir = temp_dir("workspace-name");
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        seed(&parking);
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(7, 1, "main", "eDP-1"),
+                ] } }),
+                json!({ "Ok": "Handled" }),
+                json!({ "Ok": "Handled" }),
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(7, 1, "main", "eDP-1"),
+                ] } }),
+                json!({ "Ok": "Handled" }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let parker = Parker::new(parking.clone(), Compositor::at(&socket));
+        let parked = parker
+            .call("park-workspace", &json!({ "workspace_name": "main" }))
+            .unwrap();
+        assert_eq!(parked["workspace"], 7);
+        assert_eq!(parked["windows"], json!([10, 11]));
+
+        let restored = parker
+            .call("restore-workspace", &json!({ "workspace_name": "main" }))
+            .unwrap();
+        assert_eq!(restored["workspace"], 7);
+        assert_eq!(restored["windows"], json!([10, 11]));
+        assert_eq!(restored["restored"], true);
+        assert!(parking.lot(DEFAULT_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(requests[0], Request::Workspaces));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::MinimizeWindow { id: Some(10) })
+        ));
+        assert!(matches!(
+            requests[2],
+            Request::Action(Action::MinimizeWindow { id: Some(11) })
+        ));
+        assert!(matches!(requests[3], Request::Workspaces));
+        assert!(matches!(
+            requests[4],
+            Request::Action(Action::UnminimizeWindow { id: Some(10) })
+        ));
+        assert!(matches!(
+            requests[5],
+            Request::Action(Action::UnminimizeWindow { id: Some(11) })
+        ));
+    }
+
+    #[test]
+    fn restore_is_idempotent_and_does_not_resend_actions() {
+        let dir = temp_dir("restore-twice");
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        seed(&parking);
+        let socket = dir.join("niri.sock");
+        let server = fake_niri(&socket, 2);
+        let parker = Parker::new(parking.clone(), Compositor::at(&socket));
+
+        parker.call("park", &json!({ "window": 10 })).unwrap();
+        let first = parker.call("restore", &json!({ "window": 10 })).unwrap();
+        assert_eq!(first["restored"], true);
+        let second = parker.call("restore", &json!({ "window": 10 })).unwrap();
+        assert_eq!(second["restored"], false);
+
+        // Repeated workspace restore behaves the same way.
+        let socket = dir.join("niri2.sock");
+        let server2 = fake_niri(&socket, 4);
+        let parker2 = Parker::new(parking.clone(), Compositor::at(&socket));
+        parker2
+            .call("park-workspace", &json!({ "workspace": 7 }))
+            .unwrap();
+        let first = parker2
+            .call("restore-workspace", &json!({ "workspace": 7 }))
+            .unwrap();
+        assert_eq!(first["restored"], true);
+        let second = parker2
+            .call("restore-workspace", &json!({ "workspace": 7 }))
+            .unwrap();
+        assert_eq!(second["restored"], false);
+        assert_eq!(second["windows"], json!([]));
+
+        assert_eq!(server.join().unwrap().len(), 2);
+        assert_eq!(server2.join().unwrap().len(), 4);
     }
 }

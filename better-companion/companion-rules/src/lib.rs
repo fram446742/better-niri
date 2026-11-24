@@ -3,6 +3,10 @@
 //! Rules match the auto-tracked windows from `companion-niri` and carry a list
 //! of steps. `rules.apply` explains what would run; `rules.run` is executed by
 //! the registry, so steps can target parking, parker, automation, hooks, etc.
+//!
+//! Workspace conditions cover the stable id, name (substring/regex), monitor
+//! index and output. Matches are reported in numeric window order and then rule
+//! name, keeping explain/apply/run output stable across calls.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -48,6 +52,13 @@ pub struct Match {
     /// Workspace name regex.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_name_regex: Option<String>,
+    /// Workspace index on its monitor (niri's `idx`), resolved from
+    /// `auto:workspaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_idx: Option<u8>,
+    /// Output name substring, resolved from `auto:workspaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_floating: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,14 +109,13 @@ impl Rules {
 
     fn matching_rules(&self, window: Option<u64>) -> Result<Vec<RuleMatch>, String> {
         let windows = self.parking.lot(AUTO_WINDOWS);
-        let workspace_names: BTreeMap<u64, String> = self
+        let workspace_facts: BTreeMap<u64, WorkspaceFacts> = self
             .parking
             .lot(AUTO_WORKSPACES)
             .into_iter()
             .filter_map(|(id, value)| {
                 let id = id.parse().ok()?;
-                let name = value.get("name").and_then(Value::as_str)?;
-                Some((id, name.to_owned()))
+                Some((id, WorkspaceFacts::from_value(&value)))
             })
             .collect();
         let state = self
@@ -113,27 +123,29 @@ impl Rules {
             .lock()
             .map_err(|_| "rules state lock poisoned".to_owned())?;
 
+        // Numeric id order, not the string order of the lot keys, so explain,
+        // apply and run report stable results for ids like 2 and 10.
+        let mut ordered: Vec<(u64, &Value)> = windows
+            .iter()
+            .filter_map(|(id, value)| Some((id.parse().ok()?, value)))
+            .filter(|(id, _)| window.is_none_or(|want| want == *id))
+            .collect();
+        ordered.sort_by_key(|(id, _)| *id);
+
         let mut matches = Vec::new();
-        for (id, value) in &windows {
-            let Ok(id) = id.parse::<u64>() else {
-                continue;
-            };
-            if window.is_some_and(|want| want != id) {
-                continue;
-            }
-            let workspace_name = value
+        for (id, value) in ordered {
+            let facts = value
                 .get("workspace_id")
                 .and_then(Value::as_u64)
-                .and_then(|workspace_id| workspace_names.get(&workspace_id))
-                .map(String::as_str);
+                .and_then(|workspace_id| workspace_facts.get(&workspace_id));
             for (name, rule) in &state.rules {
-                if rule_matches_with(&rule.matcher, value, workspace_name) {
+                if rule_matches_in(&rule.matcher, value, facts) {
                     matches.push(RuleMatch {
                         window: id,
                         name: name.clone(),
                         matcher: rule.matcher.clone(),
                         steps: rule.steps.clone(),
-                        window_state: window_state(value, workspace_name),
+                        window_state: window_state(value, facts),
                     });
                 }
             }
@@ -194,13 +206,39 @@ fn name_contains(value: Option<&str>, needle: &str) -> bool {
     value.is_some_and(|value| value.to_lowercase().contains(&needle.to_lowercase()))
 }
 
-fn window_state(window: &Value, workspace_name: Option<&str>) -> Value {
+/// Workspace facts resolved from the auto-tracked workspace lot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceFacts {
+    pub name: Option<String>,
+    pub idx: Option<u8>,
+    pub output: Option<String>,
+}
+
+impl WorkspaceFacts {
+    pub fn from_value(value: &Value) -> Self {
+        Self {
+            name: value.get("name").and_then(Value::as_str).map(str::to_owned),
+            idx: value
+                .get("idx")
+                .and_then(Value::as_u64)
+                .and_then(|idx| u8::try_from(idx).ok()),
+            output: value
+                .get("output")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+}
+
+fn window_state(window: &Value, workspace: Option<&WorkspaceFacts>) -> Value {
     json!({
         "id": window.get("id").cloned().unwrap_or(Value::Null),
         "app_id": window.get("app_id").cloned().unwrap_or(Value::Null),
         "title": window.get("title").cloned().unwrap_or(Value::Null),
         "workspace_id": window.get("workspace_id").cloned().unwrap_or(Value::Null),
-        "workspace_name": workspace_name,
+        "workspace_name": workspace.and_then(|facts| facts.name.clone()),
+        "workspace_idx": workspace.and_then(|facts| facts.idx),
+        "workspace_output": workspace.and_then(|facts| facts.output.clone()),
         "is_floating": window.get("is_floating").and_then(Value::as_bool),
         "is_minimized": window.get("is_minimized").and_then(Value::as_bool),
         "is_sticky": window.get("is_sticky").and_then(Value::as_bool),
@@ -238,6 +276,19 @@ pub fn rule_matches(matcher: &Match, window: &Value) -> bool {
 /// Matches `window`, optionally resolving `workspace_name` from the
 /// auto-tracked workspace lot (or a `workspace_name` field on the window).
 pub fn rule_matches_with(matcher: &Match, window: &Value, workspace_name: Option<&str>) -> bool {
+    let facts = workspace_name.map(|name| WorkspaceFacts {
+        name: Some(name.to_owned()),
+        ..WorkspaceFacts::default()
+    });
+    rule_matches_in(matcher, window, facts.as_ref())
+}
+
+/// Matches `window` against workspace facts (name, index, output).
+pub fn rule_matches_in(
+    matcher: &Match,
+    window: &Value,
+    workspace: Option<&WorkspaceFacts>,
+) -> bool {
     if let Some(app_id) = &matcher.app_id
         && !contains(window, "app_id", app_id)
     {
@@ -273,13 +324,14 @@ pub fn rule_matches_with(matcher: &Match, window: &Value, workspace_name: Option
     {
         return false;
     }
-    if let Some(workspace) = matcher.workspace
-        && window.get("workspace_id").and_then(Value::as_u64) != Some(workspace)
+    if let Some(workspace_id) = matcher.workspace
+        && window.get("workspace_id").and_then(Value::as_u64) != Some(workspace_id)
     {
         return false;
     }
-    let workspace_name =
-        workspace_name.or_else(|| window.get("workspace_name").and_then(Value::as_str));
+    let workspace_name = workspace
+        .and_then(|facts| facts.name.as_deref())
+        .or_else(|| window.get("workspace_name").and_then(Value::as_str));
     if let Some(name) = &matcher.workspace_name
         && !name_contains(workspace_name, name)
     {
@@ -287,6 +339,16 @@ pub fn rule_matches_with(matcher: &Match, window: &Value, workspace_name: Option
     }
     if let Some(pattern) = &matcher.workspace_name_regex
         && !string_regex_matches(workspace_name, pattern)
+    {
+        return false;
+    }
+    if let Some(index) = matcher.workspace_idx
+        && workspace.and_then(|facts| facts.idx) != Some(index)
+    {
+        return false;
+    }
+    if let Some(output) = &matcher.workspace_output
+        && !name_contains(workspace.and_then(|facts| facts.output.as_deref()), output)
     {
         return false;
     }
@@ -575,8 +637,14 @@ mod tests {
             .replace_lot(
                 AUTO_WORKSPACES,
                 [
-                    ("1".to_owned(), json!({ "id": 1, "name": "dev" })),
-                    ("2".to_owned(), json!({ "id": 2, "name": "web" })),
+                    (
+                        "1".to_owned(),
+                        json!({ "id": 1, "idx": 1, "name": "dev", "output": "eDP-1" }),
+                    ),
+                    (
+                        "2".to_owned(),
+                        json!({ "id": 2, "idx": 2, "name": "web", "output": "HDMI-1" }),
+                    ),
                 ]
                 .into_iter()
                 .collect(),
@@ -674,6 +742,8 @@ mod tests {
         assert_eq!(matched["match"]["title_regex"], "^moz");
         assert_eq!(matched["match"]["app_id_not"], "chrome");
         assert_eq!(matched["window_state"]["workspace_name"], "dev");
+        assert_eq!(matched["window_state"]["workspace_idx"], 1);
+        assert_eq!(matched["window_state"]["workspace_output"], "eDP-1");
         assert_eq!(matched["window_state"]["title"], "Mozilla");
         assert_eq!(matched["steps"][0]["action"], "ping");
 
@@ -682,6 +752,98 @@ mod tests {
         assert_eq!(matched["window"], 10);
         assert_eq!(matched["step_count"], 1);
         assert_eq!(matched["match"]["app_id_not"], "chrome");
+    }
+
+    #[test]
+    fn matches_workspace_index_and_output() {
+        let parking = parking_with_windows("workspace-facts");
+        with_workspaces(&parking);
+        let rules = Rules::load(
+            temp_dir("workspace-facts-rules").join("rules.json"),
+            parking.clone(),
+        )
+        .unwrap();
+        rules
+            .call(
+                "set",
+                &json!({
+                    "name": "dev-output",
+                    "match": { "workspace_idx": 1, "workspace_output": "edp" },
+                    "steps": [{ "namespace": "system", "action": "ping" }]
+                }),
+            )
+            .unwrap();
+        let explained = rules.call("explain", &json!({ "window": 10 })).unwrap();
+        assert_eq!(explained["matches"][0]["rule"], "dev-output");
+
+        let firefox = json!({ "id": 10, "app_id": "firefox", "workspace_id": 1 });
+        assert!(rule_matches_in(
+            &Match {
+                workspace_idx: Some(1),
+                workspace_output: Some("eDP-1".into()),
+                ..Match::default()
+            },
+            &firefox,
+            Some(&WorkspaceFacts {
+                name: Some("dev".into()),
+                idx: Some(1),
+                output: Some("eDP-1".into()),
+            }),
+        ));
+        assert!(!rule_matches_in(
+            &Match {
+                workspace_idx: Some(2),
+                ..Match::default()
+            },
+            &firefox,
+            Some(&WorkspaceFacts {
+                name: Some("dev".into()),
+                idx: Some(1),
+                output: Some("eDP-1".into()),
+            }),
+        ));
+        assert!(!rule_matches_in(
+            &Match {
+                workspace_output: Some("HDMI".into()),
+                ..Match::default()
+            },
+            &firefox,
+            Some(&WorkspaceFacts {
+                name: Some("dev".into()),
+                idx: Some(1),
+                output: Some("eDP-1".into()),
+            }),
+        ));
+    }
+
+    #[test]
+    fn matches_report_numeric_window_order() {
+        let parking = Parking::load(temp_dir("order-parking").join("parking.json")).unwrap();
+        parking
+            .replace_lot(
+                AUTO_WINDOWS,
+                [
+                    ("10".to_owned(), json!({ "id": 10, "app_id": "x" })),
+                    ("2".to_owned(), json!({ "id": 2, "app_id": "x" })),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .unwrap();
+        let rules = Rules::load(temp_dir("order-rules").join("rules.json"), parking).unwrap();
+        rules
+            .call(
+                "set",
+                &json!({
+                    "name": "all",
+                    "match": {},
+                    "steps": [{ "namespace": "system", "action": "ping" }]
+                }),
+            )
+            .unwrap();
+        let explained = rules.call("explain", &Value::Null).unwrap();
+        assert_eq!(explained["matches"][0]["window"], 2);
+        assert_eq!(explained["matches"][1]["window"], 10);
     }
 
     #[test]

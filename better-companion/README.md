@@ -129,14 +129,18 @@ Every populated field in `match` is ANDed; strings are case-insensitive.
 | `app_id_not_regex` | negated regular expression |
 | `workspace` | stable workspace id |
 | `workspace_name` / `workspace_name_regex` | name from `auto:workspaces` |
+| `workspace_idx` | workspace index on its monitor (`idx`) |
+| `workspace_output` | output name substring from `auto:workspaces` |
 | `is_floating` / `is_minimized` / `is_sticky` / `is_urgent` | exact boolean |
 
 `rules.set` rejects invalid regular expressions before storing anything, and
 older rule files keep loading because every new field is optional.
 
 `rules.explain` reports each matching rule with its `match` object and a
-`window_state` snapshot (including the resolved `workspace_name`), plus the
-steps. `rules.apply` reports the same matcher/window state with a `step_count`
+`window_state` snapshot (including the resolved `workspace_name`,
+`workspace_idx` and `workspace_output`), plus the steps. Matches are ordered by
+numeric window id, then rule name, so repeated calls return stable results.
+`rules.apply` reports the same matcher/window state with a `step_count`
 instead of the steps:
 
 ```sh
@@ -168,6 +172,51 @@ If nothing matched, the `spawn`/`spawn_sh` command runs and the response has
 `"action":"spawned"` with `"matches":0` and an empty `candidate_ids`.
 `windows.find` also returns matches sorted by id plus a `count`.
 
+Repeated raises are idempotent: when the chosen window is already focused no
+`FocusWindow` action is sent, and the response reports
+`"already_focused": true`.
+
+### Workspace and output placement
+
+Workspace selectors accept a stable id (`workspace`), a case-insensitive name
+(`workspace_name`) or the current per-monitor index (`workspace_idx`, alias
+`workspace_index`). `workspace_output` restricts name/index resolution to one
+output because indices are only unique per monitor. Supplying more than one of
+id/name/index is rejected instead of guessing.
+
+```sh
+# Move a window by stable id, by name, or by monitor-local index.
+companionctl call windows move-to-workspace '{"window":70,"workspace":7}'
+companionctl call windows move-to-workspace '{"window":70,"workspace_name":"dev"}'
+companionctl call windows move-to-workspace '{"window":70,"workspace_idx":2,"workspace_output":"HDMI-1"}'
+
+# Move and switch the viewport to the destination ("follow the window").
+companionctl call windows follow-to-workspace '{"window":70,"workspace_name":"web"}'
+
+# Output targeting by output name (case-insensitive).
+companionctl call windows move-to-output '{"window":70,"output":"HDMI-1"}'
+companionctl call windows focus-output '{"output":"HDMI-1"}'
+```
+
+`move-to-workspace` follows focus by default (`"focus":true`); pass
+`"focus":false` to leave the viewport where it is. `follow-to-workspace` always
+follows. Both resolve names and indices to a stable id, then send niri's
+`MoveWindowToWorkspace`, and report `window`, `workspace`, `workspace_name`,
+`output` and `followed`.
+
+`windows.find` (and therefore run-or-raise matching) accepts the same workspace
+selectors plus an `output` filter. A window has no output of its own, so the
+filter is resolved through the workspace it lives on:
+
+```sh
+companionctl call windows find '{"app_id":"firefox","workspace_name":"web"}'
+companionctl call windows find '{"output":"HDMI-1"}'
+```
+
+`parker.park-workspace`/`parker.restore-workspace` accept
+`workspace_name`/`workspace_idx` too, so scripts do not have to look up ids
+first.
+
 ## Terminal swallowing
 
 `swallow.*` is opt-in. When enabled, a newly opened window whose process is a
@@ -182,6 +231,7 @@ companionctl call swallow add-terminal '{"app_id":"myterm"}'
 companionctl call swallow list
 companionctl call swallow restore '{"child":42}'
 companionctl call swallow reconcile   # drop pairs whose child is gone
+companionctl call swallow reload      # re-read swallow.json and enforce max_pairs
 ```
 
 The parent chain is read from `/proc/<pid>/status`; the default terminal
@@ -234,15 +284,44 @@ companionctl call swallow remove-rule '{"name":"dialogs"}'
 (`/proc/<pid>/stat`, via `/proc/uptime`). It prevents long-running processes
 from being swallowed when they merely open another window; a per-rule
 `child_age_ms` overrides the global value. `configure` also accepts
-`"restore_on_exit": false` to leave terminals minimized when a child exits.
+`"restore_on_exit": false` to leave terminals minimized when a child exits and
+`"max_pairs"` to bound the number of live pairs.
 
 Swallowed pairs are stored in the `swallow` parking lot, including the terminal,
 child, matching rule and restore preference, so they survive a daemon restart.
-Restoring is idempotent: a missing pair reports `"restored": false` instead of
-failing. Closing the terminal first drops its pairs without trying to restore
-it; on reconnect (or `swallow reconcile`) pairs whose child no longer exists are
-removed and a still-open terminal is unminimized. `swallow.status` reports the
-allowlist, ignore list, age window, restore preference, rules and live pairs.
+Each pair also records the child/terminal workspace and output; when either
+window moves while the pair is live, those fields follow the window without
+breaking the pair. A child that opens on another workspace or output is still
+paired, and restoration targets the terminal by window id, so moving it does
+not orphan the pair.
+
+Restoring is idempotent and serialised: the pair is removed atomically, so
+repeated or concurrent `restore` calls report `"restored": false` after the
+first and send no extra niri action. `reconcile` returns removed child ids in
+ascending numeric order and a second call is a no-op. Closing the terminal first
+drops its pairs without trying to restore it.
+
+The pair store is bounded by `max_pairs` (default 512); the oldest child ids are
+evicted when it is exceeded, so a missed close event cannot grow state forever.
+Every config mutation and `swallow.reload` (which re-reads `swallow.json`)
+enforces the bound immediately. `swallow.status` reports the allowlist, ignore
+list, age window, restore preference, `max_pairs`, rules and live pairs.
+
+## Daemon robustness
+
+The socket server keeps serving after bad input. Malformed JSON, unknown request
+kinds and partial requests produce an `error` response (or a clean close when
+the peer disappears) without stopping the accept loop. Request lines are capped
+at 1 MiB; an oversized line is drained and rejected so one client cannot make
+the daemon allocate without bound.
+
+The niri event loop is similarly tolerant: malformed event lines, unknown event
+kinds and a truncated final line are logged and skipped, and the loop continues
+with the next event. Transport errors end that connection, and the tracker
+reconnects. Each reconnect starts from niri's full snapshot and clears the
+previous cache, so windows that vanished while disconnected are not retained.
+The cache is also capped at 4096 windows, evicting the lowest (oldest) ids in a
+deterministic order.
 
 ## Contexts
 
@@ -253,6 +332,12 @@ allowlist, ignore list, age window, restore preference, rules and live pairs.
 - `hooks.add|remove|list|fire`: event → commands. `fire` returns the matching
   commands and payload; the daemon never executes commands implicitly.
 - `system.ping|status|paths`.
+- `windows.run-or-raise|singleton|find|move-to-workspace|follow-to-workspace|
+  move-to-output|focus-output`.
+- `parker.park|restore|park-workspace|restore-workspace|list`.
+- `swallow.enable|disable|status|list|restore|add-terminal|remove-terminal|
+  add-rule|remove-rule|set-ignore|configure|reconcile|reload`.
+- `rules.set|remove|list|explain|apply|run`.
 
 ## Development
 

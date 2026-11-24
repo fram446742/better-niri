@@ -1,17 +1,23 @@
 //! niri IPC bridge and event-driven parking tracker.
 //!
-//! `compositor.*` performs actions and queries. [`Tracker`] consumes the niri
-//! event stream and maintains two auto-parking lots:
+//! `compositor.*` performs actions and queries. `windows.*` adds run-or-raise
+//! and placement (workspace by id/name/index, output by name). [`Tracker`]
+//! consumes the niri event stream and maintains two auto-parking lots:
 //!
 //! - `auto:workspaces`: every workspace, keyed by its stable id.
 //! - `auto:windows`: every open window, keyed by its stable id.
 //!
 //! Window closes remove entries; workspace/window focus and activation update
-//! them. The lots are ordinary parking lots, so `parking.list` and
-//! `parking.unpark` work on them too.
+//! them. Each new event-stream connection starts from niri's full snapshot, and
+//! the window cache is bounded, so a long-lived daemon cannot accumulate stale
+//! state. Malformed event lines are skipped instead of ending the loop. The
+//! lots are ordinary parking lots, so `parking.list` and `parking.unpark` work
+//! on them too.
 
-use std::collections::BTreeMap;
-use std::io;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
@@ -23,9 +29,11 @@ use niri_ipc::socket::{SOCKET_PATH_ENV, Socket};
 use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
 use serde_json::{Value, json};
 
+mod layout;
 mod parker;
 mod swallow;
 mod windows;
+pub use layout::{WorkspaceTarget, resolve_live_workspace};
 pub use parker::{DEFAULT_LOT, Parker};
 pub use swallow::{SWALLOW_LOT, Swallow, SwallowOutcome, SwallowRule, proc_age, proc_parent};
 pub use windows::Windows;
@@ -131,6 +139,10 @@ impl Context for Compositor {
     }
 }
 
+/// Upper bound on cached windows. A reconnect or a lost close event must not
+/// let a long-lived daemon grow this map without bound.
+pub const MAX_TRACKED_WINDOWS: usize = 4096;
+
 /// Cached compositor state maintained from the event stream.
 #[derive(Default)]
 pub struct Tracker {
@@ -151,17 +163,37 @@ impl Tracker {
         }
     }
 
+    /// Clears cached state when a new event-stream connection is established.
+    ///
+    /// niri sends a complete `WorkspacesChanged`/`WindowsChanged` snapshot on
+    /// subscribe, so dropping the previous connection's cache prevents windows
+    /// that vanished while disconnected from accumulating forever.
+    pub fn begin_stream(&mut self, parking: &Parking) -> Result<(), String> {
+        self.workspaces.clear();
+        self.windows.clear();
+        self.snapshot(parking)
+    }
+
     /// Applies one event and rewrites the auto-parking lots.
     pub fn apply_event(&mut self, parking: &Parking, event: &Event) -> Result<(), String> {
+        let previous: BTreeSet<u64> = self.windows.keys().copied().collect();
+
         // Windows that were not known before this event. Swallowing only runs
         // for these, so title/focus/minimize updates cannot re-trigger it.
+        // `WindowsChanged` is authoritative; duplicate ids in a malformed or
+        // replayed snapshot collapse to one entry.
         let opened: Vec<Window> = match event {
-            Event::WindowsChanged { windows } => windows
-                .iter()
-                .filter(|window| !self.windows.contains_key(&window.id))
-                .cloned()
-                .collect(),
-            Event::WindowOpenedOrChanged { window } => (!self.windows.contains_key(&window.id))
+            Event::WindowsChanged { windows } => {
+                let mut unique: BTreeMap<u64, Window> = BTreeMap::new();
+                for window in windows {
+                    unique.insert(window.id, window.clone());
+                }
+                unique
+                    .into_values()
+                    .filter(|window| !previous.contains(&window.id))
+                    .collect()
+            }
+            Event::WindowOpenedOrChanged { window } => (!previous.contains(&window.id))
                 .then(|| window.clone())
                 .into_iter()
                 .collect(),
@@ -202,7 +234,12 @@ impl Tracker {
                 }
             }
             Event::WindowsChanged { windows } => {
-                self.windows = windows.iter().map(|win| (win.id, win.clone())).collect();
+                let mut unique: BTreeMap<u64, Window> = BTreeMap::new();
+                for window in windows {
+                    unique.insert(window.id, window.clone());
+                }
+                self.windows = unique;
+                self.enforce_window_limit(MAX_TRACKED_WINDOWS);
             }
             Event::WindowOpenedOrChanged { window } => {
                 if window.is_focused {
@@ -211,6 +248,7 @@ impl Tracker {
                     }
                 }
                 self.windows.insert(window.id, window.clone());
+                self.enforce_window_limit(MAX_TRACKED_WINDOWS);
             }
             Event::WindowClosed { id } => {
                 self.windows.remove(id);
@@ -262,7 +300,11 @@ impl Tracker {
                         // the compositor's current window set.
                         swallow.reconcile()?;
                     }
-                    Event::WindowOpenedOrChanged { .. } => {
+                    Event::WindowOpenedOrChanged { window } => {
+                        // Keep pair metadata in sync when the child or the
+                        // (minimized) terminal moves to another workspace or
+                        // output while the pair is live.
+                        swallow.track_window(window)?;
                         for window in &opened {
                             swallow.maybe_swallow(window)?;
                         }
@@ -293,6 +335,20 @@ impl Tracker {
         parking.replace_lot(AUTO_WORKSPACES, workspaces)?;
         parking.replace_lot(AUTO_WINDOWS, windows)
     }
+
+    /// Evicts the lowest window ids when the cache exceeds `limit`.
+    ///
+    /// niri ids grow monotonically in practice, so the lowest ids are the
+    /// oldest entries. Kept separate from insertion for a deterministic test
+    /// with a tiny limit.
+    fn enforce_window_limit(&mut self, limit: usize) {
+        while self.windows.len() > limit {
+            let Some(oldest) = self.windows.keys().next().copied() else {
+                break;
+            };
+            self.windows.remove(&oldest);
+        }
+    }
 }
 
 fn encode(err: serde_json::Error) -> String {
@@ -307,10 +363,33 @@ pub fn socket_from_env() -> Option<PathBuf> {
 /// Subscribes to the event stream and applies events until the socket closes.
 ///
 /// The tracker is kept across calls, so a daemon reconnecting after a niri
-/// restart keeps the last known workspace/window state.
+/// restart starts each connection from the full snapshot niri sends instead of
+/// accumulating windows that disappeared while disconnected.
+///
+/// The event loop is deliberately tolerant: malformed JSON, unknown event
+/// kinds and truncated final lines are logged and skipped rather than tearing
+/// the connection down. Only transport errors end the loop.
 pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io::Result<usize> {
-    let mut socket = Socket::connect_to(path)?;
-    match socket.send(Request::EventStream)? {
+    let stream = UnixStream::connect(path)?;
+    let mut writer = stream.try_clone()?;
+    let mut reader = BufReader::new(stream);
+
+    let mut request = serde_json::to_string(&Request::EventStream)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    request.push('\n');
+    writer.write_all(request.as_bytes())?;
+    writer.flush()?;
+
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "event-stream handshake closed",
+        ));
+    }
+    let reply: Reply = serde_json::from_str(line.trim())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    match reply {
         Ok(Response::Handled) => (),
         Ok(other) => {
             return Err(io::Error::other(format!(
@@ -319,12 +398,17 @@ pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io
         }
         Err(message) => return Err(io::Error::other(message)),
     }
+    let _ = writer.shutdown(Shutdown::Write);
 
-    let mut read_event = socket.read_events();
+    tracker.begin_stream(parking).map_err(io::Error::other)?;
+
     let mut applied = 0;
     loop {
-        let event = match read_event() {
-            Ok(event) => event,
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => return Ok(applied),
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err)
                 if err.kind() == io::ErrorKind::UnexpectedEof
                     || err.kind() == io::ErrorKind::ConnectionReset =>
@@ -332,6 +416,17 @@ pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io
                 return Ok(applied);
             }
             Err(err) => return Err(err),
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let event = match serde_json::from_str::<Event>(trimmed) {
+            Ok(event) => event,
+            Err(err) => {
+                eprintln!("better-companion: skipping malformed event: {err}");
+                continue;
+            }
         };
         if let Err(message) = tracker.apply_event(parking, &event) {
             eprintln!("better-companion: event tracking error: {message}");
@@ -815,5 +910,231 @@ mod tests {
             requests[0],
             Request::Action(Action::UnminimizeWindow { id: Some(1) })
         ));
+    }
+
+    #[test]
+    fn swallow_pairs_survive_cross_workspace_child_and_parent_move() {
+        use std::sync::Arc;
+
+        let dir = temp_path("swallow-cross-workspace");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 2);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        let parent: Arc<dyn Fn(i32) -> Option<i32> + Send + Sync> = Arc::new(|pid| match pid {
+            200 => Some(100),
+            100 => Some(1),
+            _ => None,
+        });
+        let swallow = Swallow::load_with_parent(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+            parent,
+        )
+        .unwrap();
+        swallow.call("enable", &serde_json::Value::Null).unwrap();
+        let mut tracker = Tracker::with_swallow(swallow);
+
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WorkspacesChanged {
+                    workspaces: vec![
+                        workspace(1, "eDP-1", true, true),
+                        workspace(2, "HDMI-1", false, false),
+                        workspace(3, "HDMI-1", false, false),
+                    ],
+                },
+            )
+            .unwrap();
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![window_full(1, 1, false, 100, "alacritty", false)],
+                },
+            )
+            .unwrap();
+        // The child opens on a different workspace and output.
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowOpenedOrChanged {
+                    window: window_full(2, 2, false, 200, "editor", false),
+                },
+            )
+            .unwrap();
+        let entry = &parking.lot(super::SWALLOW_LOT)["child:2"];
+        assert_eq!(entry["child_output"], "HDMI-1");
+        assert_eq!(entry["parent_output"], "eDP-1");
+
+        // The minimized terminal moves; the pair follows its new context.
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowOpenedOrChanged {
+                    window: window_full(1, 3, false, 100, "alacritty", true),
+                },
+            )
+            .unwrap();
+        let entry = &parking.lot(super::SWALLOW_LOT)["child:2"];
+        assert_eq!(entry["parent_workspace_id"], 3);
+        assert_eq!(entry["parent_output"], "HDMI-1");
+
+        tracker
+            .apply_event(&parking, &Event::WindowClosed { id: 2 })
+            .unwrap();
+        assert!(parking.lot(super::SWALLOW_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[0],
+            Request::Action(Action::MinimizeWindow { id: Some(1) })
+        ));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::UnminimizeWindow { id: Some(1) })
+        ));
+    }
+
+    #[test]
+    fn duplicate_window_ids_in_a_snapshot_swallow_once() {
+        use std::sync::Arc;
+
+        let dir = temp_path("swallow-duplicates");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 1);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        let parent: Arc<dyn Fn(i32) -> Option<i32> + Send + Sync> = Arc::new(|pid| match pid {
+            200 => Some(100),
+            100 => Some(1),
+            _ => None,
+        });
+        let swallow = Swallow::load_with_parent(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+            parent,
+        )
+        .unwrap();
+        swallow.call("enable", &serde_json::Value::Null).unwrap();
+        let mut tracker = Tracker::with_swallow(swallow);
+
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![
+                        window_full(1, 1, false, 100, "alacritty", false),
+                        window_full(1, 1, false, 100, "alacritty", false),
+                        window_full(2, 1, false, 200, "editor", false),
+                        window_full(2, 1, false, 200, "editor", false),
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(parking.lot(super::SWALLOW_LOT).len(), 1);
+        // One minimize for the one terminal, despite the duplicate ids.
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn window_cache_limit_evicts_oldest_ids() {
+        let parking = parking("limit");
+        let mut tracker = Tracker::new();
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![
+                        window(10, 1, false),
+                        window(20, 1, false),
+                        window(30, 1, false),
+                    ],
+                },
+            )
+            .unwrap();
+        tracker.enforce_window_limit(2);
+        tracker.snapshot(&parking).unwrap();
+        let windows = parking.lot(AUTO_WINDOWS);
+        assert_eq!(
+            windows.keys().cloned().collect::<Vec<_>>(),
+            vec!["20", "30"]
+        );
+    }
+
+    #[test]
+    fn begin_stream_drops_state_from_the_previous_connection() {
+        let parking = parking("begin-stream");
+        let mut tracker = Tracker::new();
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![window(10, 1, false)],
+                },
+            )
+            .unwrap();
+        assert!(parking.lot(AUTO_WINDOWS).contains_key("10"));
+
+        tracker.begin_stream(&parking).unwrap();
+        assert!(parking.lot(AUTO_WINDOWS).is_empty());
+        assert!(parking.lot(AUTO_WORKSPACES).is_empty());
+    }
+
+    /// A server that completes the event-stream handshake and then writes
+    /// `body` verbatim before closing the connection.
+    fn fake_event_stream(path: &PathBuf, body: String) -> std::thread::JoinHandle<()> {
+        let listener = UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            assert!(matches!(request, Request::EventStream));
+            let mut stream = stream;
+            stream.write_all(b"{\"Ok\":\"Handled\"}\n").unwrap();
+            stream.write_all(body.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        })
+    }
+
+    #[test]
+    fn event_stream_skips_malformed_and_unknown_lines() {
+        let dir = temp_path("stream-malformed");
+        let socket_path = dir.join("niri.sock");
+        let event = serde_json::to_string(&Event::WorkspacesChanged {
+            workspaces: vec![workspace(7, "HDMI-1", true, true)],
+        })
+        .unwrap();
+        let body = format!("this is not json\n{{\"NoSuchEvent\":{{}}}}\n{event}\n");
+        let server = fake_event_stream(&socket_path, body);
+        let parking = parking("stream-malformed-parking");
+        let mut tracker = Tracker::new();
+        let applied = track_stream(&socket_path, &parking, &mut tracker).unwrap();
+        assert_eq!(applied, 1);
+        server.join().unwrap();
+        assert_eq!(parking.lot(AUTO_WORKSPACES)["7"]["output"], "HDMI-1");
+    }
+
+    #[test]
+    fn event_stream_handles_a_truncated_final_line() {
+        let dir = temp_path("stream-truncated");
+        let socket_path = dir.join("niri.sock");
+        let event = serde_json::to_string(&Event::WindowOpenedOrChanged {
+            window: window(70, 7, true),
+        })
+        .unwrap();
+        let body = format!("{event}\n{{\"WindowClosed\":");
+        let server = fake_event_stream(&socket_path, body);
+        let parking = parking("stream-truncated-parking");
+        let mut tracker = Tracker::new();
+        let applied = track_stream(&socket_path, &parking, &mut tracker).unwrap();
+        // The complete event is applied; the truncated line is skipped and the
+        // connection still ends cleanly.
+        assert_eq!(applied, 1);
+        server.join().unwrap();
+        assert!(parking.lot(AUTO_WINDOWS).contains_key("70"));
     }
 }

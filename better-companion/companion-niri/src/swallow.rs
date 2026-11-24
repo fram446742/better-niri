@@ -11,6 +11,12 @@
 //! process age (a child must have started within that window), and a per-rule
 //! `restore_on_exit` override. A global `ignore` list vetoes children by
 //! app-id/title substring before any rule is considered.
+//!
+//! Pairs are keyed by window id and record the child/terminal workspace and
+//! output, so a window that opens on another monitor still pairs and a later
+//! move only updates metadata. Operations are serialised and pair removal is
+//! atomic, making `restore`/`reconcile` idempotent under duplicate events. The
+//! pair count is bounded (`max_pairs`), and every config reload enforces it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -102,6 +108,17 @@ struct Config {
     restore_on_exit: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rules: Vec<SwallowRule>,
+    /// Upper bound on persisted child → parent pairs.
+    #[serde(default = "default_max_pairs")]
+    max_pairs: usize,
+}
+
+/// Pairs older than this are evicted (lowest child id first) so a daemon that
+/// misses close events cannot grow the swallow lot forever.
+const DEFAULT_MAX_PAIRS: usize = 512;
+
+fn default_max_pairs() -> usize {
+    DEFAULT_MAX_PAIRS
 }
 
 impl Default for Config {
@@ -113,6 +130,7 @@ impl Default for Config {
             child_age_ms: None,
             restore_on_exit: true,
             rules: Vec::new(),
+            max_pairs: DEFAULT_MAX_PAIRS,
         }
     }
 }
@@ -123,6 +141,9 @@ type AgeFn = Arc<dyn Fn(i32) -> Option<Duration> + Send + Sync>;
 struct Inner {
     path: PathBuf,
     config: Mutex<Config>,
+    /// Serialises swallow operations so a close arriving while a child is
+    /// being paired cannot restore the terminal before it is minimized.
+    ops: Mutex<()>,
     parking: Parking,
     compositor: Compositor,
     parent: ParentFn,
@@ -141,6 +162,7 @@ struct TrackedWindow {
     pid: i32,
     app_id: Option<String>,
     title: Option<String>,
+    workspace_id: Option<u64>,
     minimized: bool,
 }
 
@@ -212,6 +234,7 @@ impl Swallow {
             inner: Arc::new(Inner {
                 path,
                 config: Mutex::new(config),
+                ops: Mutex::new(()),
                 parking,
                 compositor,
                 parent,
@@ -238,6 +261,38 @@ impl Swallow {
             .lock()
             .map(|config| config.clone())
             .map_err(|_| "swallow config lock poisoned".to_owned())
+    }
+
+    /// Applies a config mutation, saves it, then enforces the pair bound.
+    ///
+    /// Every mutation is a "config reload" point: if the file was edited or the
+    /// bound was lowered, the swallow lot shrinks immediately instead of
+    /// growing until the next reconcile.
+    fn update_config(
+        &self,
+        update: impl FnOnce(&mut Config) -> Result<(), String>,
+    ) -> Result<Config, String> {
+        let mut config = self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "swallow config lock poisoned".to_owned())?;
+        // Mutate a copy so a rejected field leaves the live config untouched.
+        let mut next = config.clone();
+        update(&mut next)?;
+        if next.max_pairs == 0 {
+            return Err("`max_pairs` must be at least 1".to_owned());
+        }
+        self.save(&next)?;
+        *config = next.clone();
+        drop(config);
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
+        self.enforce_pair_limit(next.max_pairs)?;
+        Ok(next)
     }
 
     /// Whether swallowing is enabled in the persisted config.
@@ -280,6 +335,7 @@ impl Swallow {
                     .get("title")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                let workspace_id = value.get("workspace_id").and_then(Value::as_u64);
                 let minimized = value
                     .get("is_minimized")
                     .and_then(Value::as_bool)
@@ -289,10 +345,30 @@ impl Swallow {
                     pid,
                     app_id,
                     title,
+                    workspace_id,
                     minimized,
                 })
             })
             .collect()
+    }
+
+    /// Maps workspace id → output name from the auto-tracked workspace lot.
+    fn workspace_outputs(&self) -> BTreeMap<u64, String> {
+        self.inner
+            .parking
+            .lot(crate::AUTO_WORKSPACES)
+            .into_iter()
+            .filter_map(|(id, value)| {
+                Some((
+                    id.parse().ok()?,
+                    value.get("output").and_then(Value::as_str)?.to_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    fn output_for(outputs: &BTreeMap<u64, String>, workspace_id: Option<u64>) -> Option<String> {
+        workspace_id.and_then(|id| outputs.get(&id).cloned())
     }
 
     /// Evaluates `window` as a swallow child.
@@ -306,6 +382,11 @@ impl Swallow {
         let Some(child_pid) = window.pid else {
             return Ok(SwallowOutcome::MissingPid);
         };
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
         if self.entries().contains_key(&format!("child:{}", window.id)) {
             return Ok(SwallowOutcome::AlreadySwallowed);
         }
@@ -315,9 +396,11 @@ impl Swallow {
             pid: child_pid,
             app_id: window.app_id.clone(),
             title: window.title.clone(),
+            workspace_id: window.workspace_id,
             minimized: window.is_minimized,
         };
         let windows = self.windows();
+        let outputs = self.workspace_outputs();
 
         let mut pid = child_pid;
         for _ in 0..MAX_PARENT_DEPTH {
@@ -334,7 +417,7 @@ impl Swallow {
                 pid = parent_pid;
                 continue;
             };
-            return self.swallow_pair(&config, &child, parent);
+            return self.swallow_pair(&config, &child, parent, &outputs);
         }
         Ok(SwallowOutcome::NotTerminal)
     }
@@ -344,6 +427,7 @@ impl Swallow {
         config: &Config,
         child: &TrackedWindow,
         terminal: &TrackedWindow,
+        outputs: &BTreeMap<u64, String>,
     ) -> Result<SwallowOutcome, String> {
         if let Some(reason) = ignored_reason(config, child) {
             return Ok(SwallowOutcome::Ignored { reason });
@@ -402,14 +486,19 @@ impl Swallow {
                     "child": child.id,
                     "child_pid": child.pid,
                     "child_app_id": child.app_id,
+                    "child_workspace_id": child.workspace_id,
+                    "child_output": Self::output_for(outputs, child.workspace_id),
                     "parent": terminal.id,
                     "parent_pid": terminal.pid,
                     "parent_app_id": terminal.app_id,
+                    "parent_workspace_id": terminal.workspace_id,
+                    "parent_output": Self::output_for(outputs, terminal.workspace_id),
                     "rule": rule_name,
                     "restore_on_exit": restore_on_exit,
                 }
             }),
         )?;
+        self.enforce_pair_limit(config.max_pairs)?;
         Ok(SwallowOutcome::Swallowed {
             child: child.id,
             parent: terminal.id,
@@ -419,16 +508,23 @@ impl Swallow {
 
     /// Restores and removes the pair for `child_id`, returning its entry when
     /// the pair existed. A missing pair is not an error.
+    ///
+    /// The pair is removed atomically, so concurrent or repeated calls restore
+    /// the terminal at most once.
     pub fn on_window_closed(&self, child_id: u64) -> Result<Option<Value>, String> {
-        let key = format!("child:{child_id}");
-        if !self.entries().contains_key(&key) {
-            return Ok(None);
-        }
-        let entry = self
+        let _ops = self
             .inner
-            .parking
-            .call("unpark", &json!({ "lot": SWALLOW_LOT, "id": key }))?;
-        let value = entry.get("value").cloned().unwrap_or(Value::Null);
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
+        self.on_window_closed_locked(child_id)
+    }
+
+    fn on_window_closed_locked(&self, child_id: u64) -> Result<Option<Value>, String> {
+        let key = format!("child:{child_id}");
+        let Some(value) = self.inner.parking.take(SWALLOW_LOT, &key)? else {
+            return Ok(None);
+        };
         let restore = value
             .get("restore_on_exit")
             .and_then(Value::as_bool)
@@ -443,45 +539,144 @@ impl Swallow {
     }
 
     /// Drops pairs whose terminal window closed. The terminal is gone, so
-    /// there is nothing to restore.
+    /// there is nothing to restore. Children are returned in ascending id
+    /// order.
     pub fn on_parent_closed(&self, parent_id: u64) -> Result<Vec<u64>, String> {
-        let children: Vec<(String, u64)> = self
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
+        let mut children: Vec<(u64, String)> = self
             .entries()
             .into_iter()
             .filter_map(|(key, value)| {
-                if value.get("parent").and_then(Value::as_u64) == Some(parent_id) {
-                    Some((key, value.get("child").and_then(Value::as_u64)?))
-                } else {
-                    None
-                }
+                let child = value.get("child").and_then(Value::as_u64)?;
+                (value.get("parent").and_then(Value::as_u64) == Some(parent_id))
+                    .then_some((child, key))
             })
             .collect();
-        for (key, _) in &children {
-            let _ = self
-                .inner
-                .parking
-                .call("unpark", &json!({ "lot": SWALLOW_LOT, "id": key }));
+        children.sort_by_key(|(child, _)| *child);
+        for (_, key) in &children {
+            let _ = self.inner.parking.take(SWALLOW_LOT, key)?;
         }
-        Ok(children.into_iter().map(|(_, child)| child).collect())
+        Ok(children.into_iter().map(|(child, _)| child).collect())
     }
 
     /// Removes pairs whose child is no longer an open window, restoring any
-    /// still-open terminal. This is how pairs persisted across a daemon
-    /// restart converge with the compositor state.
+    /// still-open terminal. Pairs whose terminal disappeared are dropped
+    /// without an action. This is how pairs persisted across a daemon restart
+    /// converge with the compositor state.
+    ///
+    /// Repeated calls are idempotent: the first removes stale pairs, later
+    /// calls return an empty list and send no actions.
     pub fn reconcile(&self) -> Result<Vec<u64>, String> {
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
         let open: BTreeSet<u64> = self.windows().iter().map(|window| window.id).collect();
-        let stale: Vec<u64> = self
+        let entries = self.entries();
+        let mut child_stale: BTreeSet<u64> = BTreeSet::new();
+        let mut parent_stale: Vec<String> = Vec::new();
+        for (key, value) in entries {
+            let Some(child) = value.get("child").and_then(Value::as_u64) else {
+                continue;
+            };
+            if !open.contains(&child) {
+                child_stale.insert(child);
+            } else if value
+                .get("parent")
+                .and_then(Value::as_u64)
+                .is_some_and(|parent| !open.contains(&parent))
+            {
+                parent_stale.push(key);
+            }
+        }
+        for key in parent_stale {
+            let _ = self.inner.parking.take(SWALLOW_LOT, &key)?;
+            if let Some(child) = key
+                .strip_prefix("child:")
+                .and_then(|child| child.parse().ok())
+            {
+                child_stale.insert(child);
+            }
+        }
+        for child in &child_stale {
+            self.on_window_closed_locked(*child)?;
+        }
+        Ok(child_stale.into_iter().collect())
+    }
+
+    /// Updates the workspace/output metadata of live pairs when the child or
+    /// terminal moves. Pair identity stays the window id, so a move to another
+    /// workspace or output never breaks restoration.
+    ///
+    /// Returns the number of pairs whose recorded context changed.
+    pub fn track_window(&self, window: &Window) -> Result<usize, String> {
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
+        let outputs = self.workspace_outputs();
+        let output = Self::output_for(&outputs, window.workspace_id);
+        let mut updated = 0;
+        for (key, mut value) in self.entries() {
+            let Some(object) = value.as_object_mut() else {
+                continue;
+            };
+            let is_child = object
+                .get("child")
+                .and_then(Value::as_u64)
+                .is_some_and(|child| child == window.id);
+            let is_parent = object
+                .get("parent")
+                .and_then(Value::as_u64)
+                .is_some_and(|parent| parent == window.id);
+            if !is_child && !is_parent {
+                continue;
+            }
+            let prefix = if is_child { "child" } else { "parent" };
+            let workspace_key = format!("{prefix}_workspace_id");
+            let output_key = format!("{prefix}_output");
+            let workspace_value = window.workspace_id.map_or(Value::Null, Value::from);
+            let output_value = output.clone().map_or(Value::Null, Value::from);
+            if object.get(&workspace_key) == Some(&workspace_value)
+                && object.get(&output_key) == Some(&output_value)
+            {
+                continue;
+            }
+            object.insert(workspace_key, workspace_value);
+            object.insert(output_key, output_value);
+            self.inner.parking.call(
+                "park",
+                &json!({ "lot": SWALLOW_LOT, "id": key, "value": value }),
+            )?;
+            updated += 1;
+        }
+        Ok(updated)
+    }
+
+    /// Evicts the highest child ids beyond `max`, keeping the lot bounded when
+    /// close events are lost. Callers hold the operation lock.
+    fn enforce_pair_limit(&self, max: usize) -> Result<Vec<u64>, String> {
+        let mut children: Vec<u64> = self
             .entries()
             .into_values()
-            .filter_map(|value| {
-                let child = value.get("child").and_then(Value::as_u64)?;
-                (!open.contains(&child)).then_some(child)
-            })
+            .filter_map(|value| value.get("child").and_then(Value::as_u64))
             .collect();
-        for child in &stale {
-            self.on_window_closed(*child)?;
+        children.sort_unstable();
+        let excess = children.len().saturating_sub(max);
+        let evicted: Vec<u64> = children.into_iter().take(excess).collect();
+        for child in &evicted {
+            let _ = self
+                .inner
+                .parking
+                .take(SWALLOW_LOT, &format!("child:{child}"))?;
         }
-        Ok(stale)
+        Ok(evicted)
     }
 
     pub fn restore(&self, child_id: u64) -> Result<Value, String> {
@@ -491,6 +686,45 @@ impl Swallow {
             "restored": entry.is_some(),
             "parent": entry.as_ref().and_then(|value| value.get("parent").cloned()),
             "rule": entry.as_ref().and_then(|value| value.get("rule").cloned()),
+            "parent_workspace_id": entry
+                .as_ref()
+                .and_then(|value| value.get("parent_workspace_id").cloned()),
+            "parent_output": entry
+                .as_ref()
+                .and_then(|value| value.get("parent_output").cloned()),
+        }))
+    }
+
+    /// Reloads the persisted config file and enforces the pair bound.
+    pub fn reload(&self) -> Result<Value, String> {
+        let mut config: Config = load_json(&self.inner.path)
+            .map_err(|err| format!("cannot reload swallow config: {err}"))?;
+        if config.terminals.is_empty() {
+            config.terminals = DEFAULT_TERMINALS.iter().map(|s| s.to_string()).collect();
+        }
+        if config.max_pairs == 0 {
+            config.max_pairs = DEFAULT_MAX_PAIRS;
+        }
+        *self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "swallow config lock poisoned".to_owned())? = config.clone();
+        let _ops = self
+            .inner
+            .ops
+            .lock()
+            .map_err(|_| "swallow operation lock poisoned".to_owned())?;
+        let evicted = self.enforce_pair_limit(config.max_pairs)?;
+        Ok(json!({
+            "enabled": config.enabled,
+            "terminals": config.terminals,
+            "rules": config.rules,
+            "ignore": config.ignore,
+            "child_age_ms": config.child_age_ms,
+            "restore_on_exit": config.restore_on_exit,
+            "max_pairs": config.max_pairs,
+            "evicted": evicted,
         }))
     }
 }
@@ -626,35 +860,30 @@ impl Context for Swallow {
             ActionInfo::new("set-ignore", "Replace the child `ignore` list"),
             ActionInfo::new(
                 "configure",
-                "Set `child_age_ms` and/or `restore_on_exit` defaults",
+                "Set `child_age_ms`, `restore_on_exit` and/or `max_pairs`",
             ),
             ActionInfo::new(
                 "reconcile",
                 "Drop pairs whose child window is gone and restore terminals",
             ),
+            ActionInfo::new("reload", "Reload swallow.json and enforce the pair bound"),
         ]
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {
         match action {
             "enable" => {
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                config.enabled = true;
-                self.save(&config)?;
+                self.update_config(|config| {
+                    config.enabled = true;
+                    Ok(())
+                })?;
                 Ok(json!({ "enabled": true }))
             }
             "disable" => {
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                config.enabled = false;
-                self.save(&config)?;
+                self.update_config(|config| {
+                    config.enabled = false;
+                    Ok(())
+                })?;
                 Ok(json!({ "enabled": false }))
             }
             "status" => {
@@ -665,6 +894,7 @@ impl Context for Swallow {
                     "ignore": config.ignore,
                     "child_age_ms": config.child_age_ms,
                     "restore_on_exit": config.restore_on_exit,
+                    "max_pairs": config.max_pairs,
                     "rules": config.rules,
                     "swallowed": self.entries(),
                 }))
@@ -681,20 +911,18 @@ impl Context for Swallow {
                 let app_id = params
                     .get("app_id")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| "swallow.add-terminal needs `app_id`".to_owned())?;
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                if !config
-                    .terminals
-                    .iter()
-                    .any(|terminal| terminal.eq_ignore_ascii_case(app_id))
-                {
-                    config.terminals.push(app_id.to_owned());
-                }
-                self.save(&config)?;
+                    .ok_or_else(|| "swallow.add-terminal needs `app_id`".to_owned())?
+                    .to_owned();
+                let config = self.update_config(|config| {
+                    if !config
+                        .terminals
+                        .iter()
+                        .any(|terminal| terminal.eq_ignore_ascii_case(&app_id))
+                    {
+                        config.terminals.push(app_id.clone());
+                    }
+                    Ok(())
+                })?;
                 Ok(json!({ "terminals": config.terminals }))
             }
             "remove-terminal" => {
@@ -702,33 +930,27 @@ impl Context for Swallow {
                     .get("app_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "swallow.remove-terminal needs `app_id`".to_owned())?;
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                config
-                    .terminals
-                    .retain(|terminal| !terminal.eq_ignore_ascii_case(app_id));
-                self.save(&config)?;
+                let config = self.update_config(|config| {
+                    config
+                        .terminals
+                        .retain(|terminal| !terminal.eq_ignore_ascii_case(app_id));
+                    Ok(())
+                })?;
                 Ok(json!({ "terminals": config.terminals }))
             }
             "add-rule" => {
                 let rule = parse_rule(params)?;
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                match config
-                    .rules
-                    .iter_mut()
-                    .find(|existing| existing.name == rule.name)
-                {
-                    Some(existing) => *existing = rule.clone(),
-                    None => config.rules.push(rule.clone()),
-                }
-                self.save(&config)?;
+                self.update_config(|config| {
+                    match config
+                        .rules
+                        .iter_mut()
+                        .find(|existing| existing.name == rule.name)
+                    {
+                        Some(existing) => *existing = rule.clone(),
+                        None => config.rules.push(rule.clone()),
+                    }
+                    Ok(())
+                })?;
                 Ok(json!({ "rule": rule }))
             }
             "remove-rule" => {
@@ -736,13 +958,10 @@ impl Context for Swallow {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "swallow.remove-rule needs a string `name`".to_owned())?;
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                config.rules.retain(|rule| rule.name != name);
-                self.save(&config)?;
+                let config = self.update_config(|config| {
+                    config.rules.retain(|rule| rule.name != name);
+                    Ok(())
+                })?;
                 Ok(json!({ "name": name, "rules": config.rules.len() }))
             }
             "set-ignore" => {
@@ -758,50 +977,55 @@ impl Context for Swallow {
                             .ok_or_else(|| "`ignore` entries must be strings".to_owned())
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                config.ignore = ignore;
-                self.save(&config)?;
+                let config = self.update_config(|config| {
+                    config.ignore = ignore;
+                    Ok(())
+                })?;
                 Ok(json!({ "ignore": config.ignore }))
             }
             "configure" => {
-                let mut config = self
-                    .inner
-                    .config
-                    .lock()
-                    .map_err(|_| "swallow config lock poisoned".to_owned())?;
-                let mut changed = false;
-                if let Some(value) = params.get("child_age_ms") {
-                    config.child_age_ms = if value.is_null() {
-                        None
-                    } else {
-                        Some(value.as_u64().ok_or_else(|| {
-                            "`child_age_ms` must be a non-negative integer or null".to_owned()
-                        })?)
-                    };
-                    changed = true;
-                }
-                if let Some(value) = params.get("restore_on_exit") {
-                    config.restore_on_exit = value
-                        .as_bool()
-                        .ok_or_else(|| "`restore_on_exit` must be a boolean".to_owned())?;
-                    changed = true;
-                }
-                if !changed {
-                    return Err(
-                        "swallow.configure needs `child_age_ms` or `restore_on_exit`".to_owned(),
-                    );
-                }
-                self.save(&config)?;
+                let config = self.update_config(|config| {
+                    let mut changed = false;
+                    if let Some(value) = params.get("child_age_ms") {
+                        config.child_age_ms = if value.is_null() {
+                            None
+                        } else {
+                            Some(value.as_u64().ok_or_else(|| {
+                                "`child_age_ms` must be a non-negative integer or null".to_owned()
+                            })?)
+                        };
+                        changed = true;
+                    }
+                    if let Some(value) = params.get("restore_on_exit") {
+                        config.restore_on_exit = value
+                            .as_bool()
+                            .ok_or_else(|| "`restore_on_exit` must be a boolean".to_owned())?;
+                        changed = true;
+                    }
+                    if let Some(value) = params.get("max_pairs") {
+                        config.max_pairs = value
+                            .as_u64()
+                            .ok_or_else(|| "`max_pairs` must be a positive integer".to_owned())?
+                            as usize;
+                        changed = true;
+                    }
+                    if !changed {
+                        return Err(
+                            "swallow.configure needs `child_age_ms`, `restore_on_exit` or \
+                             `max_pairs`"
+                                .to_owned(),
+                        );
+                    }
+                    Ok(())
+                })?;
                 Ok(json!({
                     "child_age_ms": config.child_age_ms,
                     "restore_on_exit": config.restore_on_exit,
+                    "max_pairs": config.max_pairs,
                 }))
             }
             "reconcile" => Ok(json!({ "removed": self.reconcile()? })),
+            "reload" => self.reload(),
             other => Err(format!("unknown action `swallow.{other}`")),
         }
     }
@@ -898,6 +1122,70 @@ mod tests {
             })
             .collect();
         parking.replace_lot(crate::AUTO_WINDOWS, entries).unwrap();
+    }
+
+    fn auto_windows_on(parking: &Parking, windows: &[(u64, i32, &str, &str, bool, u64)]) {
+        let entries = windows
+            .iter()
+            .map(|(id, pid, app_id, title, minimized, workspace_id)| {
+                (
+                    id.to_string(),
+                    json!({
+                        "id": id,
+                        "pid": pid,
+                        "app_id": app_id,
+                        "title": title,
+                        "workspace_id": workspace_id,
+                        "is_minimized": minimized,
+                    }),
+                )
+            })
+            .collect();
+        parking.replace_lot(crate::AUTO_WINDOWS, entries).unwrap();
+    }
+
+    fn auto_workspaces(parking: &Parking, workspaces: &[(u64, &str, &str)]) {
+        let entries = workspaces
+            .iter()
+            .map(|(id, name, output)| {
+                (
+                    id.to_string(),
+                    json!({
+                        "id": id,
+                        "idx": id,
+                        "name": name,
+                        "output": output,
+                    }),
+                )
+            })
+            .collect();
+        parking
+            .replace_lot(crate::AUTO_WORKSPACES, entries)
+            .unwrap();
+    }
+
+    fn window_on(id: u64, pid: i32, app_id: &str, title: &str, workspace_id: u64) -> Window {
+        serde_json::from_value(json!({
+            "id": id,
+            "title": title,
+            "app_id": app_id,
+            "pid": pid,
+            "workspace_id": workspace_id,
+            "is_focused": false,
+            "is_floating": false,
+            "is_sticky": false,
+            "is_urgent": false,
+            "is_minimized": false,
+            "layout": {
+                "pos_in_scrolling_layout": [1, 1],
+                "tile_size": [100.0, 100.0],
+                "window_size": [100, 100],
+                "tile_pos_in_workspace_view": [0.0, 0.0],
+                "window_offset_in_tile": [0.0, 0.0]
+            },
+            "focus_timestamp": null
+        }))
+        .unwrap()
     }
 
     fn parent_map(pairs: &[(i32, i32)]) -> ParentFn {
@@ -1424,5 +1712,212 @@ mod tests {
 
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1, "only the minimize is sent");
+    }
+
+    #[test]
+    fn pairs_across_workspaces_track_parent_moves_and_restore_once() {
+        let dir = temp_dir("cross-workspace");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 2);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        auto_workspaces(
+            &parking,
+            &[
+                (1, "dev", "eDP-1"),
+                (2, "web", "HDMI-1"),
+                (3, "ops", "HDMI-1"),
+            ],
+        );
+        auto_windows_on(
+            &parking,
+            &[
+                (1, 100, "alacritty", "shell", false, 1),
+                (2, 200, "editor", "notes.txt", false, 2),
+            ],
+        );
+        let swallow = enabled_swallow(&dir, &parking, &socket);
+
+        // The child opens on another workspace and output: still a pair.
+        let outcome = swallow
+            .maybe_swallow(&window_on(2, 200, "editor", "notes.txt", 2))
+            .unwrap();
+        assert_eq!(
+            outcome,
+            SwallowOutcome::Swallowed {
+                child: 2,
+                parent: 1,
+                rule: None,
+            }
+        );
+        let entry = &parking.lot(SWALLOW_LOT)["child:2"];
+        assert_eq!(entry["child_workspace_id"], 2);
+        assert_eq!(entry["child_output"], "HDMI-1");
+        assert_eq!(entry["parent_workspace_id"], 1);
+        assert_eq!(entry["parent_output"], "eDP-1");
+
+        // The minimized terminal is moved to another workspace/output.
+        assert_eq!(
+            swallow
+                .track_window(&window_on(1, 100, "alacritty", "shell", 3))
+                .unwrap(),
+            1
+        );
+        let entry = &parking.lot(SWALLOW_LOT)["child:2"];
+        assert_eq!(entry["parent_workspace_id"], 3);
+        assert_eq!(entry["parent_output"], "HDMI-1");
+        // Replaying the same update writes nothing.
+        assert_eq!(
+            swallow
+                .track_window(&window_on(1, 100, "alacritty", "shell", 3))
+                .unwrap(),
+            0
+        );
+
+        // The child moves too; restoration still uses the window id.
+        assert_eq!(
+            swallow
+                .track_window(&window_on(2, 200, "editor", "notes.txt", 1))
+                .unwrap(),
+            1
+        );
+        let restored = swallow.call("restore", &json!({ "child": 2 })).unwrap();
+        assert_eq!(restored["restored"], true);
+        assert_eq!(restored["parent_workspace_id"], 3);
+        assert_eq!(restored["parent_output"], "HDMI-1");
+        let again = swallow.call("restore", &json!({ "child": 2 })).unwrap();
+        assert_eq!(again["restored"], false);
+        assert!(parking.lot(SWALLOW_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[0],
+            Request::Action(Action::MinimizeWindow { id: Some(1) })
+        ));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::UnminimizeWindow { id: Some(1) })
+        ));
+    }
+
+    #[test]
+    fn reconcile_is_sorted_and_idempotent() {
+        let dir = temp_dir("reconcile-order");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 3);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        auto_windows(&parking, &[(1, 100, "alacritty", "shell", true)]);
+        for child in [10, 2, 7] {
+            parking
+                .call(
+                    "park",
+                    &json!({
+                        "lot": SWALLOW_LOT,
+                        "id": format!("child:{child}"),
+                        "value": { "child": child, "parent": 1, "restore_on_exit": true }
+                    }),
+                )
+                .unwrap();
+        }
+        let swallow = Swallow::load(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+        )
+        .unwrap();
+        assert_eq!(swallow.reconcile().unwrap(), vec![2, 7, 10]);
+        assert_eq!(swallow.reconcile().unwrap(), Vec::<u64>::new());
+        assert!(parking.lot(SWALLOW_LOT).is_empty());
+        assert_eq!(server.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn concurrent_restore_removes_the_pair_once() {
+        let dir = temp_dir("concurrent-restore");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 1);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        auto_windows(&parking, &[(1, 100, "alacritty", "shell", true)]);
+        parking
+            .call(
+                "park",
+                &json!({
+                    "lot": SWALLOW_LOT,
+                    "id": "child:2",
+                    "value": { "child": 2, "parent": 1, "restore_on_exit": true }
+                }),
+            )
+            .unwrap();
+        let swallow = Swallow::load(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+        )
+        .unwrap();
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let swallow = swallow.clone();
+                std::thread::spawn(move || {
+                    swallow.call("restore", &json!({ "child": 2 })).unwrap()["restored"]
+                        .as_bool()
+                        .unwrap()
+                })
+            })
+            .collect();
+        let restored = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(|restored| *restored)
+            .count();
+        assert_eq!(restored, 1);
+        assert!(parking.lot(SWALLOW_LOT).is_empty());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pair_limit_and_reload_prune_oldest_pairs() {
+        let dir = temp_dir("pair-limit");
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        for child in [5, 6, 7] {
+            parking
+                .call(
+                    "park",
+                    &json!({
+                        "lot": SWALLOW_LOT,
+                        "id": format!("child:{child}"),
+                        "value": { "child": child, "parent": 1 }
+                    }),
+                )
+                .unwrap();
+        }
+        let swallow = Swallow::load(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(dir.join("unused.sock")),
+        )
+        .unwrap();
+
+        let configured = swallow
+            .call("configure", &json!({ "max_pairs": 2 }))
+            .unwrap();
+        assert_eq!(configured["max_pairs"], 2);
+        assert_eq!(
+            parking.lot(SWALLOW_LOT).keys().cloned().collect::<Vec<_>>(),
+            vec!["child:6", "child:7"]
+        );
+
+        // An external config edit lowers the bound; reload prunes again.
+        let config_path = dir.join("swallow.json");
+        let mut config: Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        config["max_pairs"] = json!(1);
+        std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let reloaded = swallow.call("reload", &Value::Null).unwrap();
+        assert_eq!(reloaded["max_pairs"], 1);
+        assert_eq!(reloaded["evicted"], json!([6]));
+        assert_eq!(
+            parking.lot(SWALLOW_LOT).keys().cloned().collect::<Vec<_>>(),
+            vec!["child:7"]
+        );
     }
 }

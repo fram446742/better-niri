@@ -1,13 +1,18 @@
-//! Window-oriented actions: run-or-raise and singleton.
+//! Window-oriented actions: run-or-raise, singleton and placement.
 //!
 //! Matches live niri window state (falling back to nothing rather than stale
 //! cached data), raises an existing match, or spawns the configured command.
+//! Placement actions resolve workspace targets by stable id, name or index and
+//! move windows to a named output.
+
+use std::collections::BTreeSet;
 
 use companion_core::{ActionInfo, Context};
-use niri_ipc::{Action, Request, Response, Window};
+use niri_ipc::{Action, Request, Response, Window, Workspace, WorkspaceReferenceArg};
 use serde_json::{Value, json};
 
 use crate::Compositor;
+use crate::layout::{self, WorkspaceTarget};
 
 pub struct Windows {
     compositor: Compositor,
@@ -25,7 +30,7 @@ impl Windows {
         }
     }
 
-    fn matches(window: &Window, params: &Value) -> bool {
+    fn matches(window: &Window, params: &Value, output_workspaces: Option<&BTreeSet<u64>>) -> bool {
         if let Some(app_id) = params.get("app_id").and_then(Value::as_str)
             && !window
                 .app_id
@@ -44,6 +49,13 @@ impl Windows {
         }
         if let Some(workspace) = params.get("workspace").and_then(Value::as_u64)
             && window.workspace_id != Some(workspace)
+        {
+            return false;
+        }
+        if let Some(allowed) = output_workspaces
+            && !window
+                .workspace_id
+                .is_some_and(|workspace| allowed.contains(&workspace))
         {
             return false;
         }
@@ -96,14 +108,33 @@ impl Windows {
         Err("run-or-raise needs `spawn` (array) or `spawn_sh` (string)".to_owned())
     }
 
+    /// Resolves workspace-name/index and output filters into a numeric
+    /// workspace id plus the set of workspace ids on the requested output.
+    fn match_params(&self, params: &Value) -> Result<(Value, Option<BTreeSet<u64>>), String> {
+        let mut resolved = params.clone();
+        let output_workspaces = match params.get("output").and_then(Value::as_str) {
+            Some(output) => Some(layout::workspace_ids_on_output(&self.compositor, output)?),
+            None => None,
+        };
+        if let Some(target) = WorkspaceTarget::from_params(params)? {
+            let workspace = layout::resolve_live_workspace(&self.compositor, &target)?;
+            let object = resolved
+                .as_object_mut()
+                .ok_or_else(|| "matching parameters must be an object".to_owned())?;
+            object.insert("workspace".to_owned(), json!(workspace.id));
+        }
+        Ok((resolved, output_workspaces))
+    }
+
     /// All matches sorted by window id. Raising prefers the lowest-id focused
     /// match, then the lowest id, so multiple matches behave deterministically
     /// regardless of niri's listing order.
     fn matches_sorted(&self, params: &Value) -> Result<Vec<Window>, String> {
+        let (params, output_workspaces) = self.match_params(params)?;
         let mut matched: Vec<Window> = self
             .windows()?
             .into_iter()
-            .filter(|window| Self::matches(window, params))
+            .filter(|window| Self::matches(window, &params, output_workspaces.as_ref()))
             .collect();
         matched.sort_by_key(|window| window.id);
         Ok(matched)
@@ -118,6 +149,78 @@ impl Windows {
             .cloned()
             .or_else(|| matched.first().cloned());
         Ok((chosen, candidate_ids))
+    }
+
+    fn window_id(&self, params: &Value) -> Result<u64, String> {
+        if let Some(id) = params
+            .get("window")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_u64)
+        {
+            return Ok(id);
+        }
+        match self.compositor.send(Request::FocusedWindow)? {
+            Response::FocusedWindow(Some(window)) => Ok(window.id),
+            Response::FocusedWindow(None) => Err("no focused window".to_owned()),
+            other => Err(format!("unexpected niri response: {other:?}")),
+        }
+    }
+
+    /// Resolves the placement target. A plain id needs no query; name/index
+    /// targets resolve to a stable id so indices on another output cannot
+    /// silently win.
+    fn workspace_reference(
+        &self,
+        target: &WorkspaceTarget,
+    ) -> Result<(u64, Option<Workspace>), String> {
+        if let Some(id) = target.id
+            && target.name.is_none()
+            && target.index.is_none()
+            && target.output.is_none()
+        {
+            return Ok((id, None));
+        }
+        let workspace = layout::resolve_live_workspace(&self.compositor, target)?;
+        Ok((workspace.id, Some(workspace)))
+    }
+
+    fn move_to_workspace(&self, params: &Value, follow: bool) -> Result<Value, String> {
+        let target = WorkspaceTarget::from_params(params)?
+            .ok_or_else(|| "needs `workspace`, `workspace_name` or `workspace_idx`".to_owned())?;
+        let window = self.window_id(params)?;
+        let (workspace_id, workspace) = self.workspace_reference(&target)?;
+        let focus = follow || params.get("focus").and_then(Value::as_bool).unwrap_or(true);
+        self.apply_action(Action::MoveWindowToWorkspace {
+            window_id: Some(window),
+            reference: WorkspaceReferenceArg::Id(workspace_id),
+            focus,
+        })?;
+        Ok(json!({
+            "action": "moved",
+            "window": window,
+            "workspace": workspace_id,
+            "workspace_name": workspace
+                .as_ref()
+                .and_then(|workspace| workspace.name.clone()),
+            "output": workspace
+                .as_ref()
+                .and_then(|workspace| workspace.output.clone()),
+            "followed": focus,
+        }))
+    }
+
+    fn move_to_output(&self, params: &Value) -> Result<Value, String> {
+        let output = params
+            .get("output")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "windows.move-to-output needs an `output` name".to_owned())?;
+        let output = layout::canonical_output(&self.compositor, output)?;
+        let window = self.window_id(params)?;
+        self.apply_action(Action::MoveWindowToMonitor {
+            id: Some(window),
+            output: output.clone(),
+        })?;
+        Ok(json!({ "action": "moved", "window": window, "output": output }))
     }
 }
 
@@ -136,7 +239,24 @@ impl Context for Windows {
                 "singleton",
                 "Alias of run-or-raise for single-instance apps",
             ),
-            ActionInfo::new("find", "Return matching windows without acting"),
+            ActionInfo::new(
+                "find",
+                "Return matching windows without acting; supports `workspace_name`, \
+                 `workspace_idx` and `output`",
+            ),
+            ActionInfo::new(
+                "move-to-workspace",
+                "Move `window` (or the focused window) to a workspace id, name or index",
+            ),
+            ActionInfo::new(
+                "follow-to-workspace",
+                "Move a window and focus its target workspace",
+            ),
+            ActionInfo::new(
+                "move-to-output",
+                "Move `window` (or the focused window) to output `output`",
+            ),
+            ActionInfo::new("focus-output", "Focus output `output`"),
         ]
     }
 
@@ -163,7 +283,11 @@ impl Context for Windows {
                 let (found, candidate_ids) = self.find(params)?;
                 if let Some(window) = found {
                     let was_focused = window.is_focused;
-                    self.apply_action(Action::FocusWindow { id: window.id })?;
+                    // Raising an already-focused window is a no-op so repeated
+                    // calls cannot spam niri with redundant FocusWindow actions.
+                    if !was_focused {
+                        self.apply_action(Action::FocusWindow { id: window.id })?;
+                    }
                     return Ok(json!({
                         "action": "raised",
                         "raised": window.id,
@@ -171,11 +295,26 @@ impl Context for Windows {
                         "app_id": window.app_id,
                         "workspace_id": window.workspace_id,
                         "was_focused": was_focused,
+                        "already_focused": was_focused,
                         "matches": candidate_ids.len(),
                         "candidate_ids": candidate_ids,
                     }));
                 }
                 self.spawn(params)
+            }
+            "move-to-workspace" => self.move_to_workspace(params, false),
+            "follow-to-workspace" => self.move_to_workspace(params, true),
+            "move-to-output" => self.move_to_output(params),
+            "focus-output" => {
+                let output = params
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "windows.focus-output needs an `output` name".to_owned())?;
+                let output = layout::canonical_output(&self.compositor, output)?;
+                self.apply_action(Action::FocusMonitor {
+                    output: output.clone(),
+                })?;
+                Ok(json!({ "action": "focused", "output": output }))
             }
             other => Err(format!("unknown action `windows.{other}`")),
         }
@@ -225,15 +364,17 @@ mod tests {
         })
     }
 
-    /// Accepts two requests: the Windows query and one Action.
+    /// Accepts the `Windows` query plus `actions` one-request actions and
+    /// records every request.
     fn fake_niri(
         path: &PathBuf,
         windows: Vec<serde_json::Value>,
+        actions: usize,
     ) -> std::thread::JoinHandle<Vec<Request>> {
         let listener = UnixListener::bind(path).unwrap();
         std::thread::spawn(move || {
             let mut requests = Vec::new();
-            for step in 0..2 {
+            for step in 0..=actions {
                 let (stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
@@ -260,7 +401,7 @@ mod tests {
     fn raises_an_existing_window() {
         let dir = temp_dir("raise");
         let socket = dir.join("niri.sock");
-        let server = fake_niri(&socket, vec![window_json(10, "firefox", false)]);
+        let server = fake_niri(&socket, vec![window_json(10, "firefox", false)], 1);
         let windows = Windows::new(Compositor::at(&socket));
         let result = windows
             .call(
@@ -282,7 +423,7 @@ mod tests {
     fn spawns_when_no_window_matches() {
         let dir = temp_dir("spawn");
         let socket = dir.join("niri.sock");
-        let server = fake_niri(&socket, vec![]);
+        let server = fake_niri(&socket, vec![], 1);
         let windows = Windows::new(Compositor::at(&socket));
         let result = windows
             .call(
@@ -340,6 +481,7 @@ mod tests {
                 window_json(10, "firefox", false),
                 window_json(11, "firefox", true),
             ],
+            0,
         );
         let windows = Windows::new(Compositor::at(&socket));
         let result = windows
@@ -351,14 +493,14 @@ mod tests {
         assert_eq!(result["action"], "raised");
         assert_eq!(result["raised"], 11);
         assert_eq!(result["was_focused"], true);
+        assert_eq!(result["already_focused"], true);
         assert_eq!(result["matches"], 3);
         assert_eq!(result["candidate_ids"], json!([10, 11, 12]));
 
+        // A focused match is not refocused: only the Windows query was sent.
         let requests = server.join().unwrap();
-        assert!(matches!(
-            requests[1],
-            Request::Action(Action::FocusWindow { id: 11 })
-        ));
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0], Request::Windows));
     }
 
     #[test]
@@ -372,6 +514,7 @@ mod tests {
                 window_json(10, "firefox", false),
                 window_json(11, "firefox", false),
             ],
+            1,
         );
         let windows = Windows::new(Compositor::at(&socket));
         let result = windows
@@ -389,5 +532,238 @@ mod tests {
             requests[1],
             Request::Action(Action::FocusWindow { id: 10 })
         ));
+    }
+
+    fn workspace_json(
+        id: u64,
+        idx: u8,
+        name: &str,
+        output: &str,
+        focused: bool,
+    ) -> serde_json::Value {
+        json!({
+            "id": id,
+            "idx": idx,
+            "name": name,
+            "output": output,
+            "is_urgent": false,
+            "is_active": focused,
+            "is_focused": focused,
+            "active_window_id": null,
+            "is_hidden": false
+        })
+    }
+
+    fn output_json(name: &str) -> serde_json::Value {
+        json!({
+            "name": name,
+            "make": "test",
+            "model": "test",
+            "serial": null,
+            "physical_size": null,
+            "modes": [],
+            "current_mode": null,
+            "is_custom_mode": false,
+            "vrr_supported": false,
+            "vrr_enabled": false,
+            "logical": null,
+            "max_bpc": null
+        })
+    }
+
+    /// Accepts one connection per response, recording the request each time.
+    fn fake_sequence(
+        path: &PathBuf,
+        responses: Vec<serde_json::Value>,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let listener = UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                requests.push(serde_json::from_str(line.trim()).unwrap());
+                let mut stream = stream;
+                stream
+                    .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                    .unwrap();
+                stream.write_all(b"\n").unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        })
+    }
+
+    #[test]
+    fn moves_window_to_workspace_by_name_and_reports_metadata() {
+        let dir = temp_dir("move-name");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(1, 1, "dev", "eDP-1", true),
+                    workspace_json(2, 2, "Web", "HDMI-1", false),
+                ] } }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let result = windows
+            .call(
+                "move-to-workspace",
+                &json!({ "window": 10, "workspace_name": "web" }),
+            )
+            .unwrap();
+        assert_eq!(result["action"], "moved");
+        assert_eq!(result["window"], 10);
+        assert_eq!(result["workspace"], 2);
+        assert_eq!(result["workspace_name"], "Web");
+        assert_eq!(result["output"], "HDMI-1");
+        assert_eq!(result["followed"], true);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(requests[0], Request::Workspaces));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::MoveWindowToWorkspace {
+                window_id: Some(10),
+                reference: WorkspaceReferenceArg::Id(2),
+                focus: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn follow_to_workspace_by_index_forces_focus() {
+        let dir = temp_dir("follow-index");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(1, 1, "dev", "eDP-1", true),
+                    workspace_json(3, 2, "notes", "HDMI-1", false),
+                ] } }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let result = windows
+            .call(
+                "follow-to-workspace",
+                &json!({ "window": 10, "workspace_idx": 2, "focus": false }),
+            )
+            .unwrap();
+        assert_eq!(result["workspace"], 3);
+        assert_eq!(result["followed"], true);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::MoveWindowToWorkspace {
+                window_id: Some(10),
+                reference: WorkspaceReferenceArg::Id(3),
+                focus: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn moves_window_to_a_named_output() {
+        let dir = temp_dir("move-output");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Outputs": {
+                    "eDP-1": output_json("eDP-1"),
+                    "HDMI-1": output_json("HDMI-1"),
+                } } }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let result = windows
+            .call(
+                "move-to-output",
+                &json!({ "window": 10, "output": "hdmi-1" }),
+            )
+            .unwrap();
+        assert_eq!(result["output"], "HDMI-1");
+
+        let requests = server.join().unwrap();
+        assert!(matches!(requests[0], Request::Outputs));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::MoveWindowToMonitor {
+                id: Some(10),
+                ref output,
+            }) if output == "HDMI-1"
+        ));
+    }
+
+    #[test]
+    fn find_matches_by_workspace_name() {
+        let dir = temp_dir("find-workspace");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(1, 1, "dev", "eDP-1", true),
+                    workspace_json(2, 2, "Web", "HDMI-1", false),
+                ] } }),
+                json!({ "Ok": { "Windows": [
+                    window_json(10, "firefox", false),
+                    { "id": 11, "title": "web window", "app_id": "firefox", "pid": 1,
+                      "workspace_id": 2, "is_focused": false, "is_floating": false,
+                      "is_sticky": false, "is_urgent": false, "is_minimized": false,
+                      "layout": { "pos_in_scrolling_layout": [1, 1], "tile_size": [100.0, 100.0],
+                        "window_size": [100, 100], "tile_pos_in_workspace_view": [0.0, 0.0],
+                        "window_offset_in_tile": [0.0, 0.0] }, "focus_timestamp": null },
+                ] } }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows
+            .call("find", &json!({ "workspace_name": "web" }))
+            .unwrap();
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["windows"][0]["id"], 11);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn find_filters_by_output() {
+        let dir = temp_dir("find-output");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Workspaces": [
+                    workspace_json(1, 1, "dev", "eDP-1", true),
+                    workspace_json(2, 2, "Web", "HDMI-1", false),
+                ] } }),
+                json!({ "Ok": { "Windows": [
+                    window_json(10, "firefox", false),
+                    { "id": 11, "title": "web window", "app_id": "firefox", "pid": 1,
+                      "workspace_id": 2, "is_focused": false, "is_floating": false,
+                      "is_sticky": false, "is_urgent": false, "is_minimized": false,
+                      "layout": { "pos_in_scrolling_layout": [1, 1], "tile_size": [100.0, 100.0],
+                        "window_size": [100, 100], "tile_pos_in_workspace_view": [0.0, 0.0],
+                        "window_offset_in_tile": [0.0, 0.0] }, "focus_timestamp": null },
+                ] } }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows
+            .call("find", &json!({ "output": "HDMI-1" }))
+            .unwrap();
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["windows"][0]["id"], 11);
+        server.join().unwrap();
     }
 }
