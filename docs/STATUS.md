@@ -175,8 +175,10 @@ picked up without re-auditing.
    clipping texture program and the configured decoration shaders; a test
    compiles them on a real `VulkanRenderer`. Resize animations keep their animated stretch on GLES; on
    Vulkan the window renders normally during a resize (no red fallback, no
-   stretch). Runtime validation on a real TTY passed on 2026-11-24 (Vulkan
-   renderer active, border/shadow shaders compiled, 4K DP-1 output created).
+   stretch). Runtime validation on a real TTY passed on 2026-11-24 with the
+   clipping/decoration build (Vulkan renderer active, border/shadow/clipping/
+   decoration shaders compiled, 4K DP-1 output created, no renderer errors
+   during a ~2.5 minute session).
    Still open: HDR output on Vulkan, and Vulkan paths for the remaining
    GLSL-only visuals (window/global/
    scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
