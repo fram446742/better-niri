@@ -230,7 +230,7 @@ impl HistoryStore {
         let bytes = serde_json::to_vec_pretty(&entry)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         write_atomic(&self.entry_path(&id), &bytes)?;
-        let _ = self.prune(keep.max(1), None)?;
+        self.prune(keep.max(1), None)?;
         Ok(entry)
     }
 
