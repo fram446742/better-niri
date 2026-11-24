@@ -1,0 +1,10 @@
+id = "better-desktop/better-companion"
+name = "Better Companion"
+version = "1.0.0"
+plugin_api = 24
+author = "Better Desktop"
+description = "Daemon status and quick access to the companion action registry."
+
+[[widget]]
+id = "status"
+entry = "widget.luau"
