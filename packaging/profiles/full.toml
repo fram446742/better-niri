@@ -1,0 +1,36 @@
+# Full build, including experimental and optional integration.
+#
+# Adds the Vulkan renderer (default in niri's manifest, opt-in at runtime with
+# NIRI_RENDERER=vulkan or niri --check-vulkan) and the dinit session integration
+# on top of the desktop profile. All companion applications are built,
+# including the `better-companion` automation daemon and `companionctl`.
+#
+# Check/build it with:
+#   packaging/scripts/build-profile.sh --check full
+#   packaging/scripts/build-profile.sh --build full
+name = "full"
+description = "Every user-facing module (including Vulkan and dinit) and every companion app."
+cargo_features = [
+    "agent",
+    "cursor",
+    "dbus",
+    "dinit",
+    "effects",
+    "kde",
+    "navigation",
+    "systemd",
+    "vulkan",
+    "xdp-gnome-screencast",
+]
+apps = [
+    "niri",
+    "portal",
+    "companion",
+    "monitor",
+    "session",
+    "shot",
+    "wallpaper",
+    "settings",
+    "audio",
+    "sidepanels",
+]

@@ -1,0 +1,35 @@
+# Maintainer: Better Niri packaging <packaging@better-niri.invalid>
+#
+# Meta package for the Better Niri desktop. The compositor and every companion
+# app are bundled in niri-better, so this package is deliberately thin: it gives
+# users one name to install and documents the post-install session and portal
+# setup. It never starts services from a package script.
+
+pkgname=better-desktop
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Meta package for the Better Niri desktop: compositor, portal and companion apps"
+arch=(any)
+url="https://github.com/fram446742/better-niri"
+license=(GPL-3.0-or-later)
+depends=(niri-better)
+optdepends=(
+  'xdg-desktop-portal: portal broker for niri.portal and better.portal'
+  'xdg-desktop-portal-gtk: fallback portal for file chooser and friends'
+  'pipewire: audio and screencasting server'
+  'wireplumber: PipeWire session manager and wpctl'
+  'libpulse: pactl backend for better-audio'
+  'playerctl: media module in better-sidepanels'
+  'swaybg: default wallpaper command for better-wallpaper'
+  'satty: interactive annotation for better-shot'
+  'wl-clipboard: clipboard support in better-shot'
+  'dbus: dbus-update-activation-environment used by niri-session'
+  'systemd: systemctl, loginctl and busctl integration'
+)
+install=better-desktop.install
+source=('README.md')
+sha256sums=('SKIP')
+
+package() {
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}
