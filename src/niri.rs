@@ -138,7 +138,7 @@ use wayland_server::protocol::wl_output::WlOutput;
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
 use crate::animation::{Animation, Clock};
-use crate::backend::tty::{SurfaceDmabufFeedback, TtyOffscreen};
+use crate::backend::tty::{SurfaceDmabufFeedback, TtyOffscreen, TtyRenderer};
 use crate::backend::{Backend, Headless, OutputHdrCaps, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
@@ -207,8 +207,9 @@ use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    CaptureBuffer, RenderCtx, RenderIntent, RenderTarget, encompassing_geo, render_and_download,
-    render_to_dmabuf, render_to_encompassing_texture, render_to_shm, render_to_texture,
+    CaptureBuffer, RenderCtx, RenderIntent, RenderTarget, copy_tty_texture_to_vec,
+    encompassing_geo, render_and_download, render_to_dmabuf, render_to_encompassing_texture,
+    render_to_encompassing_tty_texture, render_to_shm, render_to_texture, render_to_tty_texture,
     render_to_vec, shaders,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
@@ -3056,6 +3057,28 @@ impl State {
         }
     }
 
+    /// Runs `gles_f` with the primary GLES renderer, or `tty_f` with the TTY renderer abstraction
+    /// when the session has no GLES primary renderer (Vulkan-only TTY).
+    ///
+    /// The two closures receive the renderer separately so each can instantiate the generic
+    /// screenshot functions at its own concrete renderer type. GLES sessions keep taking the
+    /// first branch, so their behaviour is unchanged.
+    pub(crate) fn with_screenshot_renderer<T>(
+        &mut self,
+        gles_f: impl FnOnce(&mut Niri, &mut GlesRenderer) -> T,
+        tty_f: impl FnOnce(&mut Niri, &mut TtyRenderer<'_>) -> T,
+    ) -> Option<T> {
+        if let Some(res) = self
+            .backend
+            .with_primary_renderer(|renderer| gles_f(&mut self.niri, renderer))
+        {
+            return Some(res);
+        }
+
+        self.backend
+            .with_primary_tty_renderer(|renderer| tty_f(&mut self.niri, renderer))
+    }
+
     pub fn open_screenshot_ui_with_reply(
         &mut self,
         show_pointer: bool,
@@ -3104,10 +3127,16 @@ impl State {
 
         self.niri.update_render_elements(None);
 
-        let Some(screenshots) = self
-            .backend
-            .with_primary_renderer(|renderer| self.niri.capture_screenshots(renderer).collect())
-        else {
+        let Some(screenshots) = self.with_screenshot_renderer(
+            |niri, renderer| {
+                niri.capture_screenshots(renderer)
+                    .collect::<HashMap<_, _>>()
+            },
+            |niri, renderer| {
+                niri.capture_screenshots(renderer)
+                    .collect::<HashMap<_, _>>()
+            },
+        ) else {
             send_error("primary renderer is not available");
             return;
         };
@@ -3118,20 +3147,41 @@ impl State {
         let ipc_reply_on_failure = ipc_reply.clone();
         let path_reply_on_failure = path_reply.clone();
         let selection_reply_on_failure = selection_reply.clone();
+
+        let screenshots_fallback = screenshots.clone();
+        let default_output_fallback = default_output.clone();
+        let path_fallback = path.clone();
+        let ipc_reply_fallback = ipc_reply.clone();
+        let path_reply_fallback = path_reply.clone();
+        let selection_reply_fallback = selection_reply.clone();
+
         let opened = self
-            .backend
-            .with_primary_renderer(|renderer| {
-                self.niri.screenshot_ui.open(
-                    renderer,
-                    screenshots,
-                    default_output,
-                    show_pointer,
-                    path,
-                    ipc_reply,
-                    path_reply,
-                    selection_reply,
-                )
-            })
+            .with_screenshot_renderer(
+                |niri, renderer| {
+                    niri.screenshot_ui.open(
+                        renderer,
+                        screenshots,
+                        default_output,
+                        show_pointer,
+                        path,
+                        ipc_reply,
+                        path_reply,
+                        selection_reply,
+                    )
+                },
+                |niri, renderer| {
+                    niri.screenshot_ui.open(
+                        renderer,
+                        screenshots_fallback,
+                        default_output_fallback,
+                        show_pointer,
+                        path_fallback,
+                        ipc_reply_fallback,
+                        path_reply_fallback,
+                        selection_reply_fallback,
+                    )
+                },
+            )
             .unwrap_or(false);
         if !opened {
             if let Some(reply) = ipc_reply_on_failure {
@@ -3283,6 +3333,55 @@ impl State {
         }
     }
 
+    /// Captures the open screenshot UI selection through any renderer and saves it.
+    fn save_screenshot_ui_capture<R: NiriRenderer>(
+        niri: &mut Niri,
+        renderer: &mut R,
+        write_to_disk: bool,
+        path: Option<String>,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
+    ) where
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+    {
+        match niri.screenshot_ui.capture(renderer) {
+            Ok((size, pixels)) => {
+                let ipc_reply_on_error = ipc_reply.clone();
+                let path_reply_on_error = path_reply.clone();
+                if let Err(err) = niri.save_screenshot_with_replies(
+                    size,
+                    pixels,
+                    write_to_disk,
+                    path,
+                    ipc_reply,
+                    path_reply,
+                ) {
+                    warn!("error saving screenshot: {err:?}");
+                    if let Some(ipc_reply) = ipc_reply_on_error {
+                        let _ = ipc_reply.try_send(Err(format!("error saving screenshot: {err}")));
+                    }
+                    if let Some(path_reply) = path_reply_on_error {
+                        let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(format!(
+                            "error saving screenshot: {err}"
+                        ))));
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("error capturing screenshot: {err:?}");
+                if let Some(ipc_reply) = ipc_reply {
+                    let _ = ipc_reply.try_send(Err(format!("error capturing screenshot: {err}")));
+                }
+                if let Some(path_reply) = path_reply {
+                    let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(format!(
+                        "error capturing screenshot: {err}"
+                    ))));
+                }
+            }
+        }
+    }
+
     pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
         let selection = self.niri.screenshot_ui.selection();
         let (path, ipc_reply, path_reply, selection_reply) = {
@@ -3331,45 +3430,32 @@ impl State {
         } else {
             let write_to_disk = write_to_disk || path_reply.is_some();
 
-            self.backend.with_primary_renderer(|renderer| {
-                match self.niri.screenshot_ui.capture(renderer) {
-                    Ok((size, pixels)) => {
-                        let ipc_reply_on_error = ipc_reply.clone();
-                        let path_reply_on_error = path_reply.clone();
-                        if let Err(err) = self.niri.save_screenshot_with_replies(
-                            size,
-                            pixels,
-                            write_to_disk,
-                            path,
-                            ipc_reply,
-                            path_reply,
-                        ) {
-                            warn!("error saving screenshot: {err:?}");
-                            if let Some(ipc_reply) = ipc_reply_on_error {
-                                let _ = ipc_reply
-                                    .try_send(Err(format!("error saving screenshot: {err}")));
-                            }
-                            if let Some(path_reply) = path_reply_on_error {
-                                let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(
-                                    format!("error saving screenshot: {err}"),
-                                )));
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        warn!("error capturing screenshot: {err:?}");
-                        if let Some(ipc_reply) = ipc_reply {
-                            let _ = ipc_reply
-                                .try_send(Err(format!("error capturing screenshot: {err}")));
-                        }
-                        if let Some(path_reply) = path_reply {
-                            let _ = path_reply.try_send(Err(ScreenshotPortalError::Failed(
-                                format!("error capturing screenshot: {err}"),
-                            )));
-                        }
-                    }
-                }
-            });
+            let path_fallback = path.clone();
+            let ipc_reply_fallback = ipc_reply.clone();
+            let path_reply_fallback = path_reply.clone();
+
+            self.with_screenshot_renderer(
+                |niri, renderer| {
+                    Self::save_screenshot_ui_capture(
+                        niri,
+                        renderer,
+                        write_to_disk,
+                        path,
+                        ipc_reply,
+                        path_reply,
+                    )
+                },
+                |niri, renderer| {
+                    Self::save_screenshot_ui_capture(
+                        niri,
+                        renderer,
+                        write_to_disk,
+                        path_fallback,
+                        ipc_reply_fallback,
+                        path_reply_fallback,
+                    )
+                },
+            );
         }
 
         self.niri.screenshot_ui.close();
@@ -3404,20 +3490,32 @@ impl State {
                     .cloned()
                     .context("no active output to screenshot");
                 active.and_then(|active| {
-                    let ipc_reply_for_screenshot = ipc_reply.clone();
-                    self.backend
-                        .with_primary_renderer(|renderer| {
-                            self.niri.screenshot_with_reply(
+                    let ipc_reply_fallback = ipc_reply.clone();
+                    let path_fallback = path.clone();
+                    self.with_screenshot_renderer(
+                        |niri, renderer| {
+                            niri.screenshot_with_reply(
                                 renderer,
                                 &active,
                                 write_to_disk,
                                 show_pointer,
                                 path,
-                                Some(ipc_reply_for_screenshot),
+                                Some(ipc_reply.clone()),
                             )
-                        })
-                        .context("primary renderer is not available")
-                        .and_then(|res| res)
+                        },
+                        |niri, renderer| {
+                            niri.screenshot_with_reply(
+                                renderer,
+                                &active,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                                Some(ipc_reply_fallback),
+                            )
+                        },
+                    )
+                    .context("primary renderer is not available")
+                    .and_then(|res| res)
                 })
             }
             niri_ipc::Action::ScreenshotWindow {
@@ -3434,21 +3532,37 @@ impl State {
                     return;
                 };
 
-                let ipc_reply_for_screenshot = ipc_reply.clone();
-                self.backend
-                    .with_primary_renderer(|renderer| {
-                        self.niri.screenshot_window_with_reply(
-                            renderer,
-                            output,
-                            mapped,
-                            write_to_disk,
-                            show_pointer,
-                            path,
-                            Some(ipc_reply_for_screenshot),
-                        )
-                    })
-                    .context("primary renderer is not available")
-                    .and_then(|res| res)
+                let ipc_reply_fallback = ipc_reply.clone();
+                let path_fallback = path.clone();
+                let ran = self.backend.with_primary_renderer(|renderer| {
+                    self.niri.screenshot_window_with_reply(
+                        renderer,
+                        output,
+                        mapped,
+                        write_to_disk,
+                        show_pointer,
+                        path,
+                        Some(ipc_reply.clone()),
+                    )
+                });
+                match ran {
+                    Some(res) => res,
+                    None => self
+                        .backend
+                        .with_primary_tty_renderer(|renderer| {
+                            self.niri.screenshot_window_with_reply(
+                                renderer,
+                                output,
+                                mapped,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                                Some(ipc_reply_fallback),
+                            )
+                        })
+                        .context("primary renderer is not available")
+                        .and_then(|res| res),
+                }
             }
             niri_ipc::Action::ScreenshotWindow {
                 id: Some(id),
@@ -3465,21 +3579,37 @@ impl State {
                 };
 
                 let output = monitor.output();
-                let ipc_reply_for_screenshot = ipc_reply.clone();
-                self.backend
-                    .with_primary_renderer(|renderer| {
-                        self.niri.screenshot_window_with_reply(
-                            renderer,
-                            output,
-                            mapped,
-                            write_to_disk,
-                            show_pointer,
-                            path,
-                            Some(ipc_reply_for_screenshot),
-                        )
-                    })
-                    .context("primary renderer is not available")
-                    .and_then(|res| res)
+                let ipc_reply_fallback = ipc_reply.clone();
+                let path_fallback = path.clone();
+                let ran = self.backend.with_primary_renderer(|renderer| {
+                    self.niri.screenshot_window_with_reply(
+                        renderer,
+                        output,
+                        mapped,
+                        write_to_disk,
+                        show_pointer,
+                        path,
+                        Some(ipc_reply.clone()),
+                    )
+                });
+                match ran {
+                    Some(res) => res,
+                    None => self
+                        .backend
+                        .with_primary_tty_renderer(|renderer| {
+                            self.niri.screenshot_window_with_reply(
+                                renderer,
+                                output,
+                                mapped,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                                Some(ipc_reply_fallback),
+                            )
+                        })
+                        .context("primary renderer is not available")
+                        .and_then(|res| res),
+                }
             }
             _ => {
                 let _ = ipc_reply.try_send(Err(String::from(
@@ -3675,7 +3805,8 @@ impl State {
         };
 
         let reply_on_error = reply.clone();
-        let result = self.backend.with_primary_renderer(|renderer| {
+        let reply_fallback = reply.clone();
+        let mut result = self.backend.with_primary_renderer(|renderer| {
             self.niri.screenshot_window_with_replies(
                 renderer,
                 output,
@@ -3687,6 +3818,21 @@ impl State {
                 Some(reply),
             )
         });
+        if result.is_none() {
+            // Vulkan-only TTY session: no GLES primary renderer.
+            result = self.backend.with_primary_tty_renderer(|renderer| {
+                self.niri.screenshot_window_with_replies(
+                    renderer,
+                    output,
+                    mapped,
+                    true,
+                    include_cursor,
+                    None,
+                    None,
+                    Some(reply_fallback),
+                )
+            });
+        }
 
         match result {
             None => {
@@ -10708,10 +10854,23 @@ impl Niri {
         Some(pixels.to_vec())
     }
 
-    pub fn capture_screenshots<'a>(
+    /// Renders and captures every output for the screenshot UI.
+    ///
+    /// Generic over the active renderer: GLES captures produce `TtyOffscreen::Gles` textures,
+    /// Vulkan captures `TtyOffscreen::Vulkan`, both stored backend-agnostically in
+    /// [`OutputScreenshot`].
+    pub fn capture_screenshots<'a, R: NiriRenderer>(
         &'a self,
-        renderer: &'a mut GlesRenderer,
-    ) -> impl Iterator<Item = (Output, [OutputScreenshot; 3])> + 'a {
+        renderer: &'a mut R,
+    ) -> impl Iterator<Item = (Output, [OutputScreenshot; 3])> + 'a
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         self.global_space.outputs().cloned().filter_map(|output| {
             let size = output.current_mode().unwrap().size;
             let transform = output.current_transform();
@@ -10725,26 +10884,20 @@ impl Niri {
             ];
             let screenshot = targets.map(|target| {
                 let ctx = RenderCtx {
-                    renderer,
+                    renderer: &mut *renderer,
                     target,
                     intent: RenderIntent::Normal,
                     xray: None,
                     shader_time: self.window_shader_start.elapsed().as_secs_f32(),
                 };
                 #[cfg(feature = "navigation")]
-                #[cfg(feature = "navigation")]
                 let was_magnifier_capture = self.magnifier_capture.replace(true);
+                // `render_to_vec()` returns front-to-back; the generic offscreen buffer draws
+                // them back-to-front, matching the old GLES `render_to_texture()` path.
                 let elements = self.render_to_vec(ctx, &output, false);
-                let elements = elements.iter().rev();
 
-                let res = render_to_texture(
-                    renderer,
-                    size,
-                    scale,
-                    Transform::Normal,
-                    Fourcc::Abgr8888,
-                    elements,
-                );
+                let res =
+                    render_to_tty_texture(renderer, Rectangle::from_size(size), scale, &elements);
                 if let Err(err) = &res {
                     warn!("error rendering output {}: {err:?}", output.name());
                 }
@@ -10760,32 +10913,20 @@ impl Niri {
                 }
 
                 #[cfg(feature = "navigation")]
-                #[cfg(feature = "navigation")]
                 self.magnifier_capture.set(was_magnifier_capture);
 
                 let res_pointer = if pointer.is_empty() {
                     None
                 } else {
-                    let res = render_to_encompassing_texture(
-                        renderer,
-                        scale,
-                        Transform::Normal,
-                        Fourcc::Abgr8888,
-                        &pointer,
-                    );
+                    let res = render_to_encompassing_tty_texture(renderer, scale, &pointer);
                     if let Err(err) = &res {
                         warn!("error rendering pointer for {}: {err:?}", output.name());
                     }
                     res.ok()
                 };
 
-                res_output.map(|(texture, _)| {
-                    OutputScreenshot::from_textures(
-                        renderer,
-                        scale,
-                        texture,
-                        res_pointer.map(|(texture, _, geo)| (texture, geo)),
-                    )
+                res_output.map(|(texture, context_id, _sync)| {
+                    OutputScreenshot::from_textures(scale, texture, context_id, res_pointer)
                 })
             });
 
@@ -10798,26 +10939,40 @@ impl Niri {
         })
     }
 
-    pub fn screenshot(
+    pub fn screenshot<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         write_to_disk: bool,
         include_pointer: bool,
         path: Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         self.screenshot_with_reply(renderer, output, write_to_disk, include_pointer, path, None)
     }
 
-    pub fn screenshot_with_reply(
+    pub fn screenshot_with_reply<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         write_to_disk: bool,
         include_pointer: bool,
         path: Option<String>,
         ipc_reply: Option<ScreenshotReplySender>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         self.screenshot_with_replies(
             renderer,
             output,
@@ -10829,16 +10984,23 @@ impl Niri {
         )
     }
 
-    pub fn screenshot_with_replies(
+    pub fn screenshot_with_replies<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         write_to_disk: bool,
         include_pointer: bool,
         path: Option<String>,
         ipc_reply: Option<ScreenshotReplySender>,
         path_reply: Option<ScreenshotPathReplySender>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::screenshot");
 
         self.update_render_elements(Some(output));
@@ -10848,38 +11010,47 @@ impl Niri {
         let size = transform.transform_size(size);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
-        set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
+        // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+        if let Some(gles) = renderer.as_gles_renderer() {
+            set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+        }
         let ctx = RenderCtx {
-            renderer,
+            renderer: &mut *renderer,
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
             shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let elements = self.render_to_vec(ctx, output, include_pointer);
-        let elements = elements.iter().rev();
-        let pixels = render_to_vec(
+        let (texture, _context_id, _sync) =
+            render_to_tty_texture(renderer, Rectangle::from_size(size), scale, &elements)?;
+        let pixels = copy_tty_texture_to_vec(
             renderer,
-            size,
-            scale,
-            Transform::Normal,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((size.w, size.h))),
             Fourcc::Abgr8888,
-            elements,
         )?;
 
         self.save_screenshot_with_replies(size, pixels, write_to_disk, path, ipc_reply, path_reply)
             .context("error saving screenshot")
     }
 
-    pub fn screenshot_window(
+    pub fn screenshot_window<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         mapped: &Mapped,
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        WindowScreenshotRenderElement<R>: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         self.screenshot_window_with_replies(
             renderer,
             output,
@@ -10892,16 +11063,23 @@ impl Niri {
         )
     }
 
-    pub fn screenshot_window_with_reply(
+    pub fn screenshot_window_with_reply<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         mapped: &Mapped,
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
         ipc_reply: Option<ScreenshotReplySender>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        WindowScreenshotRenderElement<R>: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         self.screenshot_window_with_replies(
             renderer,
             output,
@@ -10914,9 +11092,9 @@ impl Niri {
         )
     }
 
-    pub fn screenshot_window_with_replies(
+    pub fn screenshot_window_with_replies<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         mapped: &Mapped,
         write_to_disk: bool,
@@ -10924,7 +11102,14 @@ impl Niri {
         path: Option<String>,
         ipc_reply: Option<ScreenshotReplySender>,
         path_reply: Option<ScreenshotPathReplySender>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        WindowScreenshotRenderElement<R>: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         let target = RenderTarget::ScreenCapture;
         if target.should_hide(mapped.rules().block_out_from) {
             // We won't have any elements to render. Saving a fully transparent picture is odd.
@@ -10944,7 +11129,7 @@ impl Niri {
                 mapped.rules().opacity.unwrap_or(1.).clamp(0., 1.)
             };
 
-        let mut elements: Vec<WindowScreenshotRenderElement<GlesRenderer>> = Vec::new();
+        let mut elements: Vec<WindowScreenshotRenderElement<R>> = Vec::new();
 
         // Add pointer if requested and it's over this window.
         if show_pointer && let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
@@ -10958,9 +11143,12 @@ impl Niri {
         }
         let pointer_count = elements.len();
 
-        set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
+        // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+        if let Some(gles) = renderer.as_gles_renderer() {
+            set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+        }
         let ctx = RenderCtx {
-            renderer,
+            renderer: &mut *renderer,
             target: RenderTarget::ScreenCapture,
             intent: RenderIntent::Normal,
             xray: None,
@@ -10978,16 +11166,14 @@ impl Niri {
         // The pointer is not included in encompassing_geo because we don't want it to expand the
         // screenshot size.
         let geo = encompassing_geo(scale, elements.iter().skip(pointer_count));
-        let elements = elements.iter().rev().map(|elem| {
-            RelocateRenderElement::from_element(elem, geo.loc.upscale(-1), Relocate::Relative)
-        });
-        let pixels = render_to_vec(
+
+        // `render_with_bounds()` relocates the output-local elements into the window geometry.
+        let (texture, _context_id, _sync) = render_to_tty_texture(renderer, geo, scale, &elements)?;
+        let pixels = copy_tty_texture_to_vec(
             renderer,
-            geo.size,
-            scale,
-            Transform::Normal,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((geo.size.w, geo.size.h))),
             Fourcc::Abgr8888,
-            elements,
         )?;
 
         #[cfg(feature = "navigation")]

@@ -16,20 +16,23 @@ use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::{ExportMem, Texture as _};
+use smithay::backend::renderer::{
+    ContextId, ErasedContextId, ImportMem as _, Renderer as _, Texture as _,
+};
 use smithay::input::keyboard::Keysym;
 use smithay::output::{Output, WeakOutput};
-use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::backend::tty::TtyOffscreen;
 use crate::layout::floating::DIRECTIONAL_MOVE_PX;
 use crate::niri_render_elements;
+use crate::render_helpers::offscreen::OffscreenBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
-use crate::render_helpers::{RenderTarget, render_to_texture};
+use crate::render_helpers::{RenderTarget, copy_tty_texture_to_vec};
 use crate::utils::to_physical_precise_round;
 
 const SELECTION_BORDER: i32 = 2;
@@ -109,11 +112,13 @@ pub struct OutputData {
     screenshot: [OutputScreenshot; 3],
     buffers: [SolidColorBuffer; 8],
     locations: [Point<i32, Physical>; 8],
-    panel: Option<(TextureBuffer<GlesTexture>, TextureBuffer<GlesTexture>)>,
+    panel: Option<(TextureBuffer<TtyOffscreen>, TextureBuffer<TtyOffscreen>)>,
 }
 
+/// A captured output texture plus its pre-built render elements.
+#[derive(Clone)]
 pub struct OutputScreenshot {
-    texture: GlesTexture,
+    texture: TtyOffscreen,
     buffer: PrimaryGpuTextureRenderElement,
     pointer: Option<PrimaryGpuTextureRenderElement>,
 }
@@ -150,9 +155,9 @@ impl ScreenshotUi {
         }
     }
 
-    pub fn open(
+    pub fn open<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         // Output, screencast, screen capture.
         screenshots: HashMap<Output, [OutputScreenshot; 3]>,
         default_output: Output,
@@ -694,17 +699,14 @@ impl ScreenshotUi {
                 .to_f64()
                 .to_logical(scale);
 
-            let elem = PrimaryGpuTextureRenderElement(
-                TextureRenderElement::from_texture_buffer(
-                    buffer.clone(),
-                    location,
-                    alpha * progress,
-                    None,
-                    None,
-                    Kind::Unspecified,
-                )
-                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
-            );
+            let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                buffer.clone(),
+                location,
+                alpha * progress,
+                None,
+                None,
+                Kind::Unspecified,
+            ));
             push(elem.into());
         }
 
@@ -732,10 +734,13 @@ impl ScreenshotUi {
         push(screenshot.buffer.clone().into());
     }
 
-    pub fn capture(
+    pub fn capture<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
-    ) -> anyhow::Result<(Size<i32, Physical>, Vec<u8>)> {
+        renderer: &mut R,
+    ) -> anyhow::Result<(Size<i32, Physical>, Vec<u8>)>
+    where
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let _span = tracy_client::span!("ScreenshotUi::capture");
 
         let Self::Open {
@@ -754,30 +759,20 @@ impl ScreenshotUi {
         let screenshot = &data.screenshot[0];
 
         // Composite the pointer on top if needed.
-        let mut tex_rect = None;
+        let mut composited = None;
         if *show_pointer && let Some(pointer) = screenshot.pointer.clone() {
             let scale = pointer.0.buffer().texture_scale();
-            let offset = rect.loc.upscale(-1);
 
+            // Front-to-back: the pointer is on top of the screenshot.
             let mut elements = ArrayVec::<_, 2>::new();
             elements.push(pointer);
             elements.push(screenshot.buffer.clone());
-            let elements = elements
-                .iter()
-                .rev()
-                .map(|elem| RelocateRenderElement::from_element(elem, offset, Relocate::Relative));
 
-            let res = render_to_texture(
-                renderer,
-                rect.size,
-                scale,
-                Transform::Normal,
-                Fourcc::Abgr8888,
-                elements,
-            );
-            match res {
-                Ok((texture, _)) => {
-                    tex_rect = Some((texture, Rectangle::from_size(rect.size)));
+            // `render_with_bounds()` relocates the output-local elements into `rect`.
+            let buffer = OffscreenBuffer::default();
+            match buffer.render_with_bounds(renderer, scale, rect, &elements) {
+                Ok((element, _sync, _data)) => {
+                    composited = Some(element.texture().clone());
                 }
                 Err(err) => {
                     warn!("error compositing pointer onto screenshot: {err:?}");
@@ -785,20 +780,19 @@ impl ScreenshotUi {
             }
         }
 
-        let (texture, rect) = tex_rect.unwrap_or_else(|| (screenshot.texture.clone(), rect));
-        // The size doesn't actually matter because we're not transforming anything.
-        let buf_rect = rect
-            .to_logical(1)
-            .to_buffer(1, Transform::Normal, &Size::from((1, 1)));
+        let region = match &composited {
+            Some(texture) => Rectangle::from_size(texture.size()),
+            // The size doesn't actually matter because we're not transforming anything.
+            None => rect
+                .to_logical(1)
+                .to_buffer(1, Transform::Normal, &Size::from((1, 1))),
+        };
+        let texture = composited.unwrap_or_else(|| screenshot.texture.clone());
 
-        let mapping = renderer
-            .copy_texture(&texture, buf_rect, Fourcc::Abgr8888)
-            .context("error copying texture")?;
-        let copy = renderer
-            .map_texture(&mapping)
-            .context("error mapping texture")?;
+        let pixels = copy_tty_texture_to_vec(renderer, &texture, region, Fourcc::Abgr8888)
+            .context("error reading back screenshot texture")?;
 
-        Ok((rect.size, copy.to_vec()))
+        Ok((rect.size, pixels))
     }
 
     pub fn binds(&self) -> impl Iterator<Item = &Bind> + Clone {
@@ -1119,48 +1113,47 @@ impl ScreenshotUi {
 }
 
 impl OutputScreenshot {
+    /// Builds an output screenshot from backend-agnostic textures.
+    ///
+    /// `renderer_context_id` is the type-erased context of the renderer that produced the
+    /// texture. `pointer` carries the pointer texture, the same context id, and its logical
+    /// location within the output.
     pub fn from_textures(
-        renderer: &mut GlesRenderer,
         scale: Scale<f64>,
-        texture: GlesTexture,
-        pointer: Option<(GlesTexture, Rectangle<i32, Physical>)>,
+        texture: TtyOffscreen,
+        renderer_context_id: ErasedContextId,
+        pointer: Option<(TtyOffscreen, ErasedContextId, Point<f64, Logical>)>,
     ) -> Self {
-        let buffer = PrimaryGpuTextureRenderElement(
-            TextureRenderElement::from_texture_buffer(
-                TextureBuffer::from_texture(
-                    renderer,
-                    texture.clone(),
+        let buffer = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+            TextureBuffer::from_tty_texture(
+                texture.clone(),
+                renderer_context_id,
+                scale,
+                Transform::Normal,
+                Vec::new(),
+            ),
+            (0., 0.),
+            1.,
+            None,
+            None,
+            Kind::Unspecified,
+        ));
+
+        let pointer = pointer.map(|(texture, renderer_context_id, location)| {
+            PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                TextureBuffer::from_tty_texture(
+                    texture,
+                    renderer_context_id,
                     scale,
                     Transform::Normal,
                     Vec::new(),
                 ),
-                (0., 0.),
+                location,
                 1.,
                 None,
                 None,
                 Kind::Unspecified,
-            )
-            .map_texture(crate::backend::tty::TtyOffscreen::Gles),
-        );
-
-        let pointer = pointer.map(|(texture, geo)| {
-            PrimaryGpuTextureRenderElement(
-                TextureRenderElement::from_texture_buffer(
-                    TextureBuffer::from_texture(
-                        renderer,
-                        texture,
-                        scale,
-                        Transform::Normal,
-                        Vec::new(),
-                    ),
-                    geo.to_f64().to_logical(scale).loc,
-                    1.,
-                    None,
-                    None,
-                    Kind::Unspecified,
-                )
-                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
-            )
+            ))
         });
 
         Self {
@@ -1168,6 +1161,16 @@ impl OutputScreenshot {
             buffer,
             pointer,
         }
+    }
+
+    /// The backend-agnostic screenshot texture.
+    pub fn texture(&self) -> &TtyOffscreen {
+        &self.texture
+    }
+
+    /// The pre-built render element for this screenshot.
+    pub fn render_element(&self) -> &PrimaryGpuTextureRenderElement {
+        &self.buffer
     }
 }
 
@@ -1207,11 +1210,11 @@ fn is_within_capture_button(
     (pos.x - xc) * (pos.x - xc) + (pos.y - yc) * (pos.y - yc) <= radius * radius
 }
 
-fn render_panel(
-    renderer: &mut GlesRenderer,
+fn render_panel<R: NiriRenderer>(
+    renderer: &mut R,
     scale: f64,
     text: &str,
-) -> anyhow::Result<TextureBuffer<GlesTexture>> {
+) -> anyhow::Result<TextureBuffer<TtyOffscreen>> {
     let _span = tracy_client::span!("screenshot_ui::render_panel");
 
     let padding: i32 = to_physical_precise_round(scale, PADDING);
@@ -1291,16 +1294,218 @@ fn render_panel(
     drop(cr);
 
     let data = surface.take_data().unwrap();
-    let buffer = TextureBuffer::from_memory(
+    let buffer = import_panel_texture(
         renderer,
         &data,
         Fourcc::Argb8888,
-        (width, height),
-        false,
+        Size::from((width, height)),
         scale,
-        Transform::Normal,
-        Vec::new(),
     )?;
 
     Ok(buffer)
+}
+
+/// Imports CPU pixels into a backend-agnostic texture for the active renderer.
+///
+/// The concrete renderer behind the TTY abstraction is used so a Vulkan session gets a
+/// `TtyOffscreen::Vulkan` texture and a GLES session keeps its `TtyOffscreen::Gles` texture.
+fn import_panel_texture<R: NiriRenderer>(
+    renderer: &mut R,
+    data: &[u8],
+    format: Fourcc,
+    size: Size<i32, Buffer>,
+    scale: f64,
+) -> anyhow::Result<TextureBuffer<TtyOffscreen>> {
+    if let Some(gles) = renderer.as_gles_renderer() {
+        let texture = gles
+            .import_memory(data, format, size, false)
+            .context("error importing panel texture")?;
+        let context_id = ContextId::erased(&gles.context_id());
+        return Ok(TextureBuffer::from_tty_texture(
+            TtyOffscreen::Gles(texture),
+            context_id,
+            scale,
+            Transform::Normal,
+            Vec::new(),
+        ));
+    }
+
+    #[cfg(feature = "vulkan")]
+    if let Some(vulkan) = renderer.as_vulkan_renderer() {
+        let texture = vulkan
+            .import_memory(data, format, size, false)
+            .context("error importing panel texture")?;
+        let context_id = ContextId::erased(&vulkan.context_id());
+        return Ok(TextureBuffer::from_tty_texture(
+            TtyOffscreen::Vulkan(texture),
+            context_id,
+            scale,
+            Transform::Normal,
+            Vec::new(),
+        ));
+    }
+
+    anyhow::bail!("renderer cannot import CPU textures")
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use niri_config::Config;
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Point, Rectangle, Scale, Size};
+
+    use super::*;
+    use crate::animation::Clock;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::{copy_tty_texture_to_vec, render_to_tty_texture};
+
+    /// Runs `test` on the first Vulkan device that can create a renderer, silently skipping when
+    /// there is no Vulkan loader/device/driver (CI without a GPU).
+    fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                test(&mut renderer);
+                return;
+            }
+        }
+    }
+
+    /// Bakes a red screenshot texture through the generic capture path.
+    fn red_screenshot(
+        renderer: &mut VulkanRenderer,
+        size: Size<i32, Physical>,
+    ) -> OutputScreenshot {
+        let color = SolidColorBuffer::new(size.to_f64().to_logical(1.), [1., 0., 0., 1.]);
+        let element = SolidColorRenderElement::from_buffer(
+            &color,
+            Point::from((0., 0.)),
+            1.,
+            Kind::Unspecified,
+        );
+
+        let (texture, context_id, _sync) = render_to_tty_texture(
+            renderer,
+            Rectangle::from_size(size),
+            Scale::from(1.),
+            &[element],
+        )
+        .expect("bake the screenshot texture");
+
+        OutputScreenshot::from_textures(Scale::from(1.), texture, context_id, None)
+    }
+
+    /// A screenshot captured into a `TtyOffscreen` must read back with the same pixels.
+    #[test]
+    fn vulkan_output_screenshot_reads_back() {
+        for_each_vulkan_renderer(|renderer| {
+            let size = Size::<i32, Physical>::from((4, 4));
+            let screenshot = red_screenshot(renderer, size);
+            assert!(
+                matches!(screenshot.texture(), TtyOffscreen::Vulkan(_)),
+                "the generic capture must produce a Vulkan texture"
+            );
+
+            let region = Rectangle::from_size(Size::<i32, smithay::utils::Buffer>::from((4, 4)));
+            let pixels = copy_tty_texture_to_vec(
+                renderer,
+                screenshot.texture(),
+                region,
+                smithay::backend::allocator::Fourcc::Abgr8888,
+            )
+            .expect("read the screenshot texture back");
+
+            assert_eq!(
+                &pixels[0..4],
+                &[255, 0, 0, 255],
+                "the screenshot texture did not read back red"
+            );
+        });
+    }
+
+    /// The screenshot UI must open and capture its selection on Vulkan without a compositor.
+    #[test]
+    fn vulkan_screenshot_ui_opens_and_captures() {
+        for_each_vulkan_renderer(|renderer| {
+            let output = Output::new(
+                String::from("test"),
+                smithay::output::PhysicalProperties {
+                    size: Size::from((100, 100)),
+                    subpixel: smithay::output::Subpixel::Unknown,
+                    make: String::from("niri"),
+                    model: String::from("test"),
+                    serial_number: String::new(),
+                },
+            );
+            let mode = smithay::output::Mode {
+                size: Size::from((8, 8)),
+                refresh: 60_000,
+            };
+            output.change_current_state(
+                Some(mode),
+                Some(Transform::Normal),
+                Some(smithay::output::Scale::Integer(1)),
+                None,
+            );
+
+            let size = Size::<i32, Physical>::from((8, 8));
+            let screenshot = red_screenshot(renderer, size);
+            let screenshots = HashMap::from([(
+                output.clone(),
+                [screenshot.clone(), screenshot.clone(), screenshot],
+            )]);
+
+            let mut ui = ScreenshotUi::new(
+                Clock::with_time(Duration::ZERO),
+                Rc::new(RefCell::new(Config::default())),
+            );
+
+            assert!(
+                ui.open(
+                    renderer,
+                    screenshots,
+                    output.clone(),
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                "the screenshot UI must open with a captured output"
+            );
+            assert!(ui.is_open());
+
+            let mut elements = Vec::new();
+            ui.render_output(&output, RenderTarget::Output, &mut |elem| {
+                elements.push(elem)
+            });
+            assert!(
+                !elements.is_empty(),
+                "the open screenshot UI must render elements"
+            );
+
+            let (selection_size, pixels) =
+                ui.capture(renderer).expect("capture the default selection");
+            assert_eq!(selection_size, Size::from((4, 4)));
+            assert_eq!(
+                &pixels[0..4],
+                &[255, 0, 0, 255],
+                "the captured selection did not read back red"
+            );
+
+            assert!(ui.close(), "the screenshot UI must close");
+        });
+    }
 }
