@@ -182,7 +182,14 @@ picked up without re-auditing.
    Still open: HDR output on Vulkan, and Vulkan paths for the remaining
    GLSL-only visuals (window/global/
    scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
-   magnified screenshot capture, screen transitions).
+   magnified screenshot capture, screen transitions). Global/scoped/window
+   shaders are blocked on better-smithay: their GLSL needs five samplers
+   (`niri_screen`, `niri_prev`, `niri_screen_prev`, `niri_buffer`,
+   `niri_source`) but `MAX_CUSTOM_TEXTURES` is 2 in the custom pixel pipeline.
+   The Vulkan side already compiles the sources, keys them like the GLES
+   registries and skips them with a warning until the Smithay descriptor
+   layouts/pool grow; the draw path also needs generic offscreen capture
+   textures.
 5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker
