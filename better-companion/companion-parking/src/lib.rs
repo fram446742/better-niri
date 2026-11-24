@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use companion_core::{load_json, save_json, ActionInfo, Context};
+use companion_core::{ActionInfo, Context, load_json, save_json};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 type Lot = BTreeMap<String, Value>;
 type Lots = BTreeMap<String, Lot>;

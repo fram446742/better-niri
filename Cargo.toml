@@ -159,7 +159,7 @@ xshell = "0.2.7"
 pkg-config = "0.3.34"
 
 [features]
-default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor", "effects", "navigation"]
+default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor", "effects", "navigation", "vulkan"]
 # Enables the agent seat, a second input seat for automation over IPC.
 agent = []
 # Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1 and the KDE
@@ -174,6 +174,11 @@ effects = []
 # zoom, locked center drag and move binds); grid overview and carousel gating is
 # still to come.
 navigation = []
+# Enables Vulkan renderer support: better-smithay's Vulkan backend/renderer is
+# compiled in, niri probes physical devices at startup, applies NIRI_RENDERER
+# (auto|gles|vulkan) and falls back to EGL/GLES with a logged reason.
+# `niri --check-vulkan` prints the resolved plan as JSON.
+vulkan = ["smithay/renderer_vulkan"]
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).

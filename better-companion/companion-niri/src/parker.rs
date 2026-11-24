@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 use companion_core::{ActionInfo, Context};
 use companion_parking::Parking;
 use niri_ipc::{Action, Request, Response, Window, Workspace, WorkspaceReferenceArg};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{Compositor, AUTO_WINDOWS, AUTO_WORKSPACES};
+use crate::{AUTO_WINDOWS, AUTO_WORKSPACES, Compositor};
 
 pub const DEFAULT_LOT: &str = "parker";
 

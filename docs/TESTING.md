@@ -43,7 +43,12 @@ Additional CI gates:
 - Headless visual tests (`niri-visual-tests`): the main geometry/behaviour gate
   for overview, grid, minimize placeholders, carousel and shader element bounds.
 - Build matrix: default features, `--no-default-features` (with the minimal
-  feature set), and `--features vulkan` once it exists.
+  feature set), `--no-default-features --features vulkan`, and
+  `--features vulkan` (default + Vulkan).
+- Vulkan readiness: `niri --check-vulkan` prints the resolved plan as JSON
+  (preference, active path, render-tree capability, per-device support and the
+  fallback reason). It does not need a running compositor, so it can run in CI
+  and on user machines when diagnosing drivers.
 
 Debug and release must both build; debug for tests, release for the performance
 smoke.

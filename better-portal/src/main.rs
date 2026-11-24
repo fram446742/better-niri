@@ -1,6 +1,6 @@
 use std::future::pending;
 
-use better_portal::{ScreenCastBackend, ScreenshotBackend, BUS_NAME, OBJECT_PATH};
+use better_portal::{BUS_NAME, OBJECT_PATH, ScreenCastBackend, ScreenshotBackend};
 
 fn main() -> anyhow::Result<()> {
     async_io::block_on(run())

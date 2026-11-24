@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use better_audio::{apply_once, config_path, Backend, Rule, Store};
+use better_audio::{Backend, Rule, Store, apply_once, config_path};
 
 fn usage() -> &'static str {
     "better-audio [--config PATH] [--pactl PATH] <command>\n\n\

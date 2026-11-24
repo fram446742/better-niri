@@ -27,6 +27,10 @@ pub struct Cli {
     /// on a TTY as your non-main compositor instance, to avoid messing up the global environment.
     #[arg(long)]
     pub session: bool,
+    /// Print the resolved renderer plan (including Vulkan device probe) and exit.
+    #[cfg(feature = "vulkan")]
+    #[arg(long)]
+    pub check_vulkan: bool,
     /// Command to run upon compositor startup.
     #[arg(last = true)]
     pub command: Vec<OsString>,

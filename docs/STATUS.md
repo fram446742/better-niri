@@ -203,8 +203,16 @@ picked up without re-auditing.
    features still open per app.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
-7. **Remaining built-in module features** — `vulkan`. `kde`, `cursor`,
-   `effects` and `navigation` are done. The vertical main axis is available
+7. **Built-in module features** — `vulkan` is wired at the readiness/selection
+   level: the `vulkan` Cargo feature (default on) compiles better-smithay's
+   `renderer_vulkan`, `niri --check-vulkan` probes Vulkan 1.3 devices and
+   reports whether `VulkanRenderer::new` succeeds per device, `NIRI_RENDERER`
+   (`auto`/`gles`/`vulkan`) is resolved into a plan and startup logs the
+   availability/fallback once. The probe has been validated on real hardware
+   (RADV, two usable devices). Remaining Vulkan work: make the render tree
+   generic over the renderer (it is typed over `GlesRenderer` today) so
+   `Path::Vulkan` can drive outputs, effects, screenshots and screencasts.
+   `kde`, `cursor`, `effects` and `navigation` are done. The vertical main axis is available
    globally, per output and per workspace; axis-aware wheel/gesture input
    (`axis_policy`), spatial-movement and move-grab mapping, touch-overview
    gestures and closing-window view offsets are ported. `effects`

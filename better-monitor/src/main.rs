@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use better_monitor::{apply, query_outputs, restore, snapshot, state_path, Store};
+use better_monitor::{Store, apply, query_outputs, restore, snapshot, state_path};
 
 fn usage() -> &'static str {
     "better-monitor [--socket PATH] <command>\n\n\

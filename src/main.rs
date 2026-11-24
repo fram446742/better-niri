@@ -70,6 +70,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
+    #[cfg(feature = "vulkan")]
+    if cli.check_vulkan {
+        let plan = niri::render_helpers::vulkan::startup_plan();
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+        return Ok(());
+    }
+
     if cli.session {
         // If we're starting as a session, assume that the intention is to start on a TTY unless
         // this is a WSL environment. Remove DISPLAY, WAYLAND_DISPLAY or WAYLAND_SOCKET from our
@@ -139,6 +146,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // Resolve and log the renderer plan once, before any backend starts.
+    #[cfg(feature = "vulkan")]
+    niri::render_helpers::vulkan::log_startup_plan();
 
     // Needs to be done before starting Tracy, so that it applies to Tracy's threads.
     niri::utils::signals::block_early().unwrap();

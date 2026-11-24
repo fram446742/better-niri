@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use better_shot::{run, Mode, Options};
+use better_shot::{Mode, Options, run};
 
 fn usage() -> &'static str {
     "better-shot [--socket PATH] <ui|screen|window> [options]\n\n\

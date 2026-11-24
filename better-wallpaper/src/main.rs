@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use better_wallpaper::{apply_once, command_template, state_path, watch, Scene, Store};
+use better_wallpaper::{Scene, Store, apply_once, command_template, state_path, watch};
 
 fn usage() -> &'static str {
     "better-wallpaper [--socket PATH] <command>\n\n\

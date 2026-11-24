@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use companion_core::{load_json, save_json, ActionInfo, Context, Step, AUTO_WINDOWS};
+use companion_core::{AUTO_WINDOWS, ActionInfo, Context, Step, load_json, save_json};
 use companion_parking::Parking;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Match {
@@ -110,30 +110,30 @@ fn bool_is(value: &Value, field: &str, want: bool) -> bool {
 }
 
 pub fn rule_matches(matcher: &Match, window: &Value) -> bool {
-    if let Some(app_id) = &matcher.app_id {
-        if !contains(window, "app_id", app_id) {
-            return false;
-        }
+    if let Some(app_id) = &matcher.app_id
+        && !contains(window, "app_id", app_id)
+    {
+        return false;
     }
-    if let Some(title) = &matcher.title {
-        if !contains(window, "title", title) {
-            return false;
-        }
+    if let Some(title) = &matcher.title
+        && !contains(window, "title", title)
+    {
+        return false;
     }
-    if let Some(workspace) = matcher.workspace {
-        if window.get("workspace_id").and_then(Value::as_u64) != Some(workspace) {
-            return false;
-        }
+    if let Some(workspace) = matcher.workspace
+        && window.get("workspace_id").and_then(Value::as_u64) != Some(workspace)
+    {
+        return false;
     }
-    if let Some(floating) = matcher.is_floating {
-        if !bool_is(window, "is_floating", floating) {
-            return false;
-        }
+    if let Some(floating) = matcher.is_floating
+        && !bool_is(window, "is_floating", floating)
+    {
+        return false;
     }
-    if let Some(minimized) = matcher.is_minimized {
-        if !bool_is(window, "is_minimized", minimized) {
-            return false;
-        }
+    if let Some(minimized) = matcher.is_minimized
+        && !bool_is(window, "is_minimized", minimized)
+    {
+        return false;
     }
     true
 }
@@ -394,9 +394,11 @@ mod tests {
         )
         .unwrap();
         let listed = reloaded.call("list", &Value::Null).unwrap();
-        assert!(listed["rules"]["floating"]["match"]["is_floating"]
-            .as_bool()
-            .unwrap());
+        assert!(
+            listed["rules"]["floating"]["match"]["is_floating"]
+                .as_bool()
+                .unwrap()
+        );
 
         reloaded
             .call("remove", &json!({ "name": "floating" }))

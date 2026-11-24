@@ -80,6 +80,9 @@ jobs:
       - name: Check (just xdp-gnome-screencast)
         run: cargo check --no-default-features --features xdp-gnome-screencast
 
+      - name: Check (just vulkan)
+        run: cargo check --no-default-features --features vulkan
+
       - name: Check
         run: cargo check
 

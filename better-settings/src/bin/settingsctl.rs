@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use better_settings::{config_path, current, normalize, patch, save, Edit, CATALOG};
+use better_settings::{CATALOG, Edit, config_path, current, normalize, patch, save};
 
 fn usage() -> &'static str {
     "better-settingsctl [--config PATH] <command>\n\n\

@@ -16,18 +16,18 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 
-use companion_core::{ActionInfo, Context};
 pub use companion_core::{AUTO_WINDOWS, AUTO_WORKSPACES};
+use companion_core::{ActionInfo, Context};
 use companion_parking::Parking;
-use niri_ipc::socket::{Socket, SOCKET_PATH_ENV};
+use niri_ipc::socket::{SOCKET_PATH_ENV, Socket};
 use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod parker;
 mod swallow;
 mod windows;
-pub use parker::{Parker, DEFAULT_LOT};
-pub use swallow::{proc_parent, Swallow, SWALLOW_LOT};
+pub use parker::{DEFAULT_LOT, Parker};
+pub use swallow::{SWALLOW_LOT, Swallow, proc_parent};
 pub use windows::Windows;
 
 pub struct Compositor {
@@ -280,7 +280,7 @@ pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io
         Ok(other) => {
             return Err(io::Error::other(format!(
                 "unexpected event-stream response: {other:?}"
-            )))
+            )));
         }
         Err(message) => return Err(io::Error::other(message)),
     }
