@@ -224,6 +224,10 @@ impl Cli {
                 "--merge" => cli.merge = true,
                 "--replace" => cli.replace = true,
                 "--json" => (),
+                "--version" | "-V" => {
+                    println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                    std::process::exit(0);
+                }
                 "--help" | "-h" => {
                     print!("{}", usage());
                     std::process::exit(0);

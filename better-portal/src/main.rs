@@ -1,6 +1,10 @@
 use std::future::pending;
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     async_io::block_on(run())
 }
 

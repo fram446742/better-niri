@@ -15,6 +15,10 @@ fn main() -> ExitCode {
 }
 
 fn run_cli() -> Result<(), String> {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let parsed = match cli::parse(std::env::args().skip(1))? {
         CliAction::Help => {
             print!("{}", cli::USAGE);
