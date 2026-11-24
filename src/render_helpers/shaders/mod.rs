@@ -1168,7 +1168,7 @@ fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str])
 /// source. Must be given the same uniforms as the GLES compile, including the
 /// six blend-space ones that `hdr.frag` references.
 #[cfg(feature = "vulkan")]
-fn compile_vulkan_program(
+pub(super) fn compile_vulkan_program(
     renderer: &mut VulkanRenderer,
     src: &str,
     uniforms: &[UniformName<'_>],

@@ -81,6 +81,24 @@ pub fn capture_framebuffer_region_vulkan(
     )
 }
 
+/// Runs one fullscreen/region global shader pass on Vulkan: captures the
+/// frame region into `capture`, then draws `program` over the same region
+/// sampling the capture as `niri_screen`.
+#[cfg(feature = "vulkan")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_global_pass_vulkan(
+    frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+    region: Rectangle<i32, Physical>,
+    capture: &smithay::backend::renderer::vulkan::VulkanTexture,
+    program: &smithay::backend::renderer::vulkan::VulkanPixelProgram,
+    uniforms: &[smithay::backend::renderer::vulkan::CustomUniform<'_>],
+    alpha: f32,
+) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+    capture_framebuffer_region_vulkan(frame, region, capture)?;
+    let textures = [("niri_screen", capture)];
+    frame.render_custom(program, region, &[region], uniforms, &textures, alpha)
+}
+
 #[cfg(all(test, feature = "vulkan"))]
 mod vulkan_tests {
     use smithay::backend::allocator::Fourcc;
@@ -91,6 +109,92 @@ mod vulkan_tests {
     use smithay::utils::{Rectangle, Size, Transform};
 
     use super::capture_framebuffer_region_vulkan;
+
+    #[test]
+    fn capture_then_global_shader_pass_reads_back() {
+        use smithay::backend::renderer::vulkan::{
+            CustomUniform, CustomUniformValue, VulkanRenderer,
+        };
+        use smithay::backend::vulkan::version::Version;
+        use smithay::backend::vulkan::{Instance, PhysicalDevice};
+
+        use super::run_global_pass_vulkan;
+
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            let program = match super::super::shaders::compile_vulkan_program(
+                &mut renderer,
+                "void main() { vec4 c = texture2D(niri_screen, niri_v_coords); gl_FragColor = vec4(c.g, 0.0, 0.0, 1.0); }",
+                &[],
+                &["niri_screen"],
+            ) {
+                Ok(program) => program,
+                Err(_) => continue,
+            };
+            let size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((8, 8));
+            let full = Rectangle::from_size(output_size);
+
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, size)
+                .expect("target");
+            let mut capture = renderer
+                .create_buffer(Fourcc::Argb8888, size)
+                .expect("capture");
+            let mut fb = renderer.bind(&mut target).expect("bind");
+            let mut frame = renderer
+                .render(&mut fb, output_size, Transform::Normal)
+                .expect("frame");
+            frame
+                .clear(Color32F::new(0.0, 1.0, 0.0, 1.0), &[full])
+                .expect("clear");
+            let mut uniforms = vec![
+                CustomUniform {
+                    name: "niri_size",
+                    value: CustomUniformValue::Vec2([8.0, 8.0]),
+                },
+                CustomUniform {
+                    name: "niri_scale",
+                    value: CustomUniformValue::Float(1.0),
+                },
+            ];
+            for (name, value) in [
+                ("niri_hdr_pq", 0.0),
+                ("niri_ref_lum_scale", 1.0),
+                ("niri_linear", 0.0),
+                ("niri_linear_scale", 0.0),
+                ("niri_linear_to_ref", 0.0),
+                ("niri_hdr_to_sdr", 0.0),
+            ] {
+                uniforms.push(CustomUniform {
+                    name,
+                    value: CustomUniformValue::Float(value),
+                });
+            }
+            run_global_pass_vulkan(&mut frame, full, &capture, &program, &uniforms, 1.0)
+                .expect("global pass");
+            frame.finish().expect("finish");
+
+            let mapping = renderer
+                .copy_framebuffer(&fb, Rectangle::from_size(size), Fourcc::Argb8888)
+                .expect("copy");
+            let pixels = renderer.map_texture(&mapping).expect("map");
+            assert_eq!(&pixels[0..4], &[0, 0, 255, 255], "expected red");
+            eprintln!(
+                "Vulkan capture + global shader pass OK on {}",
+                device.name()
+            );
+            return;
+        }
+    }
 
     #[test]
     fn captures_a_framebuffer_region_into_a_vulkan_texture() {
