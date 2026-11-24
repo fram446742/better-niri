@@ -9,7 +9,7 @@ use std::process::Command;
 
 use super::dump::{Dump, DumpPort, parse_dump};
 use super::{AudioBackend, BackendKind};
-use crate::{Sink, Stream, resolve_sink};
+use crate::{LinkInfo, Sink, Source, Stream, resolve_sink};
 
 #[derive(Debug, Clone)]
 pub struct WpctlBackend {
@@ -88,12 +88,31 @@ impl AudioBackend for WpctlBackend {
         Ok(self.dump()?.streams)
     }
 
+    fn sources(&self) -> Result<Vec<Source>, String> {
+        Ok(self.dump()?.sources)
+    }
+
+    fn links(&self) -> Result<Vec<LinkInfo>, String> {
+        Ok(self.dump()?.links())
+    }
+
     fn default_sink(&self) -> Result<Option<String>, String> {
         match self.wpctl(&["inspect", "@DEFAULT_AUDIO_SINK@"]) {
             Ok(text) => Ok(parse_inspect_node_name(&text)),
             // WirePlumber may be absent; a missing default is not fatal.
             Err(_) => Ok(None),
         }
+    }
+
+    fn default_source(&self) -> Result<Option<String>, String> {
+        match self.wpctl(&["inspect", "@DEFAULT_AUDIO_SOURCE@"]) {
+            Ok(text) => Ok(parse_inspect_node_name(&text)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn set_default_source(&self, source: &str) -> Result<(), String> {
+        self.wpctl(&["set-default", source]).map(|_| ())
     }
 
     fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String> {

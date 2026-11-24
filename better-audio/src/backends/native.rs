@@ -18,7 +18,7 @@ use pw::spa;
 use spa::pod::Pod;
 
 use super::{AudioBackend, BackendKind};
-use crate::{Sink, Stream, resolve_sink};
+use crate::{LinkInfo, Sink, Source, Stream, resolve_sink};
 
 #[derive(Debug, Default, Clone)]
 struct RawNode {
@@ -98,6 +98,38 @@ impl RawSnapshot {
         sinks
     }
 
+    fn sources(&self) -> Vec<Source> {
+        let mut sources: Vec<Source> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                node.props
+                    .get("media.class")
+                    .is_some_and(|class| class.starts_with("Audio/Source"))
+            })
+            .map(|(id, node)| {
+                let name = node
+                    .props
+                    .get("node.name")
+                    .cloned()
+                    .unwrap_or_else(|| format!("source {id}"));
+                let description = node
+                    .props
+                    .get("node.description")
+                    .or_else(|| node.props.get("node.nick"))
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
+                Source {
+                    id: *id,
+                    name,
+                    description,
+                }
+            })
+            .collect();
+        sources.sort_by_key(|source| source.id);
+        sources
+    }
+
     fn streams(&self) -> Vec<Stream> {
         let sink_ids: HashSet<u32> = self.sinks().into_iter().map(|sink| sink.id).collect();
         let mut streams: Vec<Stream> = self
@@ -117,6 +149,7 @@ impl RawSnapshot {
                 .or_else(|| node.props.get("node.name"))
                 .cloned()
                 .unwrap_or_else(|| format!("stream {id}"));
+                let binary = node.props.get("application.process.binary").cloned();
                 let media_name = node.props.get("media.name").cloned().unwrap_or_default();
                 let sink_id = self
                     .links
@@ -128,6 +161,7 @@ impl RawSnapshot {
                     id: *id,
                     sink_id,
                     app,
+                    binary,
                     media_name,
                     volume: node.volume,
                     mute: node.mute,
@@ -139,14 +173,34 @@ impl RawSnapshot {
     }
 
     fn default_sink(&self) -> Option<String> {
+        self.metadata_name("default.audio.sink")
+    }
+
+    fn default_source(&self) -> Option<String> {
+        self.metadata_name("default.audio.source")
+            .or_else(|| self.metadata_name("default.configured.audio.source"))
+    }
+
+    fn metadata_name(&self, key: &str) -> Option<String> {
         let metadata = self.metadata.get(&self.default_metadata?)?;
-        let value = metadata.get("default.audio.sink")?;
+        let value = metadata.get(key)?;
         let parsed: serde_json::Value = serde_json::from_str(value).ok()?;
         parsed
             .get("name")
             .and_then(serde_json::Value::as_str)
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
+    }
+
+    fn links(&self) -> Vec<LinkInfo> {
+        self.links
+            .iter()
+            .map(|link| LinkInfo {
+                id: link.id,
+                output_node: link.output_node,
+                input_node: link.input_node,
+            })
+            .collect()
     }
 }
 
@@ -401,8 +455,20 @@ impl AudioBackend for NativeBackend {
         Ok(Session::open()?.snapshot()?.streams())
     }
 
+    fn sources(&self) -> Result<Vec<Source>, String> {
+        Ok(Session::open()?.snapshot()?.sources())
+    }
+
     fn default_sink(&self) -> Result<Option<String>, String> {
         Ok(Session::open()?.snapshot()?.default_sink())
+    }
+
+    fn default_source(&self) -> Result<Option<String>, String> {
+        Ok(Session::open()?.snapshot()?.default_source())
+    }
+
+    fn links(&self) -> Result<Vec<LinkInfo>, String> {
+        Ok(Session::open()?.snapshot()?.links())
     }
 
     fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String> {
@@ -499,30 +565,13 @@ impl AudioBackend for NativeBackend {
     }
 
     fn set_default_sink(&self, sink: &str) -> Result<(), String> {
-        let session = Session::open()?;
-        let snapshot = session.snapshot()?;
-        let id = snapshot
-            .default_metadata
-            .ok_or_else(|| "PipeWire has no `default` metadata object".to_owned())?;
-        let proxies = session.metadata_proxies.borrow();
-        let metadata = proxies
-            .get(&id)
-            .ok_or_else(|| "cannot bind the `default` metadata object".to_owned())?;
-        let value = serde_json::json!({ "name": sink }).to_string();
-        metadata.set_property(
-            0,
-            "default.audio.sink",
-            Some("Spa:String:JSON"),
-            Some(&value),
-        );
-        metadata.set_property(
-            0,
-            "default.configured.audio.sink",
-            Some("Spa:String:JSON"),
-            Some(&value),
-        );
-        drop(proxies);
-        session.sync()
+        self.set_default_metadata("default.audio.sink", sink)?;
+        self.set_default_metadata("default.configured.audio.sink", sink)
+    }
+
+    fn set_default_source(&self, source: &str) -> Result<(), String> {
+        self.set_default_metadata("default.audio.source", source)?;
+        self.set_default_metadata("default.configured.audio.source", source)
     }
 
     fn set_stream_volume(&self, stream_id: u32, volume: f32) -> Result<(), String> {
@@ -535,6 +584,22 @@ impl AudioBackend for NativeBackend {
 }
 
 impl NativeBackend {
+    fn set_default_metadata(&self, key: &str, value_name: &str) -> Result<(), String> {
+        let session = Session::open()?;
+        let snapshot = session.snapshot()?;
+        let id = snapshot
+            .default_metadata
+            .ok_or_else(|| "PipeWire has no `default` metadata object".to_owned())?;
+        let proxies = session.metadata_proxies.borrow();
+        let metadata = proxies
+            .get(&id)
+            .ok_or_else(|| "cannot bind the `default` metadata object".to_owned())?;
+        let value = serde_json::json!({ "name": value_name }).to_string();
+        metadata.set_property(0, key, Some("Spa:String:JSON"), Some(&value));
+        drop(proxies);
+        session.sync()
+    }
+
     fn set_stream_props(
         &self,
         stream_id: u32,
@@ -737,5 +802,43 @@ mod tests {
             link_factory: None,
         };
         assert_eq!(snapshot.default_sink().as_deref(), Some("alsa_output.hdmi"));
+    }
+
+    #[test]
+    fn snapshot_exposes_sources_and_default_source() {
+        let mut snapshot = RawSnapshot {
+            nodes: HashMap::new(),
+            ports: Vec::new(),
+            links: Vec::new(),
+            metadata: HashMap::new(),
+            default_metadata: Some(40),
+            link_factory: None,
+        };
+        snapshot.nodes.insert(
+            7,
+            RawNode {
+                props: BTreeMap::from([
+                    ("media.class".to_owned(), "Audio/Source".to_owned()),
+                    ("node.name".to_owned(), "alsa_input.usb-mic".to_owned()),
+                    ("node.description".to_owned(), "USB Mic".to_owned()),
+                ]),
+                volume: None,
+                mute: None,
+            },
+        );
+        snapshot.metadata.insert(
+            40,
+            BTreeMap::from([(
+                "default.audio.source".to_owned(),
+                r#"{"name":"alsa_input.usb-mic"}"#.to_owned(),
+            )]),
+        );
+        let sources = snapshot.sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "alsa_input.usb-mic");
+        assert_eq!(
+            snapshot.default_source().as_deref(),
+            Some("alsa_input.usb-mic")
+        );
     }
 }

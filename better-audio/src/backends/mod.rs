@@ -19,7 +19,7 @@ pub mod wpctl;
 #[cfg(feature = "native")]
 pub mod native;
 
-use crate::{Sink, Stream};
+use crate::{LinkInfo, Sink, Source, Stream};
 
 /// A backend the user can ask for with `--backend`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,10 +88,29 @@ pub trait AudioBackend {
     fn streams(&self) -> Result<Vec<Stream>, String>;
     fn default_sink(&self) -> Result<Option<String>, String>;
 
+    /// Capture devices. Backends that cannot enumerate them return an empty
+    /// list, so the rest of the tool keeps working.
+    fn sources(&self) -> Result<Vec<Source>, String> {
+        Ok(Vec::new())
+    }
+
+    fn default_source(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// Links between nodes, for `diagnose`. Optional.
+    fn links(&self) -> Result<Vec<LinkInfo>, String> {
+        Ok(Vec::new())
+    }
+
     fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String>;
     fn set_default_sink(&self, sink: &str) -> Result<(), String>;
     fn set_stream_volume(&self, stream_id: u32, volume: f32) -> Result<(), String>;
     fn set_stream_mute(&self, stream_id: u32, mute: bool) -> Result<(), String>;
+
+    fn set_default_source(&self, _source: &str) -> Result<(), String> {
+        Err("this backend cannot set the default source".to_owned())
+    }
 
     /// Verifies that the backend can talk to a server. Used by backend
     /// selection; the default reads sinks.
