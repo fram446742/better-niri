@@ -40,7 +40,8 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 
 use crate::geom::{Rotation, Size};
 use crate::images::{self, FileStamp, ImageCache, needs_reload};
-use crate::{Scene, active_workspaces, resolve};
+use crate::schedule::{FRAME_MS, TransitionState};
+use crate::{Scene, active_workspaces, resolve_at};
 
 /// Layer-shell namespace, visible in compositor debugging tools.
 pub const NAMESPACE: &str = "better-wallpaper";
@@ -166,6 +167,8 @@ struct Wallpaper {
     active: BTreeMap<String, String>,
     cache: ImageCache,
     surfaces: Vec<Surface>,
+    frame_sender: Sender<()>,
+    frame_pending: bool,
     exit: bool,
 }
 
@@ -182,6 +185,10 @@ struct Surface {
     current_buffer: Size,
     current_scale: u32,
     current_stamp: Option<FileStamp>,
+    /// Pixels currently on screen (the target of the last completed draw).
+    last_pixels: Option<Vec<u8>>,
+    /// An active cross-fade towards `current`.
+    transition: Option<TransitionState>,
     /// A redraw was requested but could not commit yet.
     pending: bool,
 }
@@ -219,6 +226,7 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
         None => BTreeMap::new(),
     };
 
+    let (frame_sender, frame_receiver) = channel::<()>();
     let mut state = Wallpaper {
         registry_state: RegistryState::new(&globals),
         compositor,
@@ -229,6 +237,8 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
         active,
         cache: ImageCache::new(),
         surfaces: Vec::new(),
+        frame_sender,
+        frame_pending: false,
         exit: false,
     };
 
@@ -254,6 +264,32 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
         .map_err(|err| NativeError::Failed(format!("cannot create event loop: {err}")))?;
     let handle = event_loop.handle();
     let signal = event_loop.get_signal();
+
+    // Cross-fade frames are driven by a self-rearming one-shot timer: while no
+    // animation runs, the loop does not wake at the refresh rate.
+    let frame_loop = handle.clone();
+    let frame_sender = state.frame_sender.clone();
+    handle
+        .insert_source(frame_receiver, move |event, _, state: &mut Wallpaper| {
+            if matches!(event, ChannelEvent::Closed) {
+                state.exit = true;
+                return;
+            }
+            state.step_transitions();
+            if state.has_transitions() {
+                let sender = frame_sender.clone();
+                if let Err(err) = frame_loop.insert_source(
+                    Timer::from_duration(Duration::from_millis(FRAME_MS)),
+                    move |_, _, _| {
+                        let _ = sender.send(());
+                        TimeoutAction::Drop
+                    },
+                ) {
+                    eprintln!("better-wallpaper: cannot schedule a transition frame: {err}");
+                }
+            }
+        })
+        .map_err(|err| NativeError::Failed(format!("cannot register frame source: {err}")))?;
 
     handle
         .insert_source(
@@ -446,6 +482,8 @@ impl Wallpaper {
             current_buffer: Size::default(),
             current_scale: 0,
             current_stamp: None,
+            last_pixels: None,
+            transition: None,
             pending: false,
         });
     }
@@ -464,7 +502,8 @@ impl Wallpaper {
             .as_deref()
             .and_then(|name| self.active.get(name))
             .map(String::as_str);
-        let path = resolve(&self.scene, workspace).map(PathBuf::from);
+        let (now, minute) = crate::local_now();
+        let path = resolve_at(&self.scene, workspace, minute, now as u64).map(PathBuf::from);
         Some((surface.logical, self.scale_of(&surface.output), path))
     }
 
@@ -510,7 +549,82 @@ impl Wallpaper {
             },
             None => images::render_solid(buffer, FALLBACK_COLOR),
         };
+        let switching = self.surfaces[index].current != path;
+        let transition = if switching {
+            self.scene.transition
+        } else {
+            None
+        };
+        let previous_pixels = self.surfaces[index].last_pixels.clone();
+        if let Some(spec) = transition
+            && spec.duration_ms > 0
+            && previous_pixels
+                .as_ref()
+                .is_some_and(|previous| previous.len() == pixels.len())
+        {
+            let from = previous_pixels.unwrap_or_default();
+            if from.len() == pixels.len() {
+                // Keep the old image on screen and animate towards the new one.
+                let surface = &mut self.surfaces[index];
+                surface.transition = Some(TransitionState::new(spec, from, pixels));
+                surface.current = path;
+                surface.current_buffer = buffer;
+                surface.current_scale = scale;
+                surface.pending = false;
+                self.schedule_frames();
+                return;
+            }
+        }
         self.commit(index, scale, buffer, &pixels, path);
+        if let Some(surface) = self.surfaces.get_mut(index) {
+            surface.last_pixels = Some(pixels);
+        }
+    }
+
+    fn has_transitions(&self) -> bool {
+        self.surfaces
+            .iter()
+            .any(|surface| surface.transition.is_some())
+    }
+
+    /// Asks the event loop for a frame if one is not already scheduled.
+    fn schedule_frames(&mut self) {
+        if self.frame_pending {
+            return;
+        }
+        self.frame_pending = true;
+        let _ = self.frame_sender.send(());
+    }
+
+    /// Advances every active cross-fade by one frame and commits the blend.
+    fn step_transitions(&mut self) {
+        self.frame_pending = false;
+        for index in 0..self.surfaces.len() {
+            if self.surfaces[index].transition.is_none() {
+                continue;
+            }
+            let buffer = self.surfaces[index].current_buffer;
+            let scale = self.surfaces[index].current_scale;
+            let path = self.surfaces[index].current.clone();
+            let frame = self.surfaces[index]
+                .transition
+                .as_mut()
+                .map(|transition| transition.advance(FRAME_MS));
+            let Some(frame) = frame else {
+                continue;
+            };
+            self.commit(index, scale, buffer, &frame, path);
+            let Some(surface) = self.surfaces.get_mut(index) else {
+                continue;
+            };
+            if surface
+                .transition
+                .as_ref()
+                .is_some_and(|transition| transition.done())
+            {
+                surface.last_pixels = surface.transition.take().map(|transition| transition.to);
+            }
+        }
     }
 
     fn commit(

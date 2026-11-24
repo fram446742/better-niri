@@ -21,6 +21,7 @@ dependencies = [
  "calloop",
  "calloop-wayland-source",
  "image",
+ "libc",
  "niri-ipc",
  "serde",
  "serde_json",
