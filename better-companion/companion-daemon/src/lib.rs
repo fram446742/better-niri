@@ -35,9 +35,14 @@ pub fn build_registry_with_parking(
         parking.clone(),
         companion_niri::Compositor::from_env(),
     ));
-    registry.register(companion_niri::Windows::new(
-        companion_niri::Compositor::from_env(),
-    ));
+    let windows = companion_niri::Windows::new(companion_niri::Compositor::from_env());
+    let stage = companion_niri::Stage::new(parking.clone(), companion_niri::Compositor::from_env());
+    let scratchpad =
+        companion_niri::Scratchpad::new(parking.clone(), companion_niri::Compositor::from_env());
+    registry.register(stage.clone());
+    registry.register(scratchpad.clone());
+    registry.register(windows.clone());
+    registry.register(companion_niri::Nsticky::new(stage, scratchpad, windows));
     registry.register(companion_niri::Compositor::from_env());
     registry.register(companion_rules::Rules::from_state_dir(parking.clone())?);
     registry.register(companion_niri::Swallow::from_state_dir(
@@ -173,6 +178,9 @@ mod tests {
                 assert!(contexts.contains_key("system"));
                 assert!(contexts.contains_key("compositor"));
                 assert!(contexts.contains_key("parker"));
+                assert!(contexts.contains_key("stage"));
+                assert!(contexts.contains_key("scratchpad"));
+                assert!(contexts.contains_key("nsticky"));
                 assert!(contexts.contains_key("rules"));
                 assert!(contexts.contains_key("windows"));
                 assert!(contexts.contains_key("session"));
@@ -215,10 +223,13 @@ mod tests {
                 "compositor",
                 "hooks",
                 "monitor",
+                "nsticky",
                 "parker",
                 "parking",
                 "rules",
+                "scratchpad",
                 "session",
+                "stage",
                 "swallow",
                 "system",
                 "wallpaper",

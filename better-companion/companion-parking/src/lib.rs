@@ -1,9 +1,10 @@
 //! Parking lots: named buckets of parked items with a JSON value each.
 //!
-//! This is the bounded context that absorbs the nsticky/staged-window workflow:
-//! a compositor-side helper parks a window or workspace under an id, and later
-//! unparks it from the same lot. The daemon only stores the state; the
-//! compositor decides what parking means for a window.
+//! This is the bounded context shared by the window workflows: `parker.*` parks
+//! a window or workspace, `stage.*` records staged windows, `scratchpad.*`
+//! records named slots and `swallow.*` records terminal/child pairs. The daemon
+//! only stores the state; the compositor-side contexts decide what parking means
+//! for a window (minimizing it today) and perform the niri actions.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
