@@ -1,0 +1,221 @@
+# Maintainer: Better Niri packaging <packaging@better-niri.invalid>
+#
+# niri-better packages the Better Niri integration branch:
+#   - the niri compositor built with its default Cargo features (including the
+#     Vulkan renderer and the built-in ScreenCast/Screenshot portal backend);
+#   - the companion applications that live in the same repository
+#     (better-portal, better-companion, better-shot, better-monitor,
+#     better-session, better-wallpaper, better-audio, better-settings,
+#     better-sidepanels);
+#   - the niri session, desktop, portal, systemd user and D-Bus service files.
+#
+# The package installs the same `niri` binary and niri-session as the official
+# `niri` package, therefore it conflicts with it and provides `niri`.
+#
+# This is a pinned source package. Bump _commit together with _tag/pkgver when
+# releasing; niri-better-git in packaging/aur tracks the branch instead.
+
+pkgname=niri-better
+_pkgname=better-niri
+pkgver=26.4.0.elite
+pkgrel=1
+_commit=35c0e54bdde868c35da43356740a479e6d8d199b
+pkgdesc="Scrollable-tiling Wayland compositor with the Better Desktop companion apps"
+arch=(x86_64 aarch64)
+url="https://github.com/fram446742/better-niri"
+license=(GPL-3.0-or-later)
+depends=(
+  cairo
+  gcc-libs
+  glib2
+  glibc
+  gtk4
+  libdisplay-info
+  libdrm
+  libglvnd
+  libinput
+  libpipewire
+  libxkbcommon
+  mesa
+  pango
+  pixman
+  seatd
+  systemd-libs
+  vulkan-icd-loader
+  wayland
+)
+makedepends=(clang git pkgconf rust)
+optdepends=(
+  'xdg-desktop-portal: portal broker for niri.portal and better.portal'
+  'xdg-desktop-portal-gtk: file chooser, notifications and other fallback portals'
+  'xdg-desktop-portal-gnome: fallback ScreenCast backend'
+  'dbus: dbus-update-activation-environment used by niri-session'
+  'systemd: systemctl, loginctl and busctl for session, idle and orientation integration'
+  'pipewire: audio and screencasting server'
+  'wireplumber: PipeWire session manager and wpctl'
+  'libpulse: pactl backend for better-audio and the better-sidepanels volume module'
+  'playerctl: media module in better-sidepanels'
+  'swaybg: default wallpaper command for better-wallpaper'
+  'satty: interactive annotation for better-shot --annotate'
+  'wl-clipboard: wl-copy/wl-paste for better-shot --copy'
+  'libnotify: notify-send for user hooks and scripts'
+  'alacritty: terminal in the default niri configuration'
+  'fuzzel: application launcher in the default niri configuration'
+  'mako: notification daemon'
+  'waybar: panel used by the default niri configuration'
+  'swaylock: screen locker in the default niri configuration'
+  'polkit-gnome: authentication agent for privileged applications'
+  'xwayland-satellite: run X11 applications in XWayland'
+  'vulkan-radeon: Vulkan driver for AMD GPUs'
+  'vulkan-intel: Vulkan driver for Intel GPUs'
+  'nvidia-utils: GL/Vulkan driver for NVIDIA GPUs'
+)
+provides=("niri=$pkgver" "niri-elite=$pkgver" wayland-compositor xdg-desktop-portal-impl)
+conflicts=(niri niri-git niri-elite niri-elite-git)
+# niri records panic backtraces; its release profile only carries line tables,
+# so stripping would make crash reports useless.
+options=(!strip)
+
+_app_manifests=(
+  better-portal
+  better-companion
+  better-monitor
+  better-session
+  better-shot
+  better-wallpaper
+  better-settings
+  better-audio
+  better-sidepanels
+)
+
+_bins=(
+  niri
+  better-portal
+  better-portal-picker
+  better-companion
+  companionctl
+  better-monitor
+  better-session
+  better-shot
+  better-wallpaper
+  better-settings
+  better-settingsctl
+  better-audio
+  better-sidepanels
+)
+
+source=("${_pkgname}::git+${url}.git#commit=${_commit}")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "${_pkgname}"
+
+  # Keep all crates and git checkouts inside srcdir instead of the build user's
+  # home directory.
+  export CARGO_HOME="${srcdir}/cargo-home"
+  cargo fetch --locked
+  for manifest in "${_app_manifests[@]}"; do
+    cargo fetch --locked --manifest-path "${manifest}/Cargo.toml"
+  done
+}
+
+build() {
+  cd "${_pkgname}"
+
+  export CARGO_HOME="${srcdir}/cargo-home"
+  export CARGO_TARGET_DIR="${srcdir}/target"
+  # bindgen (pipewire/SPA bindings) does not always find libclang on its own.
+  export LIBCLANG_PATH=/usr/lib
+  export NIRI_BUILD_COMMIT="$(git rev-parse --short HEAD)"
+
+  # Default features on purpose: the package must match what a normal
+  # `cargo build --release` of this branch produces.
+  cargo build --frozen --release -p niri
+
+  local manifest
+  for manifest in "${_app_manifests[@]}"; do
+    cargo build --frozen --release --manifest-path "${manifest}/Cargo.toml"
+  done
+}
+
+package() {
+  cd "${_pkgname}"
+
+  local target="${srcdir}/target/release"
+  local bin
+  for bin in "${_bins[@]}"; do
+    install -Dm755 "${target}/${bin}" "${pkgdir}/usr/bin/${bin}"
+  done
+
+  install -Dm755 resources/niri-session "${pkgdir}/usr/bin/niri-session"
+  install -Dm644 resources/niri.desktop "${pkgdir}/usr/share/wayland-sessions/niri.desktop"
+
+  # niri and better-portal are both portal implementations. The descriptors are
+  # installed side by side; niri's per-desktop portals.conf selects niri's
+  # built-in backend by default. better-portal's example portals.conf is shipped
+  # in the docs so users can select `better` explicitly.
+  install -Dm644 resources/niri.portal "${pkgdir}/usr/share/xdg-desktop-portal/portals/niri.portal"
+  install -Dm644 resources/niri-portals.conf "${pkgdir}/usr/share/xdg-desktop-portal/niri-portals.conf"
+  install -Dm644 better-portal/better.portal "${pkgdir}/usr/share/xdg-desktop-portal/portals/better.portal"
+
+  install -Dm644 resources/niri.service "${pkgdir}/usr/lib/systemd/user/niri.service"
+  install -Dm644 resources/niri-shutdown.target "${pkgdir}/usr/lib/systemd/user/niri-shutdown.target"
+
+  # better-portal ships templates containing @BETTER_PORTAL@. Render the
+  # packaged path so both the optional unit and the D-Bus activation file work
+  # without running better-portal/scripts/install.sh.
+  install -d "${pkgdir}/usr/lib/systemd/user"
+  sed -e 's|@BETTER_PORTAL@|/usr/bin/better-portal|g' \
+    -e "s|file:///usr/share/doc/better-portal/README.md|file:///usr/share/doc/${pkgname}/better-portal/README.md|" \
+    better-portal/packaging/better-portal.service \
+    > "${pkgdir}/usr/lib/systemd/user/better-portal.service"
+  install -d "${pkgdir}/usr/share/dbus-1/services"
+  sed 's|@BETTER_PORTAL@|/usr/bin/better-portal|g' \
+    better-portal/packaging/org.freedesktop.impl.portal.desktop.better.service \
+    > "${pkgdir}/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.better.service"
+  chmod 644 \
+    "${pkgdir}/usr/lib/systemd/user/better-portal.service" \
+    "${pkgdir}/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.better.service"
+
+  install -Dm644 better-portal/packaging/portals.conf \
+    "${pkgdir}/usr/share/doc/${pkgname}/portals.conf.better.example"
+
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  # The pinned source commit may predate this document; install it when the
+  # checkout has it (the -git package and later pinned bumps do).
+  if [ -f docs/PACKAGING.md ]; then
+    install -Dm644 docs/PACKAGING.md "${pkgdir}/usr/share/doc/${pkgname}/PACKAGING.md"
+  fi
+  install -Dm644 resources/default-config.kdl \
+    "${pkgdir}/usr/share/doc/${pkgname}/default-config.kdl"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+  local app
+  for app in better-portal better-companion better-monitor better-session \
+             better-shot better-wallpaper better-settings better-audio \
+             better-sidepanels; do
+    [ -f "${app}/README.md" ] || continue
+    install -Dm644 "${app}/README.md" \
+      "${pkgdir}/usr/share/doc/${pkgname}/${app}/README.md"
+  done
+
+  # Man pages are installed when the tree grows them; there are none today.
+  if compgen -G 'resources/man/*.1' >/dev/null; then
+    install -d "${pkgdir}/usr/share/man/man1"
+    install -Dm644 resources/man/*.1 -t "${pkgdir}/usr/share/man/man1/"
+  fi
+
+  # Shell completions are generated by the binary itself.
+  local shell
+  for shell in bash fish zsh nushell; do
+    "${target}/niri" completions "${shell}" > "${srcdir}/niri.${shell}"
+  done
+  install -Dm644 "${srcdir}/niri.bash" \
+    "${pkgdir}/usr/share/bash-completion/completions/niri"
+  install -Dm644 "${srcdir}/niri.fish" \
+    "${pkgdir}/usr/share/fish/vendor_completions.d/niri.fish"
+  install -Dm644 "${srcdir}/niri.zsh" \
+    "${pkgdir}/usr/share/zsh/site-functions/_niri"
+  install -Dm644 "${srcdir}/niri.nushell" \
+    "${pkgdir}/usr/share/nushell/completions/niri.nu"
+}

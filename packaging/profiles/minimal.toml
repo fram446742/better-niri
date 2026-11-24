@@ -1,0 +1,15 @@
+# Minimal compositor build.
+#
+# No optional niri modules and no companion applications. This is the smallest
+# supported configuration: it still provides the TTY backend, the Wayland
+# frontend, the IPC socket and niri's core layout/input code. Agent seats,
+# D-Bus, systemd integration, the KDE interop protocols, cursors, effects,
+# navigation, screencasting and the Vulkan renderer are all compiled out.
+#
+# Check/build it with:
+#   packaging/scripts/build-profile.sh --check minimal
+#   packaging/scripts/build-profile.sh --build minimal
+name = "minimal"
+description = "Compositor only; no optional Cargo features and no companion apps."
+cargo_features = []
+apps = ["niri"]
