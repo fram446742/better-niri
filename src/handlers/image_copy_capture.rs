@@ -133,7 +133,7 @@ pub fn source_session_output(niri: &Niri, source: &ImageCaptureSource) -> Option
 /// same GBM device, which the TTY backend does during initialization. See
 /// https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/44351.
 pub fn output_capture_constraints(
-    renderer: &GlesRenderer,
+    renderer: Option<&GlesRenderer>,
     render_node: Option<DrmNode>,
     output: &Output,
 ) -> Option<BufferConstraints> {
@@ -149,7 +149,7 @@ pub fn output_capture_constraints(
 
 /// Buffer constraints for capturing a window.
 pub fn window_capture_constraints(
-    renderer: &GlesRenderer,
+    renderer: Option<&GlesRenderer>,
     render_node: Option<DrmNode>,
     mapped: &Mapped,
     output: &Output,
@@ -164,11 +164,17 @@ pub fn window_capture_constraints(
     }
 }
 
+/// DMABUF constraints for a capture source.
+///
+/// `renderer` is the primary GLES renderer when the session has one. A Vulkan-only session passes
+/// `None`: the Vulkan renderer does not expose EGL's render-format list, so only SHM is
+/// advertised and the capture paths fall back to [`render_to_tty_shm`](crate::render_helpers::render_to_tty_shm).
 fn capture_dmabuf_constraints(
-    renderer: &GlesRenderer,
+    renderer: Option<&GlesRenderer>,
     render_node: Option<DrmNode>,
     needs_alpha: bool,
 ) -> Option<DmabufConstraints> {
+    let renderer = renderer?;
     let node = render_node?;
     let egl = renderer.egl_context();
 
@@ -291,20 +297,36 @@ impl ImageCopyCaptureHandler for State {
             }
 
             let render_node = self.backend.primary_render_node();
+            let mut constraints = None;
             self.backend.with_primary_renderer(|renderer| {
-                window_capture_constraints(renderer, render_node, mapped, output)
-            })
+                constraints = Some(window_capture_constraints(
+                    Some(renderer),
+                    render_node,
+                    mapped,
+                    output,
+                ));
+            });
+            // Vulkan-only sessions have no GLES renderer: offer SHM only. The capture is then
+            // rendered through the generic offscreen readback in `render_to_tty_shm()`.
+            Some(constraints.unwrap_or_else(|| {
+                trace!("no GLES renderer; advertising SHM-only window capture constraints");
+                window_capture_constraints(None, render_node, mapped, output)
+            }))
         } else if let Some(output) = source_output(source) {
             if !self.niri.output_state.contains_key(&output) {
                 return None;
             }
 
             let render_node = self.backend.primary_render_node();
-            self.backend
-                .with_primary_renderer(|renderer| {
-                    output_capture_constraints(renderer, render_node, &output)
-                })
-                .flatten()
+            let mut constraints = None;
+            self.backend.with_primary_renderer(|renderer| {
+                constraints = output_capture_constraints(Some(renderer), render_node, &output);
+            });
+            // Vulkan-only sessions have no GLES renderer: offer SHM only.
+            constraints.or_else(|| {
+                trace!("no GLES renderer; advertising SHM-only output capture constraints");
+                output_capture_constraints(None, render_node, &output)
+            })
         } else {
             None
         }
@@ -320,9 +342,19 @@ impl ImageCopyCaptureHandler for State {
             return None;
         }
 
-        let (_, geometry) = self.backend.with_primary_renderer(|renderer| {
-            self.niri.render_cursor_for_capture(renderer, &output)
-        })?;
+        // Prefer GLES; Vulkan-only TTY sessions compute the cursor geometry on Vulkan.
+        let geometry = self
+            .backend
+            .with_primary_renderer(|renderer| {
+                let (_, geometry) = self.niri.render_cursor_for_capture(renderer, &output);
+                geometry
+            })
+            .or_else(|| {
+                self.backend.with_primary_tty_renderer(|renderer| {
+                    let (_, geometry) = self.niri.render_cursor_for_capture(renderer, &output);
+                    geometry
+                })
+            })?;
 
         Some(cursor_capture_constraints(geometry.size))
     }

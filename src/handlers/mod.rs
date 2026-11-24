@@ -778,7 +778,11 @@ impl ScreencopyHandler for State {
         if screencopy.with_damage() {
             self.niri.screencopy_state.push(manager, screencopy);
         } else {
-            self.backend.with_primary_renderer(|renderer| {
+            // Prefer GLES; Vulkan-only TTY sessions render the one-shot frame through the TTY
+            // renderer abstraction.
+            let mut screencopy = Some(screencopy);
+            let rendered = self.backend.with_primary_renderer(|renderer| {
+                let screencopy = screencopy.take().unwrap();
                 if let Err(err) = self
                     .niri
                     .render_for_screencopy_without_damage(renderer, manager, screencopy)
@@ -786,6 +790,17 @@ impl ScreencopyHandler for State {
                     warn!("error rendering for screencopy: {err:?}");
                 }
             });
+            if rendered.is_none() {
+                self.backend.with_primary_tty_renderer(|renderer| {
+                    let screencopy = screencopy.take().unwrap();
+                    if let Err(err) = self
+                        .niri
+                        .render_for_screencopy_without_damage(renderer, manager, screencopy)
+                    {
+                        warn!("error rendering for screencopy: {err:?}");
+                    }
+                });
+            }
         }
     }
 

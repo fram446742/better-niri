@@ -7,23 +7,24 @@ use anyhow::Context as _;
 use calloop::LoopHandle;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::GbmDevice;
+use smithay::backend::renderer::element::RenderElement;
 use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
 };
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::gbm::Modifier;
-use smithay::utils::{DeviceFd, Physical, Point, Scale, Size};
+use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Scale, Size};
 
 use crate::dbus::mutter_screen_cast::{
     self, CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId,
 };
+use crate::layout::LayoutElementRenderElement;
 use crate::niri::{CastTarget, Niri, OutputRenderElements, PointerRenderElements, State};
 use crate::niri_render_elements;
-use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget};
+use crate::render_helpers::{CaptureRenderer, RenderCtx, RenderIntent, RenderTarget};
 use crate::utils::{CastSessionId, CastStreamId, get_monotonic_time};
-use crate::window::mapped::{MappedId, WindowCastRenderElements};
+use crate::window::mapped::{Mapped, MappedId, WindowCastRenderElements};
 
 mod pw_utils;
 use pw_utils::{Cast, CastSizeChange, CursorData, PipeWire, PwToNiri};
@@ -106,6 +107,14 @@ impl State {
             })
             .unwrap_or_default();
 
+        // `with_primary_renderer()` only yields the GLES renderer. On Vulkan-only sessions there
+        // is no EGL context to query, so no dmabuf formats are advertised: PipeWire negotiates
+        // shm, which the capture paths render through the generic offscreen readback. The Vulkan
+        // renderer can still import a dmabuf if a consumer somehow negotiates one.
+        if render_formats.iter().next().is_none() {
+            debug!("no renderable screencast dmabuf formats; advertising SHM only");
+        }
+
         {
             let config = self.niri.config.borrow();
             if config.debug.force_pipewire_invalid_modifier {
@@ -155,11 +164,20 @@ impl State {
 
         let id = match &cast.target {
             CastTarget::Nothing => {
-                self.backend.with_primary_renderer(|renderer| {
-                    if cast.dequeue_buffer_and_clear(renderer) {
-                        cast.record_frame_time(get_monotonic_time());
-                    }
+                // Prefer GLES; Vulkan-only TTY sessions clear through the TTY renderer.
+                let cleared = self
+                    .backend
+                    .with_primary_renderer(|renderer| cast.dequeue_buffer_and_clear(renderer));
+                let cleared = cleared.unwrap_or_else(|| {
+                    self.backend
+                        .with_primary_tty_renderer(|renderer| {
+                            cast.dequeue_buffer_and_clear(renderer)
+                        })
+                        .unwrap_or(false)
                 });
+                if cleared {
+                    cast.record_frame_time(get_monotonic_time());
+                }
                 return;
             }
             CastTarget::Output { output, .. } => {
@@ -202,57 +220,15 @@ impl State {
                 }
             }
 
-            self.backend.with_primary_renderer(|renderer| {
-                let mut elements = Vec::new();
-                let mut pointer_location = Point::default();
-
-                if self.niri.pointer_visibility.is_visible()
-                    && let Some((pointer_pos, win_pos)) =
-                        self.niri.pointer_pos_for_window_cast(mapped)
-                {
-                    // Pointer location must be relative to the screencast buffer.
-                    // - win_pos is the position of the main window surface in output-local
-                    //   coordinates
-                    // - bbox.loc moves us relative to the screencast buffer
-                    let buf_pos = win_pos + bbox.loc.to_f64().to_logical(scale);
-                    let output_pos = self.niri.global_space.output_geometry(output).unwrap().loc;
-                    pointer_location = pointer_pos - output_pos.to_f64() - buf_pos;
-
-                    let pos = buf_pos.to_physical_precise_round(scale).upscale(-1);
-                    self.niri.render_pointer(renderer, output, &mut |elem| {
-                        let elem =
-                            RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
-                        elements.push(CastRenderElement::from(elem));
-                    });
-                }
-
-                let ctx = RenderCtx {
-                    renderer,
-                    target: RenderTarget::Screencast,
-                    intent: RenderIntent::Normal,
-                    xray: None,
-                    shader_time: self.niri.window_shader_start.elapsed().as_secs_f32(),
-                };
-                let main_start = elements.len();
-                mapped.render_for_screen_cast(ctx, scale, &mut |elem| {
-                    elements.push(CastRenderElement::from(elem))
-                });
-
-                let cursor_data =
-                    CursorData::compute(&elements, main_start, pointer_location, scale);
-
-                let reference_luminance = self.niri.output_capture_reference_luminance(output);
-                if cast.dequeue_buffer_and_render(
-                    renderer,
-                    &elements,
-                    &cursor_data,
-                    bbox.size,
-                    scale,
-                    reference_luminance,
-                ) {
-                    cast.record_frame_time(get_monotonic_time());
-                }
+            // Prefer GLES; Vulkan-only TTY sessions render the cast frame on Vulkan.
+            let rendered = self.backend.with_primary_renderer(|renderer| {
+                render_window_cast(&self.niri, renderer, cast, mapped, output, scale, bbox)
             });
+            if rendered.is_none() {
+                self.backend.with_primary_tty_renderer(|renderer| {
+                    render_window_cast(&self.niri, renderer, cast, mapped, output, scale, bbox)
+                });
+            }
 
             break;
         }
@@ -535,12 +511,21 @@ impl Niri {
         }
     }
 
-    pub fn render_for_screen_cast(
+    pub fn render_for_screen_cast<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         target_presentation_time: Duration,
-    ) {
+    ) where
+        R: CaptureRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+        CastRenderElement<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render_for_screen_cast");
 
         let weak = output.downgrade();
@@ -666,12 +651,17 @@ impl Niri {
         }
     }
 
-    pub fn render_windows_for_screen_cast(
+    pub fn render_windows_for_screen_cast<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         target_presentation_time: Duration,
-    ) {
+    ) where
+        R: CaptureRenderer,
+        PointerRenderElements<R>: RenderElement<R>,
+        WindowCastRenderElements<R>: RenderElement<R>,
+        CastRenderElement<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render_windows_for_screen_cast");
 
         #[cfg(feature = "navigation")]
@@ -873,6 +863,69 @@ fn cast_params_for_output(output: &Output) -> (Size<i32, Physical>, u32) {
     let size = transform.transform_size(mode.size);
     let refresh = mode.refresh as u32;
     (size, refresh)
+}
+
+/// Renders one window-cast frame with the given renderer.
+///
+/// Shared by the GLES and TTY/Vulkan paths in [`State::redraw_cast`].
+#[allow(clippy::too_many_arguments)]
+fn render_window_cast<R>(
+    niri: &Niri,
+    renderer: &mut R,
+    cast: &mut Cast,
+    mapped: &Mapped,
+    output: &Output,
+    scale: Scale<f64>,
+    bbox: Rectangle<i32, Physical>,
+) where
+    R: CaptureRenderer,
+    CastRenderElement<R>: RenderElement<R>,
+{
+    let mut elements = Vec::new();
+    let mut pointer_location = Point::default();
+
+    if niri.pointer_visibility.is_visible()
+        && let Some((pointer_pos, win_pos)) = niri.pointer_pos_for_window_cast(mapped)
+    {
+        // Pointer location must be relative to the screencast buffer.
+        // - win_pos is the position of the main window surface in output-local coordinates
+        // - bbox.loc moves us relative to the screencast buffer
+        let buf_pos = win_pos + bbox.loc.to_f64().to_logical(scale);
+        let output_pos = niri.global_space.output_geometry(output).unwrap().loc;
+        pointer_location = pointer_pos - output_pos.to_f64() - buf_pos;
+
+        let pos = buf_pos.to_physical_precise_round(scale).upscale(-1);
+        niri.render_pointer(renderer, output, &mut |elem| {
+            let elem = RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
+            elements.push(CastRenderElement::from(elem));
+        });
+    }
+
+    let ctx = RenderCtx {
+        renderer,
+        target: RenderTarget::Screencast,
+        intent: RenderIntent::Normal,
+        xray: None,
+        shader_time: niri.window_shader_start.elapsed().as_secs_f32(),
+    };
+    let main_start = elements.len();
+    mapped.render_for_screen_cast(ctx, scale, &mut |elem| {
+        elements.push(CastRenderElement::from(elem))
+    });
+
+    let cursor_data = CursorData::compute(&elements, main_start, pointer_location, scale);
+
+    let reference_luminance = niri.output_capture_reference_luminance(output);
+    if cast.dequeue_buffer_and_render(
+        renderer,
+        &elements,
+        &cursor_data,
+        bbox.size,
+        scale,
+        reference_luminance,
+    ) {
+        cast.record_frame_time(get_monotonic_time());
+    }
 }
 
 niri_render_elements! {

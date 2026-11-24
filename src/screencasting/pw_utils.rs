@@ -36,11 +36,9 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmBuffer, GbmBufferFlags, GbmDevice};
-use smithay::backend::renderer::ExportMem;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::element::{Element, RenderElement, RenderElementStates};
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::output::{Output, OutputModeSource};
 use smithay::reexports::calloop::generic::Generic;
@@ -54,10 +52,8 @@ use smithay::utils::{DeviceFd, Logical, Physical, Point, Scale, Size, Transform}
 
 use crate::dbus::mutter_screen_cast::{CursorMode, NodeIdSink};
 use crate::niri::{CastTarget, State};
-use crate::render_helpers::{
-    clear_dmabuf, encompassing_geo, render_and_download, render_and_download_with_damage,
-    render_to_dmabuf,
-};
+use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::{CaptureRenderer, encompassing_geo, render_capture_frame_to_vec};
 use crate::screencasting::CastRenderElement;
 use crate::utils::{CastSessionId, CastStreamId, get_monotonic_time};
 
@@ -1197,15 +1193,19 @@ impl Cast {
         }
     }
 
-    pub fn dequeue_buffer_and_render(
+    pub fn dequeue_buffer_and_render<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
-        mut elements: &[CastRenderElement<GlesRenderer>],
-        cursor_data: &CursorData<CastRenderElement<GlesRenderer>>,
+        renderer: &mut R,
+        mut elements: &[CastRenderElement<R>],
+        cursor_data: &CursorData<CastRenderElement<R>>,
         size: Size<i32, Physical>,
         scale: Scale<f64>,
         reference_luminance: f64,
-    ) -> bool {
+    ) -> bool
+    where
+        R: CaptureRenderer,
+        CastRenderElement<R>: RenderElement<R>,
+    {
         let mut inner = self.inner.borrow_mut();
 
         let CastState::Ready {
@@ -1290,7 +1290,13 @@ impl Cast {
             let spa_buffer = (*buffer).buffer;
 
             if self.cursor_mode == CursorMode::Metadata {
-                add_cursor_metadata(renderer, spa_buffer, cursor_data, redraw_cursor);
+                add_cursor_metadata(
+                    renderer,
+                    spa_buffer,
+                    cursor_data,
+                    redraw_cursor,
+                    reference_luminance,
+                );
             }
 
             // FIXME: would be good to skip rendering the full frame if only the pointer changed.
@@ -1301,15 +1307,15 @@ impl Cast {
             let res = match (*(*spa_buffer).datas).type_ {
                 x if x == DataType::DmaBuf.as_raw() => {
                     let dmabuf = inner_.dmabufs[&fd].clone();
-                    render_to_dmabuf(
-                        renderer,
-                        damage_tracker,
-                        dmabuf,
-                        elements,
-                        states,
-                        reference_luminance,
-                    )
-                    .map(|x| (x, SharingBuf::Dma))
+                    renderer
+                        .render_capture_to_dmabuf(
+                            damage_tracker,
+                            dmabuf,
+                            elements,
+                            states,
+                            reference_luminance,
+                        )
+                        .map(|x| (x, SharingBuf::Dma))
                 }
                 x if x == DataType::MemFd.as_raw() => {
                     let shmbuf = &inner_.shmbufs[&fd];
@@ -1320,8 +1326,16 @@ impl Cast {
                         Fourcc::Xrgb8888
                     };
 
-                    render_to_shmbuf(renderer, damage_tracker, shmbuf, fourcc, elements, states)
-                        .map(|()| (SyncPoint::signaled(), SharingBuf::Shm(shmbuf.layout)))
+                    render_to_shmbuf(
+                        renderer,
+                        damage_tracker,
+                        shmbuf,
+                        fourcc,
+                        elements,
+                        states,
+                        reference_luminance,
+                    )
+                    .map(|()| (SyncPoint::signaled(), SharingBuf::Shm(shmbuf.layout)))
                 }
                 _ => Err(anyhow::anyhow!(
                     "unknown data type in dequeue_buffer_and_render"
@@ -1345,7 +1359,10 @@ impl Cast {
         }
     }
 
-    pub fn dequeue_buffer_and_clear(&mut self, renderer: &mut GlesRenderer) -> bool {
+    pub fn dequeue_buffer_and_clear<R>(&mut self, renderer: &mut R) -> bool
+    where
+        R: CaptureRenderer,
+    {
         let mut inner = self.inner.borrow_mut();
 
         // Clear out the damage tracker if we're in Ready state.
@@ -1378,7 +1395,9 @@ impl Cast {
             let res = match (*(*(*buffer).buffer).datas).type_ {
                 x if x == DataType::DmaBuf.as_raw() => {
                     let dmabuf = self.inner.borrow().dmabufs[&fd].clone();
-                    clear_dmabuf(renderer, dmabuf).map(|x| (x, SharingBuf::Dma))
+                    renderer
+                        .clear_capture_dmabuf(dmabuf)
+                        .map(|x| (x, SharingBuf::Dma))
                 }
                 x if x == DataType::MemFd.as_raw() => {
                     let inner = self.inner.borrow();
@@ -1813,12 +1832,15 @@ unsafe fn add_invisible_cursor(spa_buffer: *mut spa_buffer) {
     }
 }
 
-unsafe fn add_cursor_metadata(
-    renderer: &mut GlesRenderer,
+unsafe fn add_cursor_metadata<R>(
+    renderer: &mut R,
     spa_buffer: *mut spa_buffer,
-    cursor_data: &CursorData<impl RenderElement<GlesRenderer>>,
+    cursor_data: &CursorData<impl RenderElement<R>>,
     redraw: bool,
-) {
+    reference_luminance: f64,
+) where
+    R: NiriRenderer,
+{
     unsafe {
         let cursor_meta_ptr: *mut spa_meta_cursor = spa_buffer_find_meta_data(
             spa_buffer,
@@ -1878,21 +1900,35 @@ unsafe fn add_cursor_metadata(
         //
         // Reliable buffers should be available starting from 1.6.0:
         // https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/4885
-        let mapping = match render_and_download(
+        // GLES keeps its historical state here; Vulkan must leave the output's HDR blend state
+        // so the cursor bitmap (a plain BGRA image consumed by PipeWire) stays SDR.
+        if renderer.as_gles_renderer().is_none() {
+            crate::render_helpers::set_capture_blend(renderer, reference_luminance);
+        }
+
+        // `relocated` is front-to-back, which is what `render_to_tty_texture()` expects. (The
+        // old `render_and_download()` path drew `relocated.iter().rev()` because it rendered in
+        // iterator order.)
+        let elements: Vec<_> = cursor_data.relocated.iter().collect();
+        let bounds = smithay::utils::Rectangle::from_size(size);
+        let texture = match crate::render_helpers::render_to_tty_texture(
             renderer,
-            size,
+            bounds,
             cursor_data.scale,
-            Transform::Normal,
-            Fourcc::Argb8888,
-            cursor_data.relocated.iter().rev(),
+            &elements,
         ) {
-            Ok(mapping) => mapping,
+            Ok((texture, _context_id, _sync)) => texture,
             Err(err) => {
                 warn!("error rendering cursor: {err:?}");
                 return;
             }
         };
-        let pixels = match renderer.map_texture(&mapping) {
+        let pixels = match crate::render_helpers::copy_tty_texture_to_vec(
+            renderer,
+            &texture,
+            smithay::utils::Rectangle::from_size(Size::from((size.w, size.h))),
+            Fourcc::Argb8888,
+        ) {
             Ok(pixels) => pixels,
             Err(err) => {
                 warn!("error mapping cursor texture: {err:?}");
@@ -1900,7 +1936,7 @@ unsafe fn add_cursor_metadata(
             }
         };
 
-        bitmap_slice[..pixels.len()].copy_from_slice(pixels);
+        bitmap_slice[..pixels.len()].copy_from_slice(&pixels);
 
         // Fill the metadata now that everything succeeded.
         bitmap_meta.size.width = size.w as _;
@@ -1909,15 +1945,27 @@ unsafe fn add_cursor_metadata(
     }
 }
 
-fn render_to_shmbuf(
-    renderer: &mut GlesRenderer,
+#[allow(clippy::too_many_arguments)]
+fn render_to_shmbuf<R>(
+    renderer: &mut R,
     damage_tracker: &mut OutputDamageTracker,
     buffer: &Shmbuf,
     fourcc: Fourcc,
-    elements: &[impl RenderElement<GlesRenderer>],
+    elements: &[impl RenderElement<R>],
     states: RenderElementStates,
-) -> anyhow::Result<()> {
+    reference_luminance: f64,
+) -> anyhow::Result<()>
+where
+    R: NiriRenderer,
+{
     let _span = tracy_client::span!();
+
+    // GLES keeps its historical state here (this path never switched to the capture blend), but
+    // Vulkan must leave the output's HDR blend state to produce a correct SDR frame.
+    if renderer.as_gles_renderer().is_none() {
+        crate::render_helpers::set_capture_blend(renderer, reference_luminance);
+    }
+
     let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
     let expected_size = size.w as usize * size.h as usize * SHM_BYTES_PER_PIXEL;
     ensure!(
@@ -1925,14 +1973,14 @@ fn render_to_shmbuf(
         "invalid buffer size"
     );
 
-    let mapping =
-        render_and_download_with_damage(renderer, damage_tracker, fourcc, elements, states)?;
+    let Some(bytes) =
+        render_capture_frame_to_vec(renderer, damage_tracker, elements, states, fourcc)?
+    else {
+        // No damage: leave the PipeWire buffer untouched, like the old direct render.
+        return Ok(());
+    };
 
-    let bytes = renderer
-        .map_texture(&mapping)
-        .context("error mapping texture")?;
-
-    buffer.mapping.copy_frame(bytes);
+    buffer.mapping.copy_frame(&bytes);
     Ok(())
 }
 
