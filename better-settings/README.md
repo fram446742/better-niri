@@ -181,10 +181,10 @@ companion settings are copied into niri's config.
 
 | App | Read | Safe actions |
 | --- | --- | --- |
-| `better-monitor` | `list`/`show` profiles and output names | dry-run preview, apply, restore, confirm/cancel a pending apply |
+| `better-monitor` | `list`/`show` profiles, `position` geometry | dry-run preview, apply, restore, confirm/cancel a pending apply; drag/reposition the arrangement editor and apply it |
 | `better-session` | `list`/`show` contexts (workspaces, windows, outputs) | `explain` preview, restore/activate |
 | `better-wallpaper` | `status` (active scene, scenes, backend) and `scene list` | use a scene, dry-run and real apply |
-| `better-audio` | `status`, `sinks`, `rules` | set the default sink, dry-run and real apply/restore |
+| `better-audio` | `status`, `sinks`, `sources`, `rules` | set the default sink; mixer volume/mute with preview/apply; dry-run and real apply/restore |
 | `better-sidepanels` | `config.json` (`--config`, `$XDG_CONFIG_HOME`) | `--validate`, open in `$VISUAL`/`$EDITOR` (never rewritten) |
 | `better-companion` | `companionctl describe`/`status`/`list` | dry-run an action with `--dry-run`; a real call requires `--apply` |
 | all | tool discovery | lists which CLIs are installed; missing tools render a note instead of failing |
@@ -195,6 +195,8 @@ better-settingsctl displays list
 better-settingsctl displays preview desk        # always a dry run
 better-settingsctl displays apply desk          # preview only
 better-settingsctl displays apply desk --apply  # explicit mutation
+better-settingsctl displays positions
+better-settingsctl displays arrange '{"eDP-1":[0,0],"DP-1":[1920,0]}' --apply
 better-settingsctl displays restore --apply
 better-settingsctl displays confirm --apply
 better-settingsctl sessions list
@@ -205,6 +207,8 @@ better-settingsctl wallpaper use night --apply
 better-settingsctl wallpaper apply --apply
 better-settingsctl audio status
 better-settingsctl audio default alsa_output.speakers --apply
+better-settingsctl audio volume sink alsa_output.speakers 0.5 --apply
+better-settingsctl audio mute source alsa_input.usb-mic on --apply
 better-settingsctl audio apply --apply
 better-settingsctl sidepanels status
 better-settingsctl sidepanels validate --config ~/.config/better-sidepanels/config.json
@@ -224,6 +228,29 @@ Tool paths can be redirected for wrappers or tests:
 `BETTER_SETTINGS_BETTER_WALLPAPER`, `BETTER_SETTINGS_BETTER_AUDIO`,
 `BETTER_SETTINGS_BETTER_SIDEPANELS` and `BETTER_SETTINGS_COMPANIONCTL`. The
 sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`.
+
+### Displays arrangement editor
+
+The Displays section reads `better-monitor position` and draws every enabled
+output as a rectangle proportional to its logical size. Drag a rectangle to
+move it; the editor snaps its edges/centre to other outputs and then to a 10 px
+grid, and shows the candidate logical coordinates. The X/Y spin buttons edit
+the selected output directly.
+
+`Preview arrangement` validates the model and runs
+`better-monitor arrange --plan <json> --dry-run`; `Apply arrangement` refuses
+overlaps or an empty/disabled layout before sending anything, previews, then
+applies. `Reset` re-reads the live positions. The plan is
+`{"outputs": {"<output>": [x, y]}}`, exactly what better-monitor accepts.
+
+### Audio mixer
+
+The Audio section lists sinks and sources with their current volume and mute
+state. Sliders and mute checkboxes only change local state until `Apply mixer`
+is pressed; `Preview mixer` sends the same changes with `--dry-run`. Every
+change is a `better-audio volume|mute <kind> <device> <value>` command, and the
+section shows the active backend. If `better-audio` is missing, the section
+renders a note and no controls.
 
 ## Supported syntax
 

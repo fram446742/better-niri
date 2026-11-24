@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::arrange::Arrangement;
+
 /// The companion apps this module integrates with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -602,6 +604,41 @@ pub fn display_cancel(runner: &dyn CommandRunner) -> Result<Value, IntegrationEr
     tool_json(runner, Tool::Monitor, &["--json", "cancel"])
 }
 
+/// Reads the current logical output geometry for the arrangement editor.
+pub fn display_positions(runner: &dyn CommandRunner) -> Result<Arrangement, IntegrationError> {
+    let value = tool_json(runner, Tool::Monitor, &["--json", "position"])?;
+    Arrangement::from_monitor_json(&value).map_err(|err| IntegrationError::new(Tool::Monitor, err))
+}
+
+fn display_arrange_plan(
+    runner: &dyn CommandRunner,
+    plan: &str,
+    dry_run: bool,
+) -> Result<DisplayPlan, IntegrationError> {
+    let mut args = vec!["--json", "arrange", "--plan", plan];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    let value = tool_json(runner, Tool::Monitor, &args)?;
+    display_report(&value, "arrange")
+}
+
+/// Dry-runs an arrangement plan (`better-monitor arrange --plan ... --dry-run`).
+pub fn display_arrange_preview(
+    runner: &dyn CommandRunner,
+    plan: &str,
+) -> Result<DisplayPlan, IntegrationError> {
+    display_arrange_plan(runner, plan, true)
+}
+
+/// Applies an arrangement plan. Only called from an explicit Apply button.
+pub fn display_arrange(
+    runner: &dyn CommandRunner,
+    plan: &str,
+) -> Result<DisplayPlan, IntegrationError> {
+    display_arrange_plan(runner, plan, false)
+}
+
 // ---------------------------------------------------------------------------
 // Sessions: better-session
 // ---------------------------------------------------------------------------
@@ -865,18 +902,56 @@ pub struct AudioStatus {
     pub attempts: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AudioSink {
     pub id: u32,
     pub name: String,
     pub description: String,
+    pub volume: Option<f64>,
+    pub mute: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AudioSource {
+    pub id: u32,
+    pub name: String,
+    pub description: String,
+    pub volume: Option<f64>,
+    pub mute: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AudioSinks {
     pub backend: String,
     pub default: Option<String>,
     pub sinks: Vec<AudioSink>,
+}
+
+/// The active backend plus every sink and source, with current volume/mute.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AudioDevices {
+    pub backend: String,
+    pub default_sink: Option<String>,
+    pub default_source: Option<String>,
+    pub sinks: Vec<AudioSink>,
+    pub sources: Vec<AudioSource>,
+}
+
+/// Which device list a mixer change addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioDeviceKind {
+    Sink,
+    Source,
+}
+
+impl AudioDeviceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sink => "sink",
+            Self::Source => "source",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -937,8 +1012,7 @@ pub fn audio_status(runner: &dyn CommandRunner) -> Result<AudioStatus, Integrati
     })
 }
 
-pub fn audio_sinks(runner: &dyn CommandRunner) -> Result<AudioSinks, IntegrationError> {
-    let value = tool_json(runner, Tool::Audio, &["sinks"])?;
+fn parse_audio_sinks(value: &Value) -> Result<Vec<AudioSink>, IntegrationError> {
     let sinks = value
         .get("sinks")
         .map(|sinks| {
@@ -957,12 +1031,49 @@ pub fn audio_sinks(runner: &dyn CommandRunner) -> Result<AudioSinks, Integration
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_owned(),
+                        volume: sink.get("volume").and_then(Value::as_f64),
+                        mute: sink.get("mute").and_then(Value::as_bool),
                     })
                     .collect()
             })
         })
         .transpose()?
         .unwrap_or_default();
+    Ok(sinks)
+}
+
+fn parse_audio_sources(value: &Value) -> Result<Vec<AudioSource>, IntegrationError> {
+    let sources = value
+        .get("sources")
+        .map(|sources| {
+            as_array(sources, Tool::Audio, "sources").map(|sources| {
+                sources
+                    .iter()
+                    .map(|source| AudioSource {
+                        id: source.get("id").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        name: source
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        description: source
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        volume: source.get("volume").and_then(Value::as_f64),
+                        mute: source.get("mute").and_then(Value::as_bool),
+                    })
+                    .collect()
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(sources)
+}
+
+pub fn audio_sinks(runner: &dyn CommandRunner) -> Result<AudioSinks, IntegrationError> {
+    let value = tool_json(runner, Tool::Audio, &["sinks"])?;
     Ok(AudioSinks {
         backend: value
             .get("backend")
@@ -970,8 +1081,64 @@ pub fn audio_sinks(runner: &dyn CommandRunner) -> Result<AudioSinks, Integration
             .unwrap_or("auto")
             .to_owned(),
         default: option_string(value.get("default")),
-        sinks,
+        sinks: parse_audio_sinks(&value)?,
     })
+}
+
+/// Reads both device lists and their defaults. This is what the mixer UI uses.
+pub fn audio_devices(runner: &dyn CommandRunner) -> Result<AudioDevices, IntegrationError> {
+    let sinks = tool_json(runner, Tool::Audio, &["sinks"])?;
+    let sources = tool_json(runner, Tool::Audio, &["sources"])?;
+    Ok(AudioDevices {
+        backend: sinks
+            .get("backend")
+            .and_then(Value::as_str)
+            .or_else(|| sources.get("backend").and_then(Value::as_str))
+            .unwrap_or("auto")
+            .to_owned(),
+        default_sink: option_string(sinks.get("default")),
+        default_source: option_string(sources.get("default")),
+        sinks: parse_audio_sinks(&sinks)?,
+        sources: parse_audio_sources(&sources)?,
+    })
+}
+
+fn volume_argument(volume: f64) -> String {
+    let rounded = (volume.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
+    format!("{rounded}")
+}
+
+/// Sets a sink/source volume. With `dry_run`, better-audio's `--dry-run`
+/// reports the change without writing.
+pub fn audio_set_volume(
+    runner: &dyn CommandRunner,
+    kind: AudioDeviceKind,
+    name: &str,
+    volume: f64,
+    dry_run: bool,
+) -> Result<Value, IntegrationError> {
+    let level = volume_argument(volume);
+    let mut args = vec!["volume", kind.as_str(), name, level.as_str()];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    tool_json(runner, Tool::Audio, &args)
+}
+
+/// Sets a sink/source mute flag, with the same preview rule.
+pub fn audio_set_mute(
+    runner: &dyn CommandRunner,
+    kind: AudioDeviceKind,
+    name: &str,
+    mute: bool,
+    dry_run: bool,
+) -> Result<Value, IntegrationError> {
+    let state = if mute { "on" } else { "off" };
+    let mut args = vec!["mute", kind.as_str(), name, state];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    tool_json(runner, Tool::Audio, &args)
 }
 
 pub fn audio_rules(runner: &dyn CommandRunner) -> Result<Vec<AudioRule>, IntegrationError> {
@@ -1707,6 +1874,8 @@ pub fn usage() -> &'static str {
        displays preview <name>           Dry-run an apply (no changes)\n\
        displays apply <name> [--apply]   Preview, then apply with --apply\n\
        displays restore [--apply]        Preview or restore the previous layout\n\
+       displays positions                Current logical output geometry\n\
+       displays arrange <json> [--apply] Preview or apply an arrangement plan\n\
        displays confirm --apply          Confirm a pending safe apply\n\
        displays cancel --apply           Cancel a pending safe apply\n\
        sessions list | show <name>       List contexts or show one\n\
@@ -1716,6 +1885,9 @@ pub fn usage() -> &'static str {
        wallpaper use <name> --apply      Activate a scene\n\
        wallpaper apply [--apply]         Preview, then apply\n\
        audio status | sinks | rules      Read audio state and routing rules\n\
+       audio devices                     Sinks and sources with volume/mute\n\
+       audio volume <kind> <dev> <0..1> [--apply]  Set a device volume\n\
+       audio mute <kind> <dev> on|off [--apply]    Mute or unmute a device\n\
        audio default <sink> --apply      Set the configured default sink\n\
        audio apply|restore [--apply]     Preview, then route or restore streams\n\
        sidepanels status | validate      Read and validate the JSON config\n\
@@ -1751,6 +1923,14 @@ fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .position(|arg| arg == flag)
         .and_then(|index| args.get(index + 1))
         .map(String::as_str)
+}
+
+fn audio_kind(value: Option<&str>) -> Option<AudioDeviceKind> {
+    match value?.to_ascii_lowercase().as_str() {
+        "sink" | "sinks" => Some(AudioDeviceKind::Sink),
+        "source" | "sources" => Some(AudioDeviceKind::Source),
+        _ => None,
+    }
 }
 
 /// Dispatches one `better-settingsctl <integration>` invocation.
@@ -1810,6 +1990,23 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
                         "applied": false,
                         "preview": preview,
                         "hint": "re-run with --apply to restore the previous layout",
+                    }))?)
+                }
+            }
+            "positions" => Ok(json(&display_positions(runner)?)?),
+            "arrange" => {
+                let plan = positional.get(1).ok_or_else(|| {
+                    IntegrationError::new(Tool::Monitor, "displays arrange needs a JSON plan")
+                })?;
+                if apply {
+                    Ok(json(&display_arrange(runner, plan)?)?)
+                } else {
+                    let preview = display_arrange_preview(runner, plan)?;
+                    Ok(json(&serde_json::json!({
+                        "dry_run": true,
+                        "applied": false,
+                        "preview": preview,
+                        "hint": "re-run with --apply to move the outputs",
                     }))?)
                 }
             }
@@ -1908,6 +2105,68 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
             "status" => Ok(json(&audio_status(runner)?)?),
             "sinks" => Ok(json(&audio_sinks(runner)?)?),
             "rules" => Ok(json(&audio_rules(runner)?)?),
+            "devices" => Ok(json(&audio_devices(runner)?)?),
+            "volume" => {
+                let kind = audio_kind(positional.get(1).copied()).ok_or_else(|| {
+                    IntegrationError::new(Tool::Audio, "audio volume needs sink or source")
+                })?;
+                let name = positional.get(2).ok_or_else(|| {
+                    IntegrationError::new(Tool::Audio, "audio volume needs a device name")
+                })?;
+                let volume: f64 = positional
+                    .get(3)
+                    .ok_or_else(|| IntegrationError::new(Tool::Audio, "audio volume needs 0..1"))?
+                    .parse()
+                    .map_err(|_| {
+                        IntegrationError::new(Tool::Audio, "audio volume needs a number in 0..1")
+                    })?;
+                if !(0.0..=1.0).contains(&volume) || !volume.is_finite() {
+                    return Err(IntegrationError::new(
+                        Tool::Audio,
+                        format!("volume {volume} is outside 0..1"),
+                    ));
+                }
+                let value = audio_set_volume(runner, kind, name, volume, !apply)?;
+                if apply {
+                    Ok(json(&value)?)
+                } else {
+                    Ok(json(&serde_json::json!({
+                        "dry_run": true,
+                        "applied": false,
+                        "preview": value,
+                        "hint": "re-run with --apply to set this volume",
+                    }))?)
+                }
+            }
+            "mute" => {
+                let kind = audio_kind(positional.get(1).copied()).ok_or_else(|| {
+                    IntegrationError::new(Tool::Audio, "audio mute needs sink or source")
+                })?;
+                let name = positional.get(2).ok_or_else(|| {
+                    IntegrationError::new(Tool::Audio, "audio mute needs a device name")
+                })?;
+                let mute = match positional.get(3).map(|state| state.to_ascii_lowercase()) {
+                    Some(state) if matches!(state.as_str(), "on" | "true" | "1") => true,
+                    Some(state) if matches!(state.as_str(), "off" | "false" | "0") => false,
+                    _ => {
+                        return Err(IntegrationError::new(
+                            Tool::Audio,
+                            "audio mute needs on or off",
+                        ));
+                    }
+                };
+                let value = audio_set_mute(runner, kind, name, mute, !apply)?;
+                if apply {
+                    Ok(json(&value)?)
+                } else {
+                    Ok(json(&serde_json::json!({
+                        "dry_run": true,
+                        "applied": false,
+                        "preview": value,
+                        "hint": "re-run with --apply to change mute",
+                    }))?)
+                }
+            }
             "default" => {
                 let sink = positional.get(1).ok_or_else(|| {
                     IntegrationError::new(Tool::Audio, "audio default needs a sink name or `none`")
@@ -2024,6 +2283,8 @@ mod tests {
 
     use super::*;
 
+    const ARRANGE_PLAN: &str = r#"{"outputs":{"DP-1":[1280,0]}}"#;
+
     fn fixture(name: &str) -> Value {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
@@ -2046,6 +2307,33 @@ mod tests {
                 "better-monitor",
                 &["--version"],
                 ready("better-monitor", &["--version"]),
+            )
+            .on(
+                "better-monitor",
+                &["--json", "position"],
+                result(
+                    "better-monitor",
+                    &["--json", "position"],
+                    &fixture("monitor-position.json"),
+                ),
+            )
+            .on(
+                "better-monitor",
+                &["--json", "arrange", "--plan", ARRANGE_PLAN, "--dry-run"],
+                result(
+                    "better-monitor",
+                    &["--json", "arrange", "--plan", ARRANGE_PLAN, "--dry-run"],
+                    &fixture("monitor-arrange-dry-run.json"),
+                ),
+            )
+            .on(
+                "better-monitor",
+                &["--json", "arrange", "--plan", ARRANGE_PLAN],
+                result(
+                    "better-monitor",
+                    &["--json", "arrange", "--plan", ARRANGE_PLAN],
+                    &fixture("monitor-arrange.json"),
+                ),
             )
             .on(
                 "better-monitor",
@@ -2213,6 +2501,29 @@ mod tests {
                 "better-audio",
                 &["sinks"],
                 result("better-audio", &["sinks"], &fixture("audio-sinks.json")),
+            )
+            .on(
+                "better-audio",
+                &["sources"],
+                result("better-audio", &["sources"], &fixture("audio-sources.json")),
+            )
+            .on(
+                "better-audio",
+                &["volume", "sink", "alsa_output.speakers", "0.5", "--dry-run"],
+                result(
+                    "better-audio",
+                    &["volume", "sink", "alsa_output.speakers", "0.5", "--dry-run"],
+                    &fixture("audio-volume-dry-run.json"),
+                ),
+            )
+            .on(
+                "better-audio",
+                &["mute", "source", "alsa_input.usb-mic", "on", "--dry-run"],
+                result(
+                    "better-audio",
+                    &["mute", "source", "alsa_input.usb-mic", "on", "--dry-run"],
+                    &fixture("audio-mute-dry-run.json"),
+                ),
             )
             .on(
                 "better-audio",
@@ -2389,9 +2700,102 @@ mod tests {
         let sinks = audio_sinks(&runner).unwrap();
         assert_eq!(sinks.default.as_deref(), Some("alsa_output.speakers"));
         assert_eq!(sinks.sinks.len(), 2);
+        assert_eq!(sinks.sinks[0].volume, Some(1.0));
+        assert_eq!(sinks.sinks[1].mute, Some(true));
         let rules = audio_rules(&runner).unwrap();
         assert_eq!(rules[0].app, "firefox");
         assert_eq!(rules[0].sink, "alsa_output.speakers");
+    }
+
+    #[test]
+    fn reads_audio_devices_with_volume_and_mute() {
+        let runner = reference_runner();
+        let devices = audio_devices(&runner).unwrap();
+        assert_eq!(devices.backend, "native");
+        assert_eq!(
+            devices.default_sink.as_deref(),
+            Some("alsa_output.speakers")
+        );
+        assert_eq!(
+            devices.default_source.as_deref(),
+            Some("alsa_input.usb-mic")
+        );
+        assert_eq!(devices.sinks.len(), 2);
+        assert_eq!(devices.sinks[1].volume, Some(0.5));
+        assert_eq!(devices.sinks[1].mute, Some(true));
+        assert_eq!(devices.sources.len(), 1);
+        assert_eq!(devices.sources[0].volume, Some(0.5));
+        assert_eq!(devices.sources[0].mute, Some(false));
+    }
+
+    #[test]
+    fn mixer_commands_map_to_volume_and_mute_with_preview() {
+        let runner = reference_runner();
+        let volume = audio_set_volume(
+            &runner,
+            AudioDeviceKind::Sink,
+            "alsa_output.speakers",
+            0.5,
+            true,
+        )
+        .unwrap();
+        assert_eq!(volume["data"]["volume"], 0.5);
+        assert_eq!(volume["data"]["kind"], "sink");
+
+        let mute = audio_set_mute(
+            &runner,
+            AudioDeviceKind::Source,
+            "alsa_input.usb-mic",
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(mute["data"]["mute"], true);
+        assert_eq!(mute["data"]["kind"], "source");
+
+        let calls = runner.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "better-audio volume sink alsa_output.speakers 0.5 --dry-run")
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "better-audio mute source alsa_input.usb-mic on --dry-run")
+        );
+    }
+
+    #[test]
+    fn audio_slider_values_map_to_rounded_command_arguments() {
+        let runner = ScriptedRunner::new();
+        let _ = audio_set_volume(&runner, AudioDeviceKind::Sink, "dev", 0.7564, true);
+        let _ = audio_set_volume(&runner, AudioDeviceKind::Sink, "dev", 1.4, true);
+        let calls = runner.calls();
+        assert_eq!(calls[0], "better-audio volume sink dev 0.756 --dry-run");
+        assert_eq!(calls[1], "better-audio volume sink dev 1 --dry-run");
+    }
+
+    #[test]
+    fn reads_positions_and_maps_arrangement_commands() {
+        let runner = reference_runner();
+        let arrangement = display_positions(&runner).unwrap();
+        assert_eq!(arrangement.displays.len(), 2);
+        assert_eq!(arrangement.get("DP-1").unwrap().x, 2560);
+        assert_eq!(arrangement.get("eDP-1").unwrap().width, 1280);
+
+        let preview = display_arrange_preview(&runner, ARRANGE_PLAN).unwrap();
+        assert!(preview.dry_run);
+        assert_eq!(preview.status, "planned");
+        let applied = display_arrange(&runner, ARRANGE_PLAN).unwrap();
+        assert!(!applied.dry_run);
+        assert_eq!(applied.status, "applied");
+
+        let calls = runner.calls();
+        assert!(calls.iter().any(|call| call
+            == &format!("better-monitor --json arrange --plan {ARRANGE_PLAN} --dry-run")));
+        assert!(calls.iter().any(|call| call
+            == &format!("better-monitor --json arrange --plan {ARRANGE_PLAN}")));
     }
 
     #[test]
@@ -2474,6 +2878,19 @@ mod tests {
                 .all(|(_, view)| view.error.is_none())
         );
         assert!(display_profiles(&runner).unwrap_err().is_missing());
+        assert!(display_positions(&runner).unwrap_err().is_missing());
+        assert!(audio_devices(&runner).unwrap_err().is_missing());
+        assert!(
+            audio_set_volume(
+                &runner,
+                AudioDeviceKind::Sink,
+                "alsa_output.speakers",
+                0.5,
+                true
+            )
+            .unwrap_err()
+            .is_missing()
+        );
     }
 
     #[test]
@@ -2542,6 +2959,40 @@ mod tests {
         let parsed: Value = serde_json::from_str(&audio).unwrap();
         assert_eq!(parsed["dry_run"], false);
         assert_eq!(parsed["remembered"], 1);
+
+        let positions = dispatch(&runner, &args(&["displays", "positions"])).unwrap();
+        let parsed: Value = serde_json::from_str(&positions).unwrap();
+        assert_eq!(parsed["displays"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["displays"][0]["output"], "DP-1");
+
+        let arrange = dispatch(&runner, &args(&["displays", "arrange", ARRANGE_PLAN])).unwrap();
+        let parsed: Value = serde_json::from_str(&arrange).unwrap();
+        assert_eq!(parsed["dry_run"], true);
+        assert_eq!(parsed["preview"]["status"], "planned");
+        let applied = dispatch(
+            &runner,
+            &args(&["displays", "arrange", ARRANGE_PLAN, "--apply"]),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(parsed["status"], "applied");
+
+        let volume = dispatch(
+            &runner,
+            &args(&["audio", "volume", "sink", "alsa_output.speakers", "0.5"]),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&volume).unwrap();
+        assert_eq!(parsed["dry_run"], true);
+        assert_eq!(parsed["preview"]["data"]["volume"], 0.5);
+
+        let mute = dispatch(
+            &runner,
+            &args(&["audio", "mute", "source", "alsa_input.usb-mic", "on"]),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&mute).unwrap();
+        assert_eq!(parsed["preview"]["data"]["mute"], true);
     }
 
     #[test]

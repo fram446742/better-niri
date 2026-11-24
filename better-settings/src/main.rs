@@ -11,13 +11,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use better_settings::integrations::{
-    self, CommandRunner, DisplayPlan, IntegrationView, SessionOutcome, SystemRunner, Tool,
-    WallpaperPlan,
+    self, AudioDeviceKind, CommandRunner, DisplayPlan, IntegrationView, SessionOutcome,
+    SystemRunner, Tool, WallpaperPlan,
 };
 use better_settings::{
-    Bind, Kind, OwnedSetting, RuleKind, binds, catalog_for, config_path, current,
-    default_column_width, environment, normalize, patch_many, preset_column_widths, rules, save,
-    spawn_at_startup, validate,
+    Arrangement, Bind, GRID, Kind, OwnedSetting, RuleKind, SNAP_THRESHOLD, SnapResult, Viewport,
+    binds, catalog_for, config_path, current, default_column_width, environment, normalize,
+    patch_many, preset_column_widths, rules, save, spawn_at_startup, validate,
 };
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -32,6 +32,23 @@ struct Row {
     spec: OwnedSetting,
     control: Control,
     initial: String,
+}
+
+struct ArrangementEditorState {
+    arrangement: Arrangement,
+    drag: Option<better_settings::DragState>,
+    selected: Option<String>,
+    width: f64,
+    height: f64,
+}
+
+struct MixerRow {
+    kind: AudioDeviceKind,
+    name: String,
+    initial_volume: f64,
+    initial_mute: bool,
+    scale: gtk::Scale,
+    mute: gtk::CheckButton,
 }
 
 fn value_of(control: &Control) -> String {
@@ -438,6 +455,592 @@ fn add_display_actions(section: &gtk::Box, runner: &Rc<dyn CommandRunner>, statu
     ]));
 }
 
+fn add_display_arrangement(
+    section: &gtk::Box,
+    runner: &Rc<dyn CommandRunner>,
+    _status: &gtk::Label,
+) {
+    let arrangement = match integrations::display_positions(runner.as_ref()) {
+        Ok(arrangement) if !arrangement.displays.is_empty() => arrangement,
+        Ok(_) => {
+            section.append(&note_label(
+                "arrangement editor: the compositor reports no connected outputs",
+            ));
+            return;
+        }
+        Err(err) => {
+            section.append(&note_label(&format!(
+                "arrangement editor unavailable: {err}"
+            )));
+            return;
+        }
+    };
+
+    let editor = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    editor.set_margin_top(8);
+    let heading = gtk::Label::new(Some("Arrange outputs"));
+    heading.set_xalign(0.0);
+    heading.add_css_class("heading");
+    editor.append(&heading);
+
+    let drawing = gtk::DrawingArea::new();
+    drawing.set_content_height(240);
+    drawing.set_hexpand(true);
+    drawing.set_cursor_from_name(Some("grab"));
+    editor.append(&drawing);
+
+    let names: Vec<String> = arrangement
+        .displays
+        .iter()
+        .map(|display| display.output.clone())
+        .collect();
+    let dropdown = dropdown(&names);
+    let names = Rc::new(names);
+    let x_spin = gtk::SpinButton::with_range(
+        -f64::from(better_settings::MAX_COORDINATE),
+        f64::from(better_settings::MAX_COORDINATE),
+        1.0,
+    );
+    let y_spin = gtk::SpinButton::with_range(
+        -f64::from(better_settings::MAX_COORDINATE),
+        f64::from(better_settings::MAX_COORDINATE),
+        1.0,
+    );
+    for spin in [&x_spin, &y_spin] {
+        spin.set_width_chars(8);
+        spin.set_numeric(true);
+    }
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    controls.append(&note_label("Output"));
+    controls.append(&dropdown);
+    controls.append(&note_label("X"));
+    controls.append(&x_spin);
+    controls.append(&note_label("Y"));
+    controls.append(&y_spin);
+    editor.append(&controls);
+
+    let preview = gtk::Button::with_label("Preview arrangement");
+    let apply = gtk::Button::with_label("Apply arrangement");
+    apply.add_css_class("suggested-action");
+    let reset = gtk::Button::with_label("Reset");
+    let info = note_label("drag an output to move it");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&preview);
+    row.append(&apply);
+    row.append(&reset);
+    row.append(&info);
+    editor.append(&row);
+    editor.append(&note_label(&format!(
+        "Snap: output edges and centres, then a {GRID} px grid. Preview is a dry run; Apply sends the positions to niri."
+    )));
+    section.append(&editor);
+
+    let selected = arrangement
+        .displays
+        .first()
+        .map(|display| display.output.clone());
+    let state = Rc::new(RefCell::new(ArrangementEditorState {
+        arrangement,
+        drag: None,
+        selected,
+        width: 640.0,
+        height: 240.0,
+    }));
+
+    {
+        let state = state.clone();
+        if let Some(name) = state.borrow().selected.clone()
+            && let Some(display) = state.borrow().arrangement.get(&name)
+        {
+            x_spin.set_value(f64::from(display.x));
+            y_spin.set_value(f64::from(display.y));
+        }
+    }
+
+    fn update_info(info: &gtk::Label, state: &ArrangementEditorState) {
+        let errors = state.arrangement.validate();
+        if errors.is_empty() {
+            let position = state
+                .selected
+                .as_deref()
+                .and_then(|name| state.arrangement.get(name))
+                .map(|display| format!("{}: {},{}", display.output, display.x, display.y))
+                .unwrap_or_else(|| "select an output".to_owned());
+            info.set_text(&position);
+        } else {
+            info.set_text(&format!("cannot apply: {}", errors.join("; ")));
+        }
+    }
+
+    {
+        let state = state.clone();
+        let drawing = drawing.clone();
+        drawing.set_draw_func(move |_area, cr, width, height| {
+            let mut state = state.borrow_mut();
+            state.width = f64::from(width);
+            state.height = f64::from(height);
+            let viewport = Viewport::fit(&state.arrangement, state.width, state.height, 14.0);
+            cr.set_source_rgb(0.09, 0.09, 0.11);
+            let _ = cr.paint();
+            for display in &state.arrangement.displays {
+                if !display.enabled {
+                    continue;
+                }
+                let (x, y, w, h) = viewport.rectangle(display);
+                let is_selected = state.selected.as_deref() == Some(display.output.as_str());
+                if is_selected {
+                    cr.set_source_rgba(0.20, 0.45, 0.72, 0.9);
+                } else {
+                    cr.set_source_rgba(0.24, 0.28, 0.34, 0.9);
+                }
+                cr.rectangle(x, y, w, h);
+                let _ = cr.fill_preserve();
+                cr.set_source_rgba(0.85, 0.88, 0.92, 0.9);
+                cr.set_line_width(1.5);
+                let _ = cr.stroke();
+                cr.set_source_rgb(0.96, 0.97, 0.99);
+                cr.set_font_size(12.0);
+                cr.move_to(x + 6.0, y + 17.0);
+                let _ = cr.show_text(&display.output);
+                cr.set_font_size(9.0);
+                cr.set_source_rgba(0.86, 0.89, 0.93, 0.9);
+                cr.move_to(x + 6.0, y + 30.0);
+                let _ = cr.show_text(&format!(
+                    "{},{}  {}x{}",
+                    display.x, display.y, display.width, display.height
+                ));
+            }
+        });
+    }
+
+    {
+        let state = state.clone();
+        let drawing_for_click = drawing.clone();
+        let x_spin = x_spin.clone();
+        let y_spin = y_spin.clone();
+        let info = info.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_pressed(move |_, _, px, py| {
+            let (logical_x, logical_y) = {
+                let state = state.borrow();
+                let viewport = Viewport::fit(&state.arrangement, state.width, state.height, 14.0);
+                viewport.to_logical(px, py)
+            };
+            let selected_position = {
+                let mut state = state.borrow_mut();
+                state.drag = state.arrangement.begin_drag(logical_x, logical_y);
+                if let Some(drag) = &state.drag {
+                    state.selected = Some(drag.output.clone());
+                }
+                state
+                    .selected
+                    .as_deref()
+                    .and_then(|name| state.arrangement.get(name))
+                    .map(|display| (display.x, display.y))
+            };
+            if let Some((x, y)) = selected_position {
+                x_spin.set_value(f64::from(x));
+                y_spin.set_value(f64::from(y));
+            }
+            update_info(&info, &state.borrow());
+            drawing_for_click.queue_draw();
+        });
+        drawing.add_controller(gesture);
+    }
+
+    {
+        let state = state.clone();
+        let drawing_for_motion = drawing.clone();
+        let x_spin = x_spin.clone();
+        let y_spin = y_spin.clone();
+        let info = info.clone();
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion(move |_, px, py| {
+            let selected_position = {
+                let mut state = state.borrow_mut();
+                if state.drag.is_none() {
+                    return;
+                }
+                let viewport = Viewport::fit(&state.arrangement, state.width, state.height, 14.0);
+                let (logical_x, logical_y) = viewport.to_logical(px, py);
+                let drag = state.drag.clone();
+                if let Some(drag) = drag {
+                    let _snap: Option<SnapResult> = state.arrangement.drag_to(
+                        &drag,
+                        logical_x,
+                        logical_y,
+                        (f64::from(SNAP_THRESHOLD) / viewport.scale().max(0.01)) as i32,
+                    );
+                }
+                state
+                    .selected
+                    .as_deref()
+                    .and_then(|name| state.arrangement.get(name))
+                    .map(|display| (display.x, display.y))
+            };
+            if let Some((x, y)) = selected_position {
+                x_spin.set_value(f64::from(x));
+                y_spin.set_value(f64::from(y));
+            }
+            update_info(&info, &state.borrow());
+            drawing_for_motion.queue_draw();
+        });
+        drawing.add_controller(motion);
+    }
+
+    {
+        let state = state.clone();
+        let drawing_for_release = drawing.clone();
+        let info = info.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_released(move |_, _, _, _| {
+            let mut state = state.borrow_mut();
+            state.drag = None;
+            update_info(&info, &state);
+            drawing_for_release.queue_draw();
+        });
+        drawing.add_controller(gesture);
+    }
+
+    {
+        let state = state.clone();
+        let drawing = drawing.clone();
+        let x_spin = x_spin.clone();
+        let y_spin = y_spin.clone();
+        let info = info.clone();
+        dropdown.connect_selected_notify(move |dropdown| {
+            let selected_position = {
+                let mut state = state.borrow_mut();
+                let name = names.get(dropdown.selected() as usize).cloned();
+                state.selected = name;
+                state
+                    .selected
+                    .as_deref()
+                    .and_then(|name| state.arrangement.get(name))
+                    .map(|display| (display.x, display.y))
+            };
+            if let Some((x, y)) = selected_position {
+                x_spin.set_value(f64::from(x));
+                y_spin.set_value(f64::from(y));
+            }
+            update_info(&info, &state.borrow());
+            drawing.queue_draw();
+        });
+    }
+
+    {
+        let state = state.clone();
+        let drawing = drawing.clone();
+        let info = info.clone();
+        x_spin.connect_value_changed(move |spin| {
+            let mut state = state.borrow_mut();
+            let name = state.selected.clone();
+            if let Some(name) = name {
+                let x = spin.value().round() as i32;
+                if let Some(display) = state.arrangement.get(&name) {
+                    let y = display.y;
+                    state.arrangement.move_to(&name, x, y);
+                }
+            }
+            update_info(&info, &state);
+            drawing.queue_draw();
+        });
+    }
+    {
+        let state = state.clone();
+        let drawing = drawing.clone();
+        let info = info.clone();
+        y_spin.connect_value_changed(move |spin| {
+            let mut state = state.borrow_mut();
+            let name = state.selected.clone();
+            if let Some(name) = name {
+                let y = spin.value().round() as i32;
+                if let Some(display) = state.arrangement.get(&name) {
+                    let x = display.x;
+                    state.arrangement.move_to(&name, x, y);
+                }
+            }
+            update_info(&info, &state);
+            drawing.queue_draw();
+        });
+    }
+
+    let reload = {
+        let state = state.clone();
+        let runner = runner.clone();
+        let drawing = drawing.clone();
+        let x_spin = x_spin.clone();
+        let y_spin = y_spin.clone();
+        let info = info.clone();
+        Rc::new(
+            move || match integrations::display_positions(runner.as_ref()) {
+                Ok(arrangement) => {
+                    let selected_position = {
+                        let mut state = state.borrow_mut();
+                        state.arrangement = arrangement;
+                        if let Some(name) = state.selected.clone()
+                            && !state.arrangement.displays.iter().any(|d| d.output == name)
+                        {
+                            state.selected = state
+                                .arrangement
+                                .displays
+                                .first()
+                                .map(|display| display.output.clone());
+                        }
+                        state
+                            .selected
+                            .as_deref()
+                            .and_then(|name| state.arrangement.get(name))
+                            .map(|display| (display.x, display.y))
+                    };
+                    if let Some((x, y)) = selected_position {
+                        x_spin.set_value(f64::from(x));
+                        y_spin.set_value(f64::from(y));
+                    }
+                    update_info(&info, &state.borrow());
+                    drawing.queue_draw();
+                }
+                Err(err) => info.set_text(&format!("cannot reload positions: {err}")),
+            },
+        )
+    };
+
+    {
+        let state = state.clone();
+        let runner = runner.clone();
+        let info = info.clone();
+        preview.connect_clicked(move |_| {
+            let errors = state.borrow().arrangement.validate();
+            if !errors.is_empty() {
+                info.set_text(&format!("refusing to preview: {}", errors.join("; ")));
+                return;
+            }
+            let plan = state.borrow().arrangement.plan_string();
+            match integrations::display_arrange_preview(runner.as_ref(), &plan) {
+                Ok(plan) => info.set_text(&display_plan_text(&plan)),
+                Err(err) => info.set_text(&format!("preview failed: {err}")),
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let runner = runner.clone();
+        let info = info.clone();
+        let reload = reload.clone();
+        apply.connect_clicked(move |_| {
+            let errors = state.borrow().arrangement.validate();
+            if !errors.is_empty() {
+                info.set_text(&format!("refusing to apply: {}", errors.join("; ")));
+                return;
+            }
+            let plan = state.borrow().arrangement.plan_string();
+            let preview = match integrations::display_arrange_preview(runner.as_ref(), &plan) {
+                Ok(preview) if preview.errors.is_empty() => display_plan_text(&preview),
+                Ok(preview) => {
+                    info.set_text(&display_plan_text(&preview));
+                    return;
+                }
+                Err(err) => {
+                    info.set_text(&format!("preview failed: {err}"));
+                    return;
+                }
+            };
+            match integrations::display_arrange(runner.as_ref(), &plan) {
+                Ok(report) => {
+                    info.set_text(&format!(
+                        "{preview}\n\nApplied:\n{}",
+                        display_plan_text(&report)
+                    ));
+                    reload();
+                }
+                Err(err) => info.set_text(&format!("{preview}\n\napply failed: {err}")),
+            }
+        });
+    }
+    {
+        let reload = reload.clone();
+        reset.connect_clicked(move |_| reload());
+    }
+}
+
+fn add_audio_mixer(section: &gtk::Box, runner: &Rc<dyn CommandRunner>, _status: &gtk::Label) {
+    let devices = match integrations::audio_devices(runner.as_ref()) {
+        Ok(devices) => devices,
+        Err(err) => {
+            section.append(&note_label(&format!("mixer unavailable: {err}")));
+            return;
+        }
+    };
+    let mixer = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    mixer.set_margin_top(8);
+    let heading = gtk::Label::new(Some("Mixer"));
+    heading.set_xalign(0.0);
+    heading.add_css_class("heading");
+    mixer.append(&heading);
+    mixer.append(&note_label(&format!(
+        "backend: {} ({} sink(s), {} source(s))",
+        devices.backend,
+        devices.sinks.len(),
+        devices.sources.len()
+    )));
+
+    let rows: Rc<RefCell<Vec<MixerRow>>> = Rc::new(RefCell::new(Vec::new()));
+    let append_row =
+        |kind: AudioDeviceKind, name: String, volume: Option<f64>, mute: Option<bool>| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let label = gtk::Label::new(Some(&name));
+            label.set_xalign(0.0);
+            label.set_width_chars(28);
+            let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
+            scale.set_hexpand(true);
+            scale.set_draw_value(true);
+            scale.set_value(volume.unwrap_or(1.0));
+            let mute_button = gtk::CheckButton::with_label("Mute");
+            mute_button.set_active(mute.unwrap_or(false));
+            row.append(&label);
+            row.append(&scale);
+            row.append(&mute_button);
+            mixer.append(&row);
+            rows.borrow_mut().push(MixerRow {
+                kind,
+                name,
+                initial_volume: volume.unwrap_or(1.0),
+                initial_mute: mute_button.is_active(),
+                scale,
+                mute: mute_button,
+            });
+        };
+
+    for sink in &devices.sinks {
+        append_row(
+            AudioDeviceKind::Sink,
+            sink.name.clone(),
+            sink.volume,
+            sink.mute,
+        );
+    }
+    for source in &devices.sources {
+        append_row(
+            AudioDeviceKind::Source,
+            source.name.clone(),
+            source.volume,
+            source.mute,
+        );
+    }
+    if rows.borrow().is_empty() {
+        mixer.append(&note_label("no sinks or sources reported"));
+    }
+
+    let preview = gtk::Button::with_label("Preview mixer");
+    let apply = gtk::Button::with_label("Apply mixer");
+    apply.add_css_class("suggested-action");
+    let info = note_label("changes stay local until Apply");
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.append(&preview);
+    actions.append(&apply);
+    actions.append(&info);
+    mixer.append(&actions);
+    section.append(&mixer);
+
+    let changes = {
+        let rows = rows.clone();
+        Rc::new(move || {
+            let mut changes = Vec::new();
+            for row in rows.borrow().iter() {
+                let volume = row.scale.value();
+                if (volume - row.initial_volume).abs() > 0.005 {
+                    changes.push((row.kind, row.name.clone(), Some(volume), None));
+                }
+                if row.mute.is_active() != row.initial_mute {
+                    changes.push((row.kind, row.name.clone(), None, Some(row.mute.is_active())));
+                }
+            }
+            changes
+        })
+    };
+
+    {
+        let changes = changes.clone();
+        let runner = runner.clone();
+        let info = info.clone();
+        preview.connect_clicked(move |_| {
+            let changes = changes();
+            if changes.is_empty() {
+                info.set_text("no mixer changes");
+                return;
+            }
+            let mut lines = Vec::new();
+            for (kind, name, volume, mute) in changes {
+                let result = match (volume, mute) {
+                    (Some(volume), _) => {
+                        integrations::audio_set_volume(runner.as_ref(), kind, &name, volume, true)
+                    }
+                    (None, Some(mute)) => {
+                        integrations::audio_set_mute(runner.as_ref(), kind, &name, mute, true)
+                    }
+                    (None, None) => continue,
+                };
+                match result {
+                    Ok(value) => lines.push(format!("{}: {}", name, pretty(&value))),
+                    Err(err) => lines.push(format!("{}: {err}", name)),
+                }
+            }
+            info.set_text(&format!("Dry run:\n{}", lines.join("\n")));
+        });
+    }
+    {
+        let changes = changes.clone();
+        let runner = runner.clone();
+        let info = info.clone();
+        let rows = rows.clone();
+        apply.connect_clicked(move |_| {
+            let changes = changes();
+            if changes.is_empty() {
+                info.set_text("no mixer changes");
+                return;
+            }
+            let mut lines = Vec::new();
+            let mut failed = false;
+            for (kind, name, volume, mute) in changes {
+                let result = match (volume, mute) {
+                    (Some(volume), _) => {
+                        integrations::audio_set_volume(runner.as_ref(), kind, &name, volume, false)
+                    }
+                    (None, Some(mute)) => {
+                        integrations::audio_set_mute(runner.as_ref(), kind, &name, mute, false)
+                    }
+                    (None, None) => continue,
+                };
+                match result {
+                    Ok(value) => lines.push(format!("{}: {}", name, pretty(&value))),
+                    Err(err) => {
+                        failed = true;
+                        lines.push(format!("{}: {err}", name));
+                    }
+                }
+            }
+            if !failed {
+                for row in rows.borrow_mut().iter_mut() {
+                    row.initial_volume = row.scale.value();
+                    row.initial_mute = row.mute.is_active();
+                }
+            }
+            info.set_text(&format!(
+                "{}:\n{}",
+                if failed {
+                    "Applied with errors"
+                } else {
+                    "Applied"
+                },
+                lines.join("\n")
+            ));
+        });
+    }
+}
+
 fn add_session_actions(section: &gtk::Box, runner: &Rc<dyn CommandRunner>, status: &gtk::Label) {
     let contexts = integrations::session_contexts(runner.as_ref()).unwrap_or_default();
     let dropdown = dropdown(&contexts);
@@ -672,6 +1275,7 @@ fn build_integrations(content: &gtk::Box, runner: &Rc<dyn CommandRunner>, status
 
     let displays = integration_section(content, Tool::Monitor.label(), &overview.displays);
     add_display_actions(&displays, runner, status);
+    add_display_arrangement(&displays, runner, status);
 
     let sessions = integration_section(content, Tool::Session.label(), &overview.sessions);
     add_session_actions(&sessions, runner, status);
@@ -681,6 +1285,7 @@ fn build_integrations(content: &gtk::Box, runner: &Rc<dyn CommandRunner>, status
 
     let audio = integration_section(content, Tool::Audio.label(), &overview.audio);
     add_audio_actions(&audio, runner, status);
+    add_audio_mixer(&audio, runner, status);
 
     let sidepanels = integration_section(content, Tool::Sidepanels.label(), &overview.sidepanels);
     add_sidepanels_actions(&sidepanels, runner, status, &path);
@@ -921,9 +1526,26 @@ fn build_ui(app: &gtk::Application) {
 
 #[cfg(test)]
 mod tests {
-    use better_settings::integrations::ScriptedRunner;
+    use better_settings::integrations::{CommandResult, ScriptedRunner};
 
     use super::*;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()
+    }
+
+    fn response(program: &str, args: &[&str], fixture_name: &str) -> CommandResult {
+        CommandResult::output(
+            program,
+            args.to_vec(),
+            0,
+            fixture(fixture_name).to_string(),
+            "",
+        )
+    }
 
     fn child_count(widget: &gtk::Box) -> usize {
         let mut count = 0;
@@ -946,17 +1568,91 @@ mod tests {
     #[test]
     fn integration_widgets_build_when_gtk_can_initialise() {
         // Headless CI has no display; the section model above still covers the
-        // data path, so skip widget construction instead of failing.
+        // data path, so skip widget construction instead of failing. Widgets
+        // are built in one test/thread because GTK is not initialized twice.
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return;
         }
         if gtk::init().is_err() {
             return;
         }
-        let runner: Rc<dyn CommandRunner> = Rc::new(ScriptedRunner::new());
+
+        let missing: Rc<dyn CommandRunner> = Rc::new(ScriptedRunner::new());
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let status = gtk::Label::new(None);
+        build_integrations(&content, &missing, &status);
+        assert_eq!(child_count(&content), 7);
+
+        let missing_displays = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        add_display_arrangement(&missing_displays, &missing, &status);
+        assert_eq!(
+            child_count(&missing_displays),
+            1,
+            "expected one explanatory note"
+        );
+        let missing_audio = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        add_audio_mixer(&missing_audio, &missing, &status);
+        assert_eq!(
+            child_count(&missing_audio),
+            1,
+            "expected one explanatory note"
+        );
+
+        let runner = ScriptedRunner::new()
+            .on(
+                "better-monitor",
+                &["--version"],
+                CommandResult::output("better-monitor", vec!["--version"], 0, "1\n", ""),
+            )
+            .on(
+                "better-monitor",
+                &["--json", "position"],
+                response(
+                    "better-monitor",
+                    &["--json", "position"],
+                    "monitor-position.json",
+                ),
+            )
+            .on(
+                "better-audio",
+                &["--version"],
+                CommandResult::output("better-audio", vec!["--version"], 0, "1\n", ""),
+            )
+            .on(
+                "better-audio",
+                &["sinks"],
+                response("better-audio", &["sinks"], "audio-sinks.json"),
+            )
+            .on(
+                "better-audio",
+                &["sources"],
+                response("better-audio", &["sources"], "audio-sources.json"),
+            );
+        let runner: Rc<dyn CommandRunner> = Rc::new(runner);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         build_integrations(&content, &runner, &status);
         assert_eq!(child_count(&content), 7);
+
+        let displays = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        add_display_arrangement(&displays, &runner, &status);
+        assert_eq!(child_count(&displays), 1);
+        assert!(
+            displays
+                .first_child()
+                .and_then(|child| child.downcast::<gtk::Box>().ok())
+                .is_some(),
+            "arrangement editor did not build"
+        );
+
+        let audio = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        add_audio_mixer(&audio, &runner, &status);
+        assert_eq!(child_count(&audio), 1);
+        assert!(
+            audio
+                .first_child()
+                .and_then(|child| child.downcast::<gtk::Box>().ok())
+                .is_some(),
+            "mixer did not build"
+        );
     }
 }

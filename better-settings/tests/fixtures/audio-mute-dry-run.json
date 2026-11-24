@@ -1,0 +1,13 @@
+{
+  "command": "mute",
+  "ok": true,
+  "data": {
+    "backend": "native",
+    "kind": "source",
+    "target": "alsa_input.usb-mic",
+    "name": "alsa_input.usb-mic",
+    "mute": true,
+    "changed": true,
+    "dry_run": true
+  }
+}

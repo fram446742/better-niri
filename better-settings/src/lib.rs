@@ -14,6 +14,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod arrange;
 pub mod catalog;
 pub mod cli;
 pub mod diff;
@@ -21,6 +22,9 @@ pub mod integrations;
 pub mod model;
 pub mod nodes;
 
+pub use arrange::{
+    Arrangement, DisplayBox, DragState, GRID, MAX_COORDINATE, SNAP_THRESHOLD, SnapResult, Viewport,
+};
 pub use catalog::{
     CATALOG, Kind, OUTPUT_TEMPLATES, OutputTemplate, OwnedSetting, SettingSpec, catalog_for, find,
     normalize, output_names,

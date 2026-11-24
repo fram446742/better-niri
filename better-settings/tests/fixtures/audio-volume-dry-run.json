@@ -1,0 +1,13 @@
+{
+  "command": "volume",
+  "ok": true,
+  "data": {
+    "backend": "native",
+    "kind": "sink",
+    "target": "alsa_output.speakers",
+    "name": "alsa_output.speakers",
+    "volume": 0.5,
+    "changed": true,
+    "dry_run": true
+  }
+}

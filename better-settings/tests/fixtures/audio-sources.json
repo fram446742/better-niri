@@ -1,0 +1,13 @@
+{
+  "backend": "native",
+  "default": "alsa_input.usb-mic",
+  "sources": [
+    {
+      "id": 9,
+      "name": "alsa_input.usb-mic",
+      "description": "USB Microphone",
+      "volume": 0.5,
+      "mute": false
+    }
+  ]
+}
