@@ -815,6 +815,10 @@ pub struct VulkanShaders {
     /// Background-effect composite (`clipped_surface.frag` + `postprocess.frag`), used by
     /// `FramebufferEffectElement` on Vulkan and carrying the liquid-glass uniforms.
     pub postprocess_and_clip: Option<VulkanPixelProgram>,
+    /// Shared xray backdrop composite (the same GLSL as `postprocess_and_clip`), with the
+    /// fragment's `v_coords` remapped from the drawn element rectangle to full backdrop-texture
+    /// UVs. Samples the shared scene-wide backdrop plus the optional surface alpha mask.
+    pub xray_postprocess_and_clip: Option<VulkanPixelProgram>,
     pub decorations: RefCell<HashMap<u64, VulkanPixelProgram>>,
     pub global_passes: RefCell<Vec<VulkanPixelProgram>>,
     pub global_buffers: RefCell<Vec<Option<VulkanPixelProgram>>>,
@@ -950,29 +954,40 @@ impl VulkanShaders {
         // Background-effect composite: same GLSL as the GLES `postprocess_and_clip`
         // program. The custom-uniform block has no integer kind, so the alpha-mask flag
         // is shipped as a float and the shader's `== 1` test is rewritten to `> 0.5`.
-        let postprocess_and_clip = {
+        let postprocess_src = {
             let mut src = String::from(include_str!("clipped_surface.frag"));
             src.push_str(include_str!("rounding_alpha.frag"));
-            src.push_str(
-                &include_str!("postprocess.frag")
-                    .replace(
-                        "uniform int alpha_mask_enabled;",
-                        "uniform float alpha_mask_enabled;",
-                    )
-                    .replace("alpha_mask_enabled == 1", "alpha_mask_enabled > 0.5"),
-            );
+            src.push_str(&postprocess_vulkan_source());
+            src
+        };
+        let postprocess_uniforms = {
             let mut uniforms = clipped_surface_uniform_names();
-            uniforms.extend([
-                UniformName::new("noise", UniformType::_1f),
-                UniformName::new("saturation", UniformType::_1f),
-                UniformName::new("bg_color", UniformType::_4f),
-                UniformName::new("surface_to_geo", UniformType::Matrix3x3),
-                UniformName::new("alpha_mask_enabled", UniformType::_1f),
-                UniformName::new("alpha_threshold", UniformType::_1f),
-            ]);
-            compile_vulkan_program(renderer, &src, &uniforms, &["tex", "surface_tex"])
-                .map_err(|err| warn!("error compiling Vulkan postprocess shader: {err:?}"))
-                .ok()
+            uniforms.extend(postprocess_uniform_names());
+            uniforms
+        };
+        let postprocess_and_clip = compile_vulkan_program(
+            renderer,
+            &postprocess_src,
+            &postprocess_uniforms,
+            &["tex", "surface_tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan postprocess shader: {err:?}"))
+        .ok();
+
+        // Shared xray backdrop composite: same source, but the custom pass's dst-relative
+        // `v_coords` is remapped to full backdrop-texture UVs through `xray_uv` (the element
+        // samples a sub-rectangle of the scene-wide baked backdrop).
+        let xray_postprocess_and_clip = {
+            let mut uniforms = postprocess_uniforms.clone();
+            uniforms.push(UniformName::new("xray_uv", UniformType::Matrix3x3));
+            compile_vulkan_program_remap_uv(
+                renderer,
+                &postprocess_src,
+                &uniforms,
+                &["tex", "surface_tex"],
+            )
+            .map_err(|err| warn!("error compiling Vulkan xray postprocess shader: {err:?}"))
+            .ok()
         };
 
         Self {
@@ -986,6 +1001,7 @@ impl VulkanShaders {
             blur_down,
             blur_up,
             postprocess_and_clip,
+            xray_postprocess_and_clip,
             decorations: RefCell::new(HashMap::new()),
             global_passes: RefCell::new(Vec::new()),
             global_buffers: RefCell::new(Vec::new()),
@@ -1068,6 +1084,29 @@ fn clipped_surface_uniform_names() -> Vec<UniformName<'static>> {
         uniforms.push(UniformName::new(name, UniformType::_1f));
     }
     uniforms
+}
+
+/// The `postprocess.frag` source as compiled for Vulkan: the alpha-mask flag is a float (the
+/// custom-uniform block has no integer kind), so the shader's `== 1` test becomes `> 0.5`.
+fn postprocess_vulkan_source() -> String {
+    include_str!("postprocess.frag")
+        .replace(
+            "uniform int alpha_mask_enabled;",
+            "uniform float alpha_mask_enabled;",
+        )
+        .replace("alpha_mask_enabled == 1", "alpha_mask_enabled > 0.5")
+}
+
+/// The uniforms declared by `postprocess.frag` on top of the clipped-surface set.
+fn postprocess_uniform_names() -> [UniformName<'static>; 6] {
+    [
+        UniformName::new("noise", UniformType::_1f),
+        UniformName::new("saturation", UniformType::_1f),
+        UniformName::new("bg_color", UniformType::_4f),
+        UniformName::new("surface_to_geo", UniformType::Matrix3x3),
+        UniformName::new("alpha_mask_enabled", UniformType::_1f),
+        UniformName::new("alpha_threshold", UniformType::_1f),
+    ]
 }
 
 /// The shader sources referenced by the configuration, keyed by content hash.
@@ -1283,7 +1322,12 @@ fn uniform_name_to_decl(uniform: &UniformName<'_>) -> Option<CustomUniformDecl> 
 
 /// Transforms a GLES-dialect niri fragment shader into Vulkan GLSL.
 #[cfg(feature = "vulkan")]
-fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str]) -> String {
+fn vulkanize_fragment(
+    src: &str,
+    decls: &[CustomUniformDecl],
+    textures: &[&str],
+    remap_uv: bool,
+) -> String {
     let mut out = String::from(
         "#version 450
          #define DEBUG_FLAGS
@@ -1301,9 +1345,16 @@ fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str])
          };
          #define niri_alpha niri_pc2.z
          #define niri_tint niri_pc2.w
-         #define v_coords niri_v_coords
 ",
     );
+    if remap_uv {
+        // Remap the custom pass's dst-relative `v_coords` to full texture UVs, like the GLES
+        // `render_texture_from_to` path does for a cropped `src`. Used by the xray composite,
+        // which samples one shared scene-wide backdrop at a sub-rectangle of it.
+        out.push_str("#define v_coords (xray_uv * vec3(niri_v_coords, 1.0)).xy\n");
+    } else {
+        out.push_str("#define v_coords niri_v_coords\n");
+    }
     for line in src.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("#version")
@@ -1383,6 +1434,29 @@ pub(super) fn compile_vulkan_program(
     uniforms: &[UniformName<'_>],
     texture_uniforms: &[&str],
 ) -> anyhow::Result<VulkanPixelProgram> {
+    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, false)
+}
+
+/// Like [`compile_vulkan_program`], but remaps the fragment's `v_coords` from the drawn
+/// destination rectangle to full texture UVs through an `xray_uv` uniform.
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_program_remap_uv(
+    renderer: &mut VulkanRenderer,
+    src: &str,
+    uniforms: &[UniformName<'_>],
+    texture_uniforms: &[&str],
+) -> anyhow::Result<VulkanPixelProgram> {
+    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, true)
+}
+
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_program_impl(
+    renderer: &mut VulkanRenderer,
+    src: &str,
+    uniforms: &[UniformName<'_>],
+    texture_uniforms: &[&str],
+    remap_uv: bool,
+) -> anyhow::Result<VulkanPixelProgram> {
     let mut uniforms = uniforms.to_vec();
     uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
     uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
@@ -1408,7 +1482,7 @@ pub(super) fn compile_vulkan_program(
 
     let mut full = src.to_string();
     full.push_str(include_str!("hdr.frag"));
-    let vulkan_src = vulkanize_fragment(&full, &decls, texture_uniforms);
+    let vulkan_src = vulkanize_fragment(&full, &decls, texture_uniforms, remap_uv);
     renderer
         .compile_custom_pixel_shader(&vulkan_src, &decls, texture_uniforms)
         .map_err(|err| {

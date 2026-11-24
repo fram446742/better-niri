@@ -3652,9 +3652,9 @@ impl State {
                     shader_time: 0.0,
                 };
 
-                self.niri.fill_xray_elements(ctx.r(), output);
+                self.niri.bake_xray_elements(ctx.r(), output);
 
-                // If any background layer has block_out_from, also fill the Screencast xray
+                // If any background layer has block_out_from, also bake the Screencast xray
                 // buffer so the unmap snapshot can render a buffer with blocked-out background.
                 //
                 // This will be used in Tile::render_snapshot().
@@ -3664,7 +3664,7 @@ impl State {
                         target: RenderTarget::Screencast,
                         ..ctx.r()
                     };
-                    self.niri.fill_xray_elements(screencast_ctx, output);
+                    self.niri.bake_xray_elements(screencast_ctx, output);
                 }
 
                 let state = self.niri.output_state.get_mut(output).unwrap();
@@ -3674,8 +3674,6 @@ impl State {
                     has_blocked_out,
                     window,
                 );
-
-                self.niri.clear_xray_elements(output);
             } else {
                 self.niri
                     .layout
@@ -3688,11 +3686,41 @@ impl State {
         }
 
         // On a Vulkan-only TTY session there is no GLES primary renderer. Bake the snapshot with
-        // the TTY renderer abstraction instead (xray is GLES-only, so it is skipped).
+        // the TTY renderer abstraction instead, baking the xray buffers through its Vulkan
+        // renderer first.
         self.backend.with_primary_tty_renderer(|renderer| {
-            self.niri
-                .layout
-                .store_unmap_snapshot(renderer, None, false, window);
+            let Some(output) = output else {
+                self.niri
+                    .layout
+                    .store_unmap_snapshot(renderer, None, false, window);
+                return;
+            };
+
+            let has_blocked_out = self.niri.has_blocked_out_background_layers(output);
+
+            let bake = |renderer: &mut TtyRenderer<'_>, target: RenderTarget| {
+                let ctx = RenderCtx {
+                    renderer,
+                    target,
+                    intent: RenderIntent::Normal,
+                    xray: None,
+                    shader_time: 0.0,
+                };
+                self.niri.bake_xray_elements_impl(ctx, output);
+            };
+
+            bake(renderer, RenderTarget::Output);
+            if has_blocked_out {
+                bake(renderer, RenderTarget::Screencast);
+            }
+
+            let state = self.niri.output_state.get_mut(output).unwrap();
+            self.niri.layout.store_unmap_snapshot(
+                renderer,
+                Some(&mut state.xray),
+                has_blocked_out,
+                window,
+            );
         });
     }
 
@@ -7658,19 +7686,6 @@ impl Niri {
             }
         }
 
-        // Skip the xray background re-render while the host's live workspace strip is
-        // suppressed: xray elements are only consumed by that strip's per-workspace layer-shell
-        // rendering in `render_inner`, which doesn't run in that case either.
-        //
-        // GLES-only: `fill_xray_elements` takes `RenderCtx<GlesRenderer>` and stores GLES
-        // offscreen elements in `Xray`'s `EffectBuffer`s (see `xray.rs` module docs). On Vulkan
-        // `BackgroundEffect::render` falls back to the per-window framebuffer effect.
-        if !self.carousel_host_strip_suppressed(output)
-            && let Some(mut gles) = ctx.as_gles()
-        {
-            self.fill_xray_elements(gles.r(), output);
-        }
-
         // Reborrow to shorten lifetime to be able to put in xray.
         let mut ctx = ctx.r();
         let state = self.output_state.get(output).unwrap();
@@ -7693,17 +7708,52 @@ impl Niri {
                 push(OutputRenderElements::Magnified(rescaled))
             };
             self.render_inner(
-                ctx,
+                ctx.r(),
                 output,
                 include_pointer,
                 rendering_output,
                 &mut magnifier_push,
             );
         } else {
-            self.render_inner(ctx, output, include_pointer, rendering_output, push);
+            self.render_inner(ctx.r(), output, include_pointer, rendering_output, push);
         }
 
-        self.clear_xray_elements(output);
+        // Bake the shared xray buffers after `render_inner` and only if the frame actually
+        // sampled them. `XrayElement`s hold an `Rc` clone of the buffer they draw, so a strong
+        // count above one means the baked texture will be consumed by this frame's draws (which
+        // happen after this method returns). This keeps the offscreen renders lazy like the old
+        // element-list design, without needing to store renderer-typed element lists.
+        //
+        // Skip while the host's live workspace strip is suppressed: xray elements are only
+        // consumed by that strip's per-workspace layer-shell rendering in `render_inner`, which
+        // doesn't run in that case either.
+        if !self.carousel_host_strip_suppressed(output) && state.xray.is_used(ctx.target) {
+            let target = ctx.target;
+            let intent = ctx.intent;
+            let shader_time = ctx.shader_time;
+
+            if let Some(gles) = ctx.renderer.as_gles_renderer() {
+                let xray_ctx = RenderCtx {
+                    renderer: gles,
+                    target,
+                    intent,
+                    xray: None,
+                    shader_time,
+                };
+                self.bake_xray_elements(xray_ctx, output);
+            } else {
+                // No GLES renderer (Vulkan-only TTY session): bake through the active renderer
+                // itself, exactly like the carousel panel prepass.
+                let xray_ctx = RenderCtx {
+                    renderer: ctx.renderer,
+                    target,
+                    intent,
+                    xray: None,
+                    shader_time,
+                };
+                self.bake_xray_elements_impl(xray_ctx, output);
+            }
+        }
     }
 
     fn render_inner<R: NiriRenderer>(
@@ -8313,7 +8363,7 @@ impl Niri {
 
             mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
 
-            // Draw only the background layer, matching fill_xray_elements(). The idea is that with
+            // Draw only the background layer, matching bake_xray_elements(). The idea is that with
             // transparent fullscreen backdrop, the fullscreen window having or not having xray
             // shouldn't change the visuals. This seems to match the visual intent people have when
             // using a transparent fullscreen backdrop.
@@ -8519,8 +8569,17 @@ impl Niri {
         push(backdrop);
     }
 
-    pub fn fill_xray_elements(&self, mut ctx: RenderCtx<GlesRenderer>, output: &Output) {
-        let _span = tracy_client::span!("Niri::fill_xray_elements");
+    /// Bakes the xray background/backdrop buffers for `output`'s target with `ctx`'s renderer.
+    ///
+    /// Runs the Background layer surfaces into `Xray::background` and the backdrop layer into
+    /// `Xray::backdrop` through the active renderer: the raw `GlesRenderer` on the GLES paths or
+    /// the `VulkanRenderer` on the TTY Vulkan path. The resulting textures are sampled by every
+    /// xray background effect for this target.
+    fn bake_xray_elements_impl<R: NiriRenderer>(&self, mut ctx: RenderCtx<R>, output: &Output)
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+    {
+        let _span = tracy_client::span!("Niri::bake_xray_elements");
 
         // Make sure the xrayed elements themselves cannot use xray by mistake.
         ctx.xray = None;
@@ -8528,52 +8587,33 @@ impl Niri {
         let state = self.output_state.get(output).unwrap();
         let xray = &state.xray;
         let layer_map = layer_map_for_output(output);
+        let target = ctx.target as usize;
 
-        // FIXME: it would be cool to call this code on-demand. It's even relatively simple to do:
-        // move this function to after the render_inner() call, check if
-        // Rc::strong_count(&xray.background) > 1, and only then construct the elements. This way,
-        // only if something referenced the xray buffer will the elements get constructed.
-        //
-        // Unfortunately, currently this runs into an important limitation: offscreens are rendered
-        // immediately deep inside render_inner(), and when they are, they already need the xray
-        // elements filled.
-        //
-        // Perhaps in the future when offscreen rendering becomes on-demand, this optimization will
-        // be possible.
-
-        let mut buffer = xray.background[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements();
-            elements.clear();
+        for (for_backdrop, buffer) in [
+            (false, &xray.background[target]),
+            (true, &xray.backdrop[target]),
+        ] {
+            let mut elements: Vec<OutputRenderElements<R>> = Vec::new();
             self.render_layer_normal(
                 ctx.r(),
                 None,
                 &layer_map,
                 Layer::Background,
                 XrayPos::default(),
-                false,
+                for_backdrop,
                 &mut |elem| elements.push(elem.into()),
             );
-            // Avoid unused capacity remaining forever.
-            elements.shrink_to_fit();
-        }
 
-        let mut buffer = xray.backdrop[ctx.target as usize].borrow_mut();
-        {
-            let elements = buffer.elements();
-            elements.clear();
-            self.render_layer_normal(
-                ctx.r(),
-                None,
-                &layer_map,
-                Layer::Background,
-                XrayPos::default(),
-                true,
-                &mut |elem| elements.push(elem.into()),
-            );
-            // Avoid unused capacity remaining forever.
-            elements.shrink_to_fit();
+            let mut buffer = buffer.borrow_mut();
+            if let Err(err) = buffer.render_elements(ctx.renderer, &elements) {
+                warn!("error baking xray elements: {err:?}");
+            }
         }
+    }
+
+    /// Bakes the xray buffers through a GLES renderer.
+    pub fn bake_xray_elements(&self, ctx: RenderCtx<GlesRenderer>, output: &Output) {
+        self.bake_xray_elements_impl(ctx, output);
     }
 
     /// Damage-gated panel content prepass: for every output currently eligible for the carousel
@@ -8838,20 +8878,6 @@ impl Niri {
             // Stale hit geometry would otherwise let a click land on where a panel used to be
             // after this output stops hosting the carousel ring — see `OutputState::panel_hits`.
             state.panel_hits.borrow_mut().clear();
-        }
-    }
-
-    pub fn clear_xray_elements(&self, output: &Output) {
-        let state = self.output_state.get(output).unwrap();
-        let xray = &state.xray;
-
-        // Clear the xray elements for all render targets after all rendering that could use them
-        // did so.
-        for buf in &xray.background {
-            buf.borrow_mut().elements().clear();
-        }
-        for buf in &xray.backdrop {
-            buf.borrow_mut().elements().clear();
         }
     }
 

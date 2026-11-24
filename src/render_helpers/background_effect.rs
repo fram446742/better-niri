@@ -1,13 +1,15 @@
 use std::sync::{Arc, Mutex};
 
 use niri_config::CornerRadius;
-use smithay::backend::renderer::Renderer as _;
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, import_surface};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::VulkanTexture;
 use smithay::utils::{Logical, Point, Rectangle, Scale};
 use smithay::wayland::compositor::{SurfaceData, with_states};
 use wayland_server::protocol::wl_surface::WlSurface;
 
+use crate::backend::tty::TtyOffscreen;
 use crate::handlers::background_effect::get_cached_blur_region;
 use crate::niri_render_elements;
 use crate::render_helpers::RenderCtx;
@@ -16,6 +18,7 @@ use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
 use crate::render_helpers::liquid_glass::LiquidGlassOptions;
 use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::shaders::Shaders;
 use crate::render_helpers::xray::{XrayElement, XrayPos};
 use crate::utils::region::TransformedRegion;
 use crate::utils::surface_geo;
@@ -165,7 +168,7 @@ impl BackgroundEffect {
 
     pub fn render<R: NiriRenderer>(
         &self,
-        mut ctx: RenderCtx<R>,
+        ctx: RenderCtx<R>,
         ns: Option<usize>,
         mut params: RenderParams,
         xray_pos: XrayPos,
@@ -203,24 +206,25 @@ impl BackgroundEffect {
             _ => None,
         };
 
-        // Xray samples a shared scene-wide backdrop produced by `Xray`/`EffectBuffer`. That
-        // producer is still GLES-only: `EffectBuffer` owns raw `GlesTexture`s and renders them
-        // through `GlesRenderer`, `Xray::render` looks up a `GlesTexProgram`, `XrayElement::draw`
-        // is a GLES texture draw with a GLES `surface_tex` alpha mask, and the prepass is filled
-        // with a `RenderCtx<GlesRenderer>` in `Niri::fill_xray_elements`. Making them
-        // backend-agnostic is a cross-cutting rewrite (buffer texture, program, blend-space and
-        // alpha-mask types), so Vulkan keeps the per-window fallback below instead: the
-        // framebuffer effect captures the composited scene below the window on either backend.
-        // It is visually equivalent for one window, just re-blurred per window rather than
-        // shared.
-        if self.options.xray && ctx.renderer.as_gles_renderer().is_some() {
-            let Some(gles) = ctx.as_gles() else {
-                return;
-            };
-            let Some(xray) = gles.xray else {
-                return;
-            };
+        // Xray samples the shared, scene-wide backdrop baked by `Xray`/`EffectBuffer` through
+        // whichever renderer drives this output: GLES (the winit and GLES TTY paths) or Vulkan
+        // (the TTY Vulkan path). `Niri::bake_xray_elements` bakes the buffers with that same
+        // renderer before the frame is drawn. On a renderer with neither backend (and when no
+        // xray buffer is available), fall back to the per-window framebuffer effect below, which
+        // captures the composited scene under the window.
+        let xray_gles_program = ctx
+            .renderer
+            .as_gles_renderer()
+            .map(|gles| Shaders::get(gles).postprocess_and_clip.clone());
+        #[cfg(feature = "vulkan")]
+        let xray_vulkan_available = ctx.renderer.as_vulkan_renderer().is_some();
+        #[cfg(not(feature = "vulkan"))]
+        let xray_vulkan_available = false;
+        let use_xray = self.options.xray
+            && ctx.xray.is_some()
+            && (xray_gles_program.is_some() || xray_vulkan_available);
 
+        if use_xray {
             // Xray doesn't need expanded geometry — it samples from the scene-wide
             // background buffer. Use original window geometry for correct SDF.
             // Undo the xray_pos offset that render_for_tile added for expanded geometry.
@@ -229,9 +233,11 @@ impl BackgroundEffect {
                 xray_pos.offset(Point::new(-expansion_offset.x, -expansion_offset.y));
             params.geometry = params.original_geometry;
 
+            let xray = ctx.xray.unwrap();
             push(damage.into());
             xray.render(
-                gles,
+                ctx.target,
+                xray_gles_program.flatten(),
                 params,
                 xray_xray_pos,
                 blur,
@@ -262,11 +268,49 @@ impl BackgroundEffect {
     }
 }
 
+/// Texture mask for `background-effect ignore-opacity`, plus where it maps to in the effect
+/// geometry.
+///
+/// The texture is backend-agnostic ([`TtyOffscreen`]): GLES producers store the surface's
+/// `GlesTexture`, Vulkan producers the surface's `VulkanTexture`. Consumers pick the variant
+/// matching their draw backend.
 #[derive(Debug, Clone)]
 pub struct AlphaMask {
-    pub surface_tex: GlesTexture,
+    pub texture: TtyOffscreen,
     pub surface_geo: Rectangle<f64, Logical>,
     pub threshold: f32,
+}
+
+impl AlphaMask {
+    /// The mask texture as a raw GLES texture, if it was produced by a GLES renderer.
+    pub fn gles_texture(&self) -> Option<&GlesTexture> {
+        self.texture.as_gles()
+    }
+
+    /// The mask texture as a raw Vulkan texture, if it was produced by a Vulkan renderer.
+    #[cfg(feature = "vulkan")]
+    pub fn vulkan_texture(&self) -> Option<&VulkanTexture> {
+        self.texture.as_vulkan()
+    }
+}
+
+/// Imports the surface through `renderer` and wraps its texture into an [`AlphaMask`].
+fn import_alpha_mask<R: NiriRenderer>(
+    renderer: &mut R,
+    states: &SurfaceData,
+    surface_geo: Rectangle<f64, Logical>,
+    threshold: f32,
+) -> Option<AlphaMask> {
+    let _ = import_surface(renderer, states);
+    let data = states.data_map.get::<RendererSurfaceStateUserData>();
+    let texture =
+        data.and_then(|data| data.lock().unwrap().texture(renderer.context_id()).cloned())?;
+
+    Some(AlphaMask {
+        texture: R::wrap_texture(texture),
+        surface_geo,
+        threshold,
+    })
 }
 
 fn render_params_for_tile(
@@ -354,7 +398,7 @@ pub fn damage_surface(states: &SurfaceData) {
 }
 
 pub fn render_for_tile<R: NiriRenderer>(
-    mut ctx: RenderCtx<R>,
+    ctx: RenderCtx<R>,
     ns: Option<usize>,
     geometry: Rectangle<f64, Logical>,
     scale: f64,
@@ -388,28 +432,27 @@ pub fn render_for_tile<R: NiriRenderer>(
 
         let alpha_mask = if background_effect.options.ignore_opacity.is_some() && !should_block_out
         {
-            // The mask is a GLES surface texture sampled by the GLES composite; the Vulkan
-            // background path does not carry it (its alpha-mask branch is disabled).
-            if let Some(gles) = ctx.as_gles() {
-                let _ = import_surface(gles.renderer, states);
-                let data = states.data_map.get::<RendererSurfaceStateUserData>();
-                let texture = data.and_then(|data| {
-                    data.lock()
-                        .unwrap()
-                        .texture(gles.renderer.context_id())
-                        .cloned()
-                });
+            // The mask is sampled by the composite: through texture unit 1 on GLES, and as a
+            // named sampler in the Vulkan custom program. Import (and wrap) the surface texture
+            // with the raw renderer of the active backend.
+            let mut mask_geo = surface_geo_logical.upscale(surface_anim_scale);
+            mask_geo.loc += geometry.loc;
 
-                let mut mask_geo = surface_geo_logical.upscale(surface_anim_scale);
-                mask_geo.loc += geometry.loc;
-
-                texture.map(|surface_tex| AlphaMask {
-                    surface_tex,
-                    surface_geo: mask_geo,
-                    threshold: 0.0,
-                })
+            if let Some(gles) = ctx.renderer.as_gles_renderer() {
+                import_alpha_mask(gles, states, mask_geo, 0.0)
             } else {
-                None
+                #[cfg(feature = "vulkan")]
+                {
+                    if let Some(vulkan) = ctx.renderer.as_vulkan_renderer() {
+                        import_alpha_mask(vulkan, states, mask_geo, 0.0)
+                    } else {
+                        None
+                    }
+                }
+                #[cfg(not(feature = "vulkan"))]
+                {
+                    None
+                }
             }
         } else {
             None

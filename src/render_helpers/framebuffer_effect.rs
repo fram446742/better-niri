@@ -481,7 +481,8 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
             .alpha_mask
             .as_ref()
             .filter(|_| program.is_some())
-            .map(|mask| mask.surface_tex.tex_id());
+            .and_then(|mask| mask.gles_texture())
+            .map(|texture| texture.tex_id());
         if let Some(tex_id) = surface_tex_id {
             frame.with_context(|gl| unsafe {
                 gl.ActiveTexture(ffi::TEXTURE1);
