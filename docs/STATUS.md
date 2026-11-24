@@ -323,10 +323,15 @@ picked up without re-auditing.
    app/workspace rules, named layouts, session state and SIGHUP reload;
    audio sources, named profiles, focus/workspace context rules, hotplug gating
    and `diagnose`; wallpaper cross-fades, playlists, time rules, per-session
-   scenes and scene import/export. Still open across the ecosystem: settings
-   tabs for the other apps, the graphical monitor arrangement editor, nsticky
-   delegating sticky to the compositor when the capability is present, systemd
-   units for companion daemons and CI jobs for the companion workspaces. On the compositor side all planned core
+   scenes and scene import/export. `better-settings/` now also exposes the
+   other apps through their own CLIs/JSON (displays, sessions, wallpaper, audio,
+   side panels, automation) with preview-then-apply, and degrades per tool when
+   something is missing. The companion daemon ships a systemd user unit, and
+   `scripts/check-workspaces.sh` plus a `better-workspaces` CI job run fmt/check/
+   test for every workspace. Still open: the optional graphical monitor
+   arrangement editor and audio mixer, nsticky delegating sticky to the
+   compositor when the capability is present, and the live Noctalia/hardware
+   checks. On the compositor side all planned core
    protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
    DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
