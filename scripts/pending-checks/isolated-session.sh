@@ -23,6 +23,15 @@ if [ -n "${HDR_OUTPUT:-}" ]; then
   python3 "$(dirname "$0")/hdr-config.py" "$HDR_OUTPUT" "$DIR"
 fi
 
+if grep -RqE 'hdr([[:space:]]|$)' "$DIR" --include='*.kdl'; then
+  cat <<'MSG'
+NOTE: this test config enables HDR. The Vulkan renderer does not yet composite
+SDR content into the HDR blend space, so text/desktop may look rough or
+differently antialiased compared with the SDR session. Re-run
+isolated-session.sh WITHOUT HDR_OUTPUT (fresh copy) for visual/text tests.
+MSG
+fi
+
 if [ -n "$NIRI_BIN" ] && [ -x "$NIRI_BIN" ]; then
   "$NIRI_BIN" validate -c "$DIR" && echo "config validates with $NIRI_BIN"
 else

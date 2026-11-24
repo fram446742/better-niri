@@ -183,7 +183,9 @@ picked up without re-auditing.
    compositor came up with hdr=true, 10-bit formats, and "updated HDR
    signalling" while a fullscreen HDR10 clip played with mpv tone-mapping to
    the display's 1083-nit peak); SDR/HDR mixed compositing still uses the GLES
-   path. Still open: HDR compositing, and Vulkan paths for the remaining
+   path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
+   and desktop content look rougher/differently antialiased than the SDR
+   session, because the SDR-to-HDR blend is not applied there yet. Still open: HDR compositing, and Vulkan paths for the remaining
    GLSL-only visuals (window/global/
    scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
    magnified screenshot capture, screen transitions). Global/scoped/window
