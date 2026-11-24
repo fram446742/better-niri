@@ -300,11 +300,10 @@ impl OutputDevice {
                 if let Some(enc) = info.current_encoder() {
                     match self.drm.get_encoder(enc) {
                         Ok(enc) => {
-                            if let Some(current_crtc) = enc.crtc() {
-                                if current_crtc != crtc {
+                            if let Some(current_crtc) = enc.crtc()
+                                && current_crtc != crtc {
                                     has_different_crtc = true;
                                 }
-                            }
                         }
                         Err(err) => {
                             debug!("couldn't get encoder: {err:?}");
@@ -1466,11 +1465,10 @@ impl Tty {
             .ok();
 
         // Reset gamma in case it was set before.
-        if let Some(gamma_props) = &mut gamma_props {
-            if let Err(err) = gamma_props.set_gamma(&device.drm, None) {
+        if let Some(gamma_props) = &mut gamma_props
+            && let Err(err) = gamma_props.set_gamma(&device.drm, None) {
                 debug!("couldn't reset gamma: {err:?}");
             }
-        }
 
         let surface = device
             .drm
@@ -1907,11 +1905,10 @@ impl Tty {
         // monitors from powering off. Therefore, we avoid unconditionally powering on.
         // An isolated output that (re)connects while the rest are off with skip-isolated stays lit.
         let keep_isolated_on = niri.power_off_skip_isolated && niri.is_output_isolated(&output);
-        if !niri.monitors_active && !keep_isolated_on {
-            if let Err(err) = compositor.clear() {
+        if !niri.monitors_active && !keep_isolated_on
+            && let Err(err) = compositor.clear() {
                 warn!("error clearing drm surface: {err:?}");
             }
-        }
 
         let vrr_enabled = compositor.vrr_enabled();
 
@@ -2547,14 +2544,13 @@ impl Tty {
                         .borrow()
                         .debug
                         .wait_for_frame_completion_before_queueing;
-                if needs_sync {
-                    if let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
+                if needs_sync
+                    && let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
                         let _span = tracy_client::span!("wait for completion");
                         if let Err(err) = element.sync.wait() {
                             warn!("error waiting for frame completion: {err:?}");
                         }
                     }
-                }
 
                 niri.update_primary_scanout_output(output, &res.states);
                 if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
@@ -3633,11 +3629,10 @@ impl GammaProps {
         if let GammaMode::Lut { previous_blob, .. } | GammaMode::Ctm { previous_blob, .. } =
             &mut self.mode
         {
-            if let Some(blob) = mem::replace(previous_blob, blob) {
-                if let Err(err) = device.destroy_property_blob(blob.get()) {
+            if let Some(blob) = mem::replace(previous_blob, blob)
+                && let Err(err) = device.destroy_property_blob(blob.get()) {
                     warn!("error destroying previous {prop_name} blob: {err:?}");
                 }
-            }
         } else {
             // Legacy early-returns at the start of the function.
             unreachable!();

@@ -1073,8 +1073,8 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for WorkspaceRefere
         ctx: &mut knuffel::decode::Context<S>,
     ) -> Result<WorkspaceReference, DecodeError<S>> {
         match &**val {
-            knuffel::ast::Literal::String(ref s) => Ok(WorkspaceReference::Name(s.clone().into())),
-            knuffel::ast::Literal::Int(ref value) => match value.try_into() {
+            knuffel::ast::Literal::String(s) => Ok(WorkspaceReference::Name(s.clone().into())),
+            knuffel::ast::Literal::Int(value) => match value.try_into() {
                 Ok(v) => Ok(WorkspaceReference::Index(v)),
                 Err(e) => {
                     ctx.emit_error(DecodeError::conversion(val, e));
@@ -1340,15 +1340,14 @@ where
             had_release_section = false;
         }
 
-        if let Some(node) = repeat_node {
-            if repeat == Some(true) && press_actions.is_empty() && !release_actions.is_empty() {
+        if let Some(node) = repeat_node
+            && repeat == Some(true) && press_actions.is_empty() && !release_actions.is_empty() {
                 ctx.emit_error(DecodeError::unexpected(
                     node,
                     "property",
                     "release-only binds cannot repeat",
                 ));
             }
-        }
 
         if let Some(node) = allow_when_locked_node {
             for action in press_actions.iter().chain(release_actions.iter()) {

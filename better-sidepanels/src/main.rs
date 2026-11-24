@@ -26,8 +26,8 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, registry_handlers,
+    delegate_registry,
+    registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
@@ -464,11 +464,5 @@ impl ProvidesRegistryState for Sidepanels {
 
     registry_handlers![OutputState, SeatState];
 }
-
-delegate_compositor!(Sidepanels);
-delegate_output!(Sidepanels);
-delegate_seat!(Sidepanels);
-delegate_shm!(Sidepanels);
-delegate_layer!(Sidepanels);
-delegate_pointer!(Sidepanels);
 delegate_registry!(Sidepanels);
+smithay_client_toolkit::delegate_dispatch2!(Sidepanels);

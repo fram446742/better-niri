@@ -217,13 +217,13 @@ pub(super) fn apply_config_to_managed_virtual_outputs(
 
         // Apply mode changes even when off so the mode is ready when re-enabled.
         let mut mode_changed = false;
-        if let Some(new_mode) = new_mode {
-            if output.current_mode() != Some(new_mode) {
+        if let Some(new_mode) = new_mode
+            && output.current_mode() != Some(new_mode) {
                 set_virtual_output_mode_single(output, new_mode);
                 mode_changed = true;
 
-                if let Some(ipc_outputs) = ipc_outputs {
-                    if let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
+                if let Some(ipc_outputs) = ipc_outputs
+                    && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
                         ipc_output.modes = vec![niri_ipc::Mode {
                             width: new_mode.size.w as u16,
                             height: new_mode.size.h as u16,
@@ -233,9 +233,7 @@ pub(super) fn apply_config_to_managed_virtual_outputs(
                         ipc_output.current_mode = Some(0);
                         ipc_output.is_custom_mode = true;
                     }
-                }
             }
-        }
 
         let was_connected = niri
             .global_space
@@ -279,11 +277,10 @@ pub(super) fn apply_config_to_managed_virtual_outputs(
             resized_outputs.push(output.clone());
         }
 
-        if let Some(ipc_outputs) = ipc_outputs {
-            if let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
+        if let Some(ipc_outputs) = ipc_outputs
+            && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
                 ipc_output.logical = is_connected.then(|| logical_output(output));
             }
-        }
     }
 
     if !resized_outputs.is_empty() {

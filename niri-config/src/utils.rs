@@ -117,7 +117,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for BoolOrFloat {
             } else {
                 BoolOrFloat::False
             }),
-            knuffel::ast::Literal::Decimal(ref value) => match value.try_into() {
+            knuffel::ast::Literal::Decimal(value) => match value.try_into() {
                 Ok(v) => {
                     if (0.0..=1.0).contains(&v) {
                         Ok(BoolOrFloat::Threshold(v))
@@ -134,7 +134,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for BoolOrFloat {
                     Ok(BoolOrFloat::False)
                 }
             },
-            knuffel::ast::Literal::Int(ref value) => match value.try_into() {
+            knuffel::ast::Literal::Int(value) => match value.try_into() {
                 Ok(v) => {
                     let v: i64 = v;
                     if (0..=1).contains(&v) {
@@ -184,7 +184,7 @@ impl<S: knuffel::traits::ErrorSpan, const MIN: i32, const MAX: i32> knuffel::Dec
         ctx: &mut knuffel::decode::Context<S>,
     ) -> Result<Self, DecodeError<S>> {
         match &**val {
-            knuffel::ast::Literal::Int(ref value) => match value.try_into() {
+            knuffel::ast::Literal::Int(value) => match value.try_into() {
                 Ok(v) => {
                     if (MIN..=MAX).contains(&v) {
                         Ok(FloatOrInt(f64::from(v)))
@@ -201,7 +201,7 @@ impl<S: knuffel::traits::ErrorSpan, const MIN: i32, const MAX: i32> knuffel::Dec
                     Ok(FloatOrInt::default())
                 }
             },
-            knuffel::ast::Literal::Decimal(ref value) => match value.try_into() {
+            knuffel::ast::Literal::Decimal(value) => match value.try_into() {
                 Ok(v) => {
                     if (f64::from(MIN)..=f64::from(MAX)).contains(&v) {
                         Ok(FloatOrInt(v))

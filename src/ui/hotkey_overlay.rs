@@ -92,13 +92,11 @@ impl HotkeyOverlay {
 
         // FIXME: should probably use the working area rather than view size.
         let weak = output.downgrade();
-        if let Some(rendered) = buffers.get(&weak) {
-            if let Some(buffer) = &rendered.buffer {
-                if buffer.texture_scale() != Scale::from(scale) {
+        if let Some(rendered) = buffers.get(&weak)
+            && let Some(buffer) = &rendered.buffer
+                && buffer.texture_scale() != Scale::from(scale) {
                     buffers.remove(&weak);
                 }
-            }
-        }
 
         let rendered = buffers.entry(weak).or_insert_with(|| {
             let renderer = renderer.as_gles_renderer();
@@ -308,11 +306,10 @@ fn collect_actions(config: &Config) -> Vec<&Action> {
     for bind in binds {
         if matches!(bind.hotkey_overlay_title, Some(Some(_))) {
             // Avoid duplicate actions.
-            if let Some(action) = bind_actions(bind).next() {
-                if !actions.contains(&action) {
+            if let Some(action) = bind_actions(bind).next()
+                && !actions.contains(&action) {
                     actions.push(action);
                 }
-            }
         }
     }
 

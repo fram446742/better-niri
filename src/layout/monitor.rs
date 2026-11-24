@@ -564,11 +564,10 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx += 1;
         }
 
-        if let Some(switch) = &mut self.workspace_switch {
-            if idx as f64 <= switch.target_idx() {
+        if let Some(switch) = &mut self.workspace_switch
+            && idx as f64 <= switch.target_idx() {
                 switch.offset(1);
             }
-        }
     }
 
     /// Returns the index of an empty workspace at `idx` that a window can be put into.
@@ -779,8 +778,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.open_grid_for_workspace_if_needed(workspace_idx);
 
-        if activate {
-            if let Some(id) = self.workspaces[workspace_idx]
+        if activate
+            && let Some(id) = self.workspaces[workspace_idx]
                 .active_window()
                 .map(|window| window.id().clone())
             {
@@ -791,7 +790,6 @@ impl<W: LayoutElement> Monitor<W> {
                     self.workspaces[workspace_idx].on_window_added_in_grid(&id);
                 }
             }
-        }
 
         if activate {
             self.activate_workspace(workspace_idx);
@@ -866,11 +864,10 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn ensure_empty_before_hidden(&mut self) {
         let first_hidden_idx = self.workspaces.iter().position(|ws| ws.hidden);
 
-        if let Some(hidden_idx) = first_hidden_idx {
-            if hidden_idx == 0 || self.workspaces[hidden_idx - 1].has_windows_or_name() {
+        if let Some(hidden_idx) = first_hidden_idx
+            && (hidden_idx == 0 || self.workspaces[hidden_idx - 1].has_windows_or_name()) {
                 self.add_workspace_at(hidden_idx);
             }
-        }
     }
 
     pub fn add_tile_to_column(
@@ -983,7 +980,7 @@ impl<W: LayoutElement> Monitor<W> {
         ws.needs_hidden = needs_hidden;
         ws.original_idx = None;
         self.insert_workspace(ws, original_idx, false);
-        return Some(original_idx);
+        Some(original_idx)
     }
 
     pub fn hide_workspace_by_name(&mut self, name: &str) {
@@ -1437,7 +1434,7 @@ impl<W: LayoutElement> Monitor<W> {
                         &window_id,
                         pos,
                         scale,
-                        config.clone(),
+                        config,
                     );
                 }
             } else {
@@ -1494,7 +1491,7 @@ impl<W: LayoutElement> Monitor<W> {
             self.hide_workspace_by_idx(idx);
             return true;
         }
-        return false;
+        false
     }
 
     pub fn switch_workspace_down(&mut self) {
@@ -1570,11 +1567,10 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn active_window(&self) -> Option<&W> {
-        if self.active_space == ActiveSpace::Sticky {
-            if let Some(win) = self.sticky.active_window() {
+        if self.active_space == ActiveSpace::Sticky
+            && let Some(win) = self.sticky.active_window() {
                 return Some(win);
             }
-        }
 
         self.active_workspace_ref().active_window()
     }
@@ -1605,21 +1601,19 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                 }
 
-                if let Some(anim) = &mut gesture.animation {
-                    if anim.is_done() {
+                if let Some(anim) = &mut gesture.animation
+                    && anim.is_done() {
                         gesture.animation = None;
                     }
-                }
             }
             None => (),
         }
 
         // Check if zoom animation is done.
-        if let Some(anim) = &self.overview_zoom_anim {
-            if anim.is_done() {
+        if let Some(anim) = &self.overview_zoom_anim
+            && anim.is_done() {
                 self.overview_zoom_anim = None;
             }
-        }
 
         for ws in &mut self.workspaces {
             ws.advance_animations();
@@ -2180,12 +2174,11 @@ impl<W: LayoutElement> Monitor<W> {
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for
         // example when toggling the overview in the middle of an overview animation), then restart
         // the workspace switch to avoid jumps.
-        if prev_render_idx != new_render_idx {
-            if let Some(WorkspaceSwitch::Animation(anim)) = &mut self.workspace_switch {
+        if prev_render_idx != new_render_idx
+            && let Some(WorkspaceSwitch::Animation(anim)) = &mut self.workspace_switch {
                 // FIXME: maintain velocity.
                 *anim = anim.restarted(prev_render_idx, anim.to(), 0.);
             }
-        }
     }
 
     pub(super) fn is_grid_overview_open(&self) -> bool {
@@ -2229,11 +2222,10 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        if let Some(ws) = self.workspaces.get_mut(workspace_idx) {
-            if ws.has_windows() {
+        if let Some(ws) = self.workspaces.get_mut(workspace_idx)
+            && ws.has_windows() {
                 ws.open_grid_overview();
             }
-        }
     }
 
     #[cfg(test)]
@@ -2248,8 +2240,7 @@ impl<W: LayoutElement> Monitor<W> {
             Some(WorkspaceSwitch::Animation(switch_anim)),
             Some(OverviewProgress::Animation(progress_anim)),
         ) = (&self.workspace_switch, &self.overview_progress)
-        {
-            if switch_anim.start_time() == progress_anim.start_time()
+            && switch_anim.start_time() == progress_anim.start_time()
                 && (switch_anim.duration().as_secs_f64() - progress_anim.duration().as_secs_f64())
                     .abs()
                     <= 0.001
@@ -2306,8 +2297,7 @@ impl<W: LayoutElement> Monitor<W> {
                     + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
 
                 return -first_ws_y / ws_height_with_gap;
-            }
-        };
+            };
 
         if let Some(switch) = &self.workspace_switch {
             switch.current_idx()
@@ -2316,7 +2306,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
+    pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> + use<W> {
         let scale = self.scale.fractional_scale();
         let zoom = self.overview_zoom();
 
@@ -2894,7 +2884,7 @@ impl<W: LayoutElement> Monitor<W> {
 
                 // Macro instead of closure because ws and insert hint have different elem types.
                 macro_rules! push {
-                    () => {{
+                    () => {
                         &mut |elem| {
                             let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
                             if let Some(elem) = elem {
@@ -2902,7 +2892,7 @@ impl<W: LayoutElement> Monitor<W> {
                                 push(scale_relocate(geo, elem));
                             }
                         }
-                    }};
+                    };
                 }
 
                 let xray_pos = XrayPos::new(geo.loc, zoom);
@@ -2958,15 +2948,14 @@ impl<W: LayoutElement> Monitor<W> {
                             push!(),
                         );
 
-                        if !tiles_above_floating {
-                            if let Some(loc) = insert_hint_loc {
+                        if !tiles_above_floating
+                            && let Some(loc) = insert_hint_loc {
                                 self.insert_hint_element.render(
                                     ctx.renderer,
                                     loc.location,
                                     push!(),
                                 );
                             }
-                        }
                     }
                     3 => {
                         ws.render_scrolling(
@@ -3090,7 +3079,7 @@ impl<W: LayoutElement> Monitor<W> {
 
             // Macro instead of closure because ws and insert hint have different elem types.
             macro_rules! push {
-                () => {{
+                () => {
                     &mut |elem| {
                         let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
                         if let Some(elem) = elem {
@@ -3103,19 +3092,18 @@ impl<W: LayoutElement> Monitor<W> {
                             }
                         }
                     }
-                }};
+                };
             }
 
             let xray_pos = XrayPos::new(geo.loc, zoom);
 
             ws.render_floating(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
 
-            if let Some(loc) = insert_hint_render_loc {
-                if loc.workspace == InsertWorkspace::Existing(ws.id()) {
+            if let Some(loc) = insert_hint_render_loc
+                && loc.workspace == InsertWorkspace::Existing(ws.id()) {
                     self.insert_hint_element
                         .render(ctx.renderer, loc.location, push!());
                 }
-            }
 
             ws.render_scrolling(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
         }

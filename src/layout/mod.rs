@@ -1355,8 +1355,8 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 // Set the default height for scrolling windows.
-                if !is_floating {
-                    if let Some(change) = scrolling_height {
+                if !is_floating
+                    && let Some(change) = scrolling_height {
                         let ws = mon
                             .workspaces
                             .iter_mut()
@@ -1364,7 +1364,6 @@ impl<W: LayoutElement> Layout<W> {
                             .unwrap();
                         ws.set_window_height(Some(&id), change);
                     }
-                }
 
                 if let Some(ws) = mon.workspaces.iter_mut().find(|ws| ws.has_window(&id)) {
                     ws.on_window_added_in_grid(&id);
@@ -1438,11 +1437,10 @@ impl<W: LayoutElement> Layout<W> {
                 );
 
                 // Set the default height for scrolling windows.
-                if !is_floating {
-                    if let Some(change) = scrolling_height {
+                if !is_floating
+                    && let Some(change) = scrolling_height {
                         ws.set_window_height(Some(&id), change);
                     }
-                }
 
                 workspaces[ws_idx].on_window_added_in_grid(&id);
 
@@ -1595,8 +1593,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && move_.tile.window().id() == window {
                 // Do this before calling update_window() so it can get up-to-date info.
                 if let Some(serial) = serial {
                     move_.tile.window_mut().on_commit(serial);
@@ -1605,7 +1603,6 @@ impl<W: LayoutElement> Layout<W> {
                 move_.tile.update_window();
                 return;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -1636,7 +1633,7 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn find_workspace_by_id(&self, id: WorkspaceId) -> Option<(usize, &Workspace<W>)> {
         match &self.monitor_set {
-            MonitorSet::Normal { ref monitors, .. } => {
+            MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
                     if let Some(index) = mon.idx_of_ws(id) {
                         let workspace = &mon.workspaces[index];
@@ -1658,7 +1655,7 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn find_workspace_by_name(&self, workspace_name: &str) -> Option<(usize, &Workspace<W>)> {
         match &self.monitor_set {
-            MonitorSet::Normal { ref monitors, .. } => {
+            MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
                     if let Some((index, workspace)) =
                         mon.workspaces.iter().enumerate().find(|(_, w)| {
@@ -1744,11 +1741,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn find_window_and_output(&self, wl_surface: &WlSurface) -> Option<(&W, Option<&Output>)> {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().is_wl_surface(wl_surface) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().is_wl_surface(wl_surface) {
                 return Some((move_.tile.window(), Some(&move_.output)));
             }
-        }
 
         match &self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -1785,11 +1781,10 @@ impl<W: LayoutElement> Layout<W> {
         &mut self,
         wl_surface: &WlSurface,
     ) -> Option<(&mut W, Option<&Output>)> {
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().is_wl_surface(wl_surface) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && move_.tile.window().is_wl_surface(wl_surface) {
                 return Some((move_.tile.window_mut(), Some(&move_.output)));
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -1830,8 +1825,8 @@ impl<W: LayoutElement> Layout<W> {
     /// layout where popups are normally kept constrained to the column width. This is used for
     /// IME popups where this is a more expected behavior.
     pub fn popup_target_rect(&self, window: &W::Id, overflow: bool) -> Rectangle<f64, Logical> {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 // Follow the scrolling layout logic.
                 let output_size = output_size(&move_.output);
                 let tile_pos = move_.tile_render_location(1.);
@@ -1854,15 +1849,12 @@ impl<W: LayoutElement> Layout<W> {
 
                 return target;
             }
-        }
 
-        if let MonitorSet::Normal { monitors, .. } = &self.monitor_set {
-            if let Some(mon) = monitors.iter().find(|mon| mon.sticky_has_window(window)) {
-                if let Some(target) = mon.sticky.popup_target_rect(window) {
+        if let MonitorSet::Normal { monitors, .. } = &self.monitor_set
+            && let Some(mon) = monitors.iter().find(|mon| mon.sticky_has_window(window))
+                && let Some(target) = mon.sticky.popup_target_rect(window) {
                     return target;
                 }
-            }
-        }
 
         self.workspaces()
             .find_map(|(_, _, ws)| ws.popup_target_rect(window, overflow))
@@ -1881,11 +1873,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn scroll_amount_to_activate(&self, window: &W::Id) -> f64 {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return 0.;
             }
-        }
 
         for mon in self.monitors() {
             for ws in &mon.workspaces {
@@ -1905,11 +1896,10 @@ impl<W: LayoutElement> Layout<W> {
         //
         // This function allows focus-follows-mouse to trigger only on the animation target
         // workspace.
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return true;
             }
-        }
 
         let MonitorSet::Normal { monitors, .. } = &self.monitor_set else {
             return true;
@@ -1946,11 +1936,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn activate_window(&mut self, window: &W::Id) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return;
             }
-        }
 
         let mut monitor_changed = false;
 
@@ -2033,19 +2022,17 @@ impl<W: LayoutElement> Layout<W> {
 
         self.activate_window(window);
 
-        if keep_grid_open {
-            if let Some(ws) = self.active_workspace_mut() {
+        if keep_grid_open
+            && let Some(ws) = self.active_workspace_mut() {
                 ws.set_grid_focus_for_window(window);
             }
-        }
     }
 
     pub fn activate_window_without_raising(&mut self, window: &W::Id) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return;
             }
-        }
 
         let mut monitor_changed = false;
 
@@ -2215,11 +2202,10 @@ impl<W: LayoutElement> Layout<W> {
         let MonitorSet::Normal { monitors, .. } = &self.monitor_set else {
             return false;
         };
-        if let Some(move_) = self.interactive_move.as_ref().and_then(|x| x.moving()) {
-            if move_.output == *output && move_.tile.decorations_are_animating(true) {
+        if let Some(move_) = self.interactive_move.as_ref().and_then(|x| x.moving())
+            && move_.output == *output && move_.tile.decorations_are_animating(true) {
                 return true;
             }
-        }
         let Some(mon) = monitors.iter().find(|mon| &mon.output == output) else {
             return false;
         };
@@ -2849,11 +2835,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.grid_move_guard() {
             return false;
         }
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.move_left(true) {
+        if let Some(workspace) = self.active_workspace_mut()
+            && workspace.move_left(true) {
                 return false;
             }
-        }
 
         self.move_column_to_output(output, None, true);
         true
@@ -2881,11 +2866,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.grid_move_guard() {
             return false;
         }
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.move_right(true) {
+        if let Some(workspace) = self.active_workspace_mut()
+            && workspace.move_right(true) {
                 return false;
             }
-        }
 
         self.move_column_to_output(output, None, true);
         true
@@ -2973,11 +2957,10 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn consume_or_expel_window_left(&mut self, window: Option<&W::Id>) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
         if window.is_none()
             && self
                 .run_active_grid_overview_action(|this| {
@@ -2992,11 +2975,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.grid_move_guard() {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -3023,11 +3005,10 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn consume_or_expel_window_right(&mut self, window: Option<&W::Id>) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
         if window.is_none()
             && self
                 .run_active_grid_overview_action(|this| {
@@ -3042,11 +3023,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.grid_move_guard() {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -3499,11 +3479,10 @@ impl<W: LayoutElement> Layout<W> {
         if window.is_none() && self.grid_move_guard() {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
         let source_grid = window.and_then(|window| self.grid_snapshot_for_window(window));
 
         if let Some(window) = window {
@@ -3864,16 +3843,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn center_window(&mut self, id: Option<&W::Id>) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = id {
-            if self.is_window_minimized(id) {
+        if let Some(id) = id
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if id.is_none() || id == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (id.is_none() || id == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(id) = id {
             if self.is_sticky_window(id) {
@@ -3917,11 +3894,10 @@ impl<W: LayoutElement> Layout<W> {
             if let Some(id) = self.grid_focused_window_id() {
                 // While a cell is being dragged, the grid focus is the dragged window, which is
                 // held by the interactive move rather than by any workspace.
-                if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-                    if move_.tile.window().id() == &id {
+                if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+                    && move_.tile.window().id() == &id {
                         return Some(move_.tile.window());
                     }
-                }
 
                 if let Some(win) = self
                     .workspaces()
@@ -4493,15 +4469,15 @@ impl<W: LayoutElement> Layout<W> {
         let is_overview_open = self.overview_open;
 
         // Scroll the view if needed.
-        if let Some((output, pos_within_output, is_scrolling)) = dnd_scroll {
-            if let Some(mon) = self.monitor_for_output_mut(&output) {
+        if let Some((output, pos_within_output, is_scrolling)) = dnd_scroll
+            && let Some(mon) = self.monitor_for_output_mut(&output) {
                 let mut scrolled = false;
 
                 let zoom = mon.overview_zoom();
                 scrolled |= mon.dnd_scroll_gesture_scroll(pos_within_output, 1. / zoom);
 
-                if is_scrolling {
-                    if let Some((ws, geo)) = mon.workspace_under(pos_within_output) {
+                if is_scrolling
+                    && let Some((ws, geo)) = mon.workspace_under(pos_within_output) {
                         let idx = mon.idx_of_ws(ws.id()).unwrap();
                         let ws = &mut mon.workspaces[idx];
                         // As far as the DnD scroll gesture is concerned, the workspace spans across
@@ -4510,7 +4486,6 @@ impl<W: LayoutElement> Layout<W> {
                         scrolled |=
                             ws.dnd_scroll_gesture_scroll(pos_within_output - ws_pos, 1. / zoom);
                     }
-                }
 
                 if scrolled {
                     // Don't trigger DnD hold while scrolling.
@@ -4579,24 +4554,21 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-        }
 
-        if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress {
-            if anim.is_done() {
+        if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress
+            && anim.is_done() {
                 if self.overview_open {
                     self.overview_progress = Some(OverviewProgress::Open);
                 } else {
                     self.overview_progress = None;
                 }
             }
-        }
 
         #[cfg(feature = "navigation")]
-        if let Some(anim) = &self.carousel_rotation_anim {
-            if anim.is_done() {
+        if let Some(anim) = &self.carousel_rotation_anim
+            && anim.is_done() {
                 self.carousel_rotation_anim = None;
             }
-        }
 
         // The ring can shrink without going through `remove_output` (e.g.
         // the settled-remote's only window closes and `carousel_outputs()`
@@ -4658,14 +4630,13 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn are_animations_ongoing(&self, output: Option<&Output>) -> bool {
         // Keep advancing animations if we might need to scroll the view.
-        if let Some(dnd) = &self.dnd {
-            if output.is_none_or(|output| *output == dnd.output) {
+        if let Some(dnd) = &self.dnd
+            && output.is_none_or(|output| *output == dnd.output) {
                 return true;
             }
-        }
 
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if output.is_none_or(|output| *output == move_.output) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && output.is_none_or(|output| *output == move_.output) {
                 if move_.tile.are_animations_ongoing() {
                     return true;
                 }
@@ -4675,7 +4646,6 @@ impl<W: LayoutElement> Layout<W> {
                     return true;
                 }
             }
-        }
 
         if self
             .overview_progress
@@ -4714,8 +4684,8 @@ impl<W: LayoutElement> Layout<W> {
         self.update_render_elements_time = self.clock.now();
 
         let zoom = self.overview_zoom();
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if output.is_none_or(|output| move_.output == *output) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && output.is_none_or(|output| move_.output == *output) {
                 let pos_within_output = move_.tile_render_location(zoom);
                 let total_scale = move_.total_scale(zoom);
 
@@ -4732,7 +4702,6 @@ impl<W: LayoutElement> Layout<W> {
 
                 move_.tile.update_render_elements(true, view_rect);
             }
-        }
 
         self.update_insert_hint(output);
 
@@ -4986,16 +4955,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn toggle_window_width(&mut self, window: Option<&W::Id>, forwards: bool) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5022,16 +4989,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn toggle_window_height(&mut self, window: Option<&W::Id>, forwards: bool) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5082,16 +5047,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn set_window_width(&mut self, window: Option<&W::Id>, change: SizeChange) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5118,16 +5081,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn set_window_height(&mut self, window: Option<&W::Id>, change: SizeChange) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5154,16 +5115,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn reset_window_height(&mut self, window: Option<&W::Id>) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5197,11 +5156,10 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn toggle_window_floating(&mut self, window: Option<&W::Id>) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
         if self.grid_move_guard() {
             let moving_target = self.interactive_move.as_ref().is_some_and(|move_| {
                 move_.moving().is_some_and(|move_| {
@@ -5213,8 +5171,8 @@ impl<W: LayoutElement> Layout<W> {
                 return;
             }
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 if move_.is_sticky {
                     return;
                 }
@@ -5260,7 +5218,6 @@ impl<W: LayoutElement> Layout<W> {
 
                 return;
             }
-        }
 
         if let Some(window) = window {
             if self.is_sticky_window(window) {
@@ -5286,11 +5243,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn toggle_window_sticky(&mut self, window: Option<&W::Id>) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         let target_id = if let Some(window) = window {
             window.clone()
@@ -5463,13 +5419,12 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn set_window_floating(&mut self, window: Option<&W::Id>, floating: bool) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = window {
-            if self.is_window_minimized(id) {
+        if let Some(id) = window
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 if move_.is_sticky {
                     return;
                 }
@@ -5479,7 +5434,6 @@ impl<W: LayoutElement> Layout<W> {
                 }
                 return;
             }
-        }
         if self.grid_move_guard() {
             self.run_grid_window_action(window, |ws, window| {
                 ws.set_window_floating(window, floating)
@@ -5543,16 +5497,14 @@ impl<W: LayoutElement> Layout<W> {
         animate: bool,
     ) {
         // Layout operations are no-ops for minimized windows.
-        if let Some(id) = id {
-            if self.is_window_minimized(id) {
+        if let Some(id) = id
+            && self.is_window_minimized(id) {
                 return;
             }
-        }
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if id.is_none() || id == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (id.is_none() || id == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let MonitorSet::Normal {
             monitors,
@@ -5660,15 +5612,12 @@ impl<W: LayoutElement> Layout<W> {
             // and cares about its zoom being visible again), so it's kept
             // here rather than folded into the shared helper.
             #[cfg(feature = "navigation")]
-            if let Some(pullback) = self.on_active_monitor_changed() {
-                if let Some(prev_idx) = prev_idx {
-                    if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
-                        if let Some(mon) = monitors.get_mut(prev_idx) {
+            if let Some(pullback) = self.on_active_monitor_changed()
+                && let Some(prev_idx) = prev_idx
+                    && let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set
+                        && let Some(mon) = monitors.get_mut(prev_idx) {
                             mon.set_zoom_target_no_anim(pullback.restore_zoom);
                         }
-                    }
-                }
-            }
         }
     }
 
@@ -5679,8 +5628,8 @@ impl<W: LayoutElement> Layout<W> {
         target_ws_idx: Option<usize>,
         activate: ActivateWindow,
     ) {
-        if window.is_none() {
-            if let Some((ws_id, focus_id, window_visual_snapshots)) =
+        if window.is_none()
+            && let Some((ws_id, focus_id, window_visual_snapshots)) =
                 self.active_grid_overview_action()
             {
                 self.move_to_output_unchecked(None, output, target_ws_idx, activate);
@@ -5692,7 +5641,6 @@ impl<W: LayoutElement> Layout<W> {
                 );
                 return;
             }
-        }
 
         let source_grid = window.and_then(|window| self.grid_snapshot_for_window(window));
         self.move_to_output_unchecked(window, output, target_ws_idx, activate);
@@ -5708,11 +5656,10 @@ impl<W: LayoutElement> Layout<W> {
         target_ws_idx: Option<usize>,
         activate: ActivateWindow,
     ) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if window.is_none() || window == Some(move_.tile.window().id()) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && (window.is_none() || window == Some(move_.tile.window().id())) {
                 return;
             }
-        }
 
         if let MonitorSet::Normal {
             monitors,
@@ -5721,11 +5668,10 @@ impl<W: LayoutElement> Layout<W> {
         } = &mut self.monitor_set
         {
             let mut sticky_window_id = None;
-            if window.is_none() && monitors[*active_monitor_idx].sticky_is_active() {
-                if let Some(window) = monitors[*active_monitor_idx].sticky.active_window() {
+            if window.is_none() && monitors[*active_monitor_idx].sticky_is_active()
+                && let Some(window) = monitors[*active_monitor_idx].sticky.active_window() {
                     sticky_window_id = Some(window.id().clone());
                 }
-            }
             let window = window.or(sticky_window_id.as_ref());
 
             let new_idx = monitors
@@ -5733,8 +5679,8 @@ impl<W: LayoutElement> Layout<W> {
                 .position(|mon| &mon.output == output)
                 .unwrap();
 
-            if let Some(window) = window {
-                if let Some((mon_idx, _)) = monitors
+            if let Some(window) = window
+                && let Some((mon_idx, _)) = monitors
                     .iter()
                     .enumerate()
                     .find(|(_, mon)| mon.sticky_has_window(window))
@@ -5779,7 +5725,6 @@ impl<W: LayoutElement> Layout<W> {
                     }
                     return;
                 }
-            }
 
             let (mon_idx, ws_idx) = if let Some(window) = window {
                 monitors
@@ -6020,11 +5965,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == id {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == id {
                 return;
             }
-        }
 
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
@@ -6040,11 +5984,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.is_window_minimized(id) {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == id {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == id {
                 return;
             }
-        }
 
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
@@ -6108,11 +6051,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.is_window_minimized(id) {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == id {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == id {
                 return;
             }
-        }
 
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
@@ -6205,11 +6147,10 @@ impl<W: LayoutElement> Layout<W> {
         let mut best: Option<(W::Id, u64)> = None;
         for (_, _, ws) in self.workspaces() {
             for tile in ws.tiles() {
-                if let Some(at) = tile.minimized_at {
-                    if best.as_ref().is_none_or(|(_, best_at)| at > *best_at) {
+                if let Some(at) = tile.minimized_at
+                    && best.as_ref().is_none_or(|(_, best_at)| at > *best_at) {
                         best = Some((tile.window().id().clone(), at));
                     }
-                }
             }
         }
         best.map(|(id, _)| id)
@@ -6226,11 +6167,10 @@ impl<W: LayoutElement> Layout<W> {
         if self.is_window_minimized(id) {
             return;
         }
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == id {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == id {
                 return;
             }
-        }
 
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
@@ -6810,7 +6750,7 @@ impl<W: LayoutElement> Layout<W> {
                         .workspaces_with_render_geo()
                         .find(|(ws, _)| ws.has_window(window))
                     {
-                        let (_, tile_offset, _) = ws
+                        let (_, _tile_offset, _) = ws
                             .tiles_with_render_positions()
                             .find(|(tile, _, _)| tile.window().id() == window)
                             .unwrap();
@@ -6935,12 +6875,11 @@ impl<W: LayoutElement> Layout<W> {
                     }
 
                     // If moved over a different workspace, reset the config override.
-                    if let Some((id, _)) = &move_.workspace_config {
-                        if Some(*id) != ws_id {
+                    if let Some((id, _)) = &move_.workspace_config
+                        && Some(*id) != ws_id {
                             move_.workspace_config = None;
                             update_config = true;
                         }
-                    }
                 }
 
                 if output != move_.output {
@@ -7449,11 +7388,10 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         delta: Point<f64, Logical>,
     ) -> bool {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return false;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -7482,11 +7420,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn interactive_resize_end(&mut self, window: &W::Id) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -7783,11 +7720,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn start_open_animation_for_window(&mut self, window: &W::Id) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == window {
                 return;
             }
-        }
 
         if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
             for mon in monitors {
@@ -7815,8 +7751,8 @@ impl<W: LayoutElement> Layout<W> {
 
         let zoom = self.overview_zoom();
 
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && move_.tile.window().id() == window {
                 let pos_within_output = move_.tile_render_location(zoom);
                 let total_scale = move_.total_scale(zoom);
 
@@ -7834,7 +7770,6 @@ impl<W: LayoutElement> Layout<W> {
                 );
                 return;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -7882,12 +7817,11 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn clear_unmap_snapshot(&mut self, window: &W::Id) {
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && move_.tile.window().id() == window {
                 let _ = move_.tile.take_unmap_snapshot();
                 return;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -7926,8 +7860,8 @@ impl<W: LayoutElement> Layout<W> {
 
         let zoom = self.overview_zoom();
 
-        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
-            if move_.tile.window().id() == window {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move
+            && move_.tile.window().id() == window {
                 let Some(snapshot) = move_.tile.take_unmap_snapshot() else {
                     return;
                 };
@@ -7949,7 +7883,6 @@ impl<W: LayoutElement> Layout<W> {
                 ws.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
                 return;
             }
-        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
@@ -8207,11 +8140,10 @@ impl<W: LayoutElement> Layout<W> {
         // A window dragged over the grid is out of the layout for the time being, but it is still
         // a grid window rather than one sitting on top of the grid (like an ignore-grid-overview
         // one), e.g. the wheel over it should keep switching workspaces.
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == id {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move
+            && move_.tile.window().id() == id {
                 return self.is_grid_overview_open_on(&move_.output);
             }
-        }
 
         self.workspaces()
             .any(|(_, _, ws)| ws.window_is_in_grid_overview(id))

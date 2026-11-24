@@ -26,7 +26,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform
 
 fn save_png(path: &str, width: u32, height: u32, xrgb: &[u8]) -> anyhow::Result<()> {
     let mut rgba = Vec::with_capacity(xrgb.len());
-    for chunk in xrgb.chunks_exact(4) {
+    for chunk in xrgb.as_chunks::<4>().0 {
         rgba.push(chunk[2]);
         rgba.push(chunk[1]);
         rgba.push(chunk[0]);

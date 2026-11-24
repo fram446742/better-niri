@@ -334,14 +334,13 @@ impl PortalScreenCast {
     }
 
     fn cancel_request(&self, id: &PickerRequestId) {
-        if self.requests.lock().unwrap().cancel(id) {
-            if let Err(err) = self
+        if self.requests.lock().unwrap().cancel(id)
+            && let Err(err) = self
                 .to_niri
                 .send(ScreenCastToNiri::CancelPickSources(id.clone()))
             {
                 warn!("error sending picker cancellation to niri: {err}");
             }
-        }
     }
 }
 

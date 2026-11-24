@@ -295,7 +295,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&copy_script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::env::set_var("BETTER_SHOT_CLIPBOARD", &copy_script);
+        unsafe { std::env::set_var("BETTER_SHOT_CLIPBOARD", &copy_script) };
         copy_to_clipboard(&image).unwrap();
         assert_eq!(std::fs::read(dir.join("copied")).unwrap(), b"png-bytes");
 
@@ -309,14 +309,14 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&annotate_script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::env::set_var("BETTER_SHOT_ANNOTATE", &annotate_script);
+        unsafe { std::env::set_var("BETTER_SHOT_ANNOTATE", &annotate_script) };
         annotate(&image).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("annotated")).unwrap(),
             image.display().to_string()
         );
 
-        std::env::remove_var("BETTER_SHOT_CLIPBOARD");
-        std::env::remove_var("BETTER_SHOT_ANNOTATE");
+        unsafe { std::env::remove_var("BETTER_SHOT_CLIPBOARD") };
+        unsafe { std::env::remove_var("BETTER_SHOT_ANNOTATE") };
     }
 }

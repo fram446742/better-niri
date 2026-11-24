@@ -356,8 +356,8 @@ impl TabIndicator {
             .collect();
 
         let prev = &self.shown_rects;
-        if !prev.is_empty() && prev.len() != count {
-            if let Some((clock, config)) = &self.count_anim_config {
+        if !prev.is_empty() && prev.len() != count
+            && let Some((clock, config)) = &self.count_anim_config {
                 let mut from = prev.clone();
                 if count > from.len() {
                     // New tabs start out empty at the end of the last one.
@@ -379,7 +379,6 @@ impl TabIndicator {
                 let anim = Animation::new(clock.clone(), 0., 1., 0., *config);
                 self.count_anim = Some((from, anim));
             }
-        }
 
         let rects = match &self.count_anim {
             Some((from, anim)) if from.len() == count => {

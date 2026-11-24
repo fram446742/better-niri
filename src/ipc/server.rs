@@ -228,11 +228,10 @@ async fn handle_client(ctx: ClientCtx, stream: Async<'static, UnixStream>) -> an
             Err(err) => Err(err),
         };
 
-        if let Err(err) = &reply {
-            if !requested_error {
+        if let Err(err) = &reply
+            && !requested_error {
                 warn!("error processing IPC request: {err:?}");
             }
-        }
 
         buf.clear();
         serde_json::to_writer(&mut buf, &reply).context("error formatting reply")?;
@@ -615,15 +614,13 @@ fn validate_action(action: &Action) -> Result<(), String> {
     | Action::ScreenshotScreen { path, .. }
     | Action::ScreenshotWindow { path, .. }
     | Action::LoadConfigFile { path } = action
-    {
-        if let Some(path) = path {
+        && let Some(path) = path {
             // Relative paths are resolved against the niri compositor's working directory, which
             // is almost certainly not what you want.
             if !Path::new(path).is_absolute() {
                 return Err(format!("path must be absolute: {path}"));
             }
         }
-    }
 
     if let Action::LoadConfigFile { path: Some(path) } = action {
         let p = Path::new(path);
@@ -1270,11 +1267,10 @@ fn ipc_active_window_id(ws: &crate::layout::workspace::Workspace<Mapped>) -> Opt
         if let Some(win) = ws.active_ignored_floating_window_in_grid() {
             return Some(win.id().get());
         }
-        if let Some(window) = ws.grid_focused_window_id() {
-            if let Some(mapped) = ws.windows().find(|mapped| mapped.window == window) {
+        if let Some(window) = ws.grid_focused_window_id()
+            && let Some(mapped) = ws.windows().find(|mapped| mapped.window == window) {
                 return Some(mapped.id().get());
             }
-        }
     }
     ws.active_window().map(|win| win.id().get())
 }

@@ -35,7 +35,7 @@ use smithay::utils::Size;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal};
 use smithay::wayland::presentation::Refresh;
 
-use super::{virtual_output, IpcOutputMap, OutputId, RenderResult, VirtualOutputMarker};
+use super::{virtual_output, IpcOutputMap, OutputId, RenderResult};
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::{resources, shaders};
 use crate::utils::{get_monotonic_time, logical_output};
@@ -604,7 +604,7 @@ impl input::LibinputInterface for HeadlessLibinputInterface {
 }
 
 fn init_headless_libinput(event_loop: LoopHandle<'static, State>, seat: &str) {
-    let mut libinput = Libinput::new_with_udev(HeadlessLibinputInterface::default());
+    let mut libinput = Libinput::new_with_udev(HeadlessLibinputInterface);
 
     unsafe { super::libinput_plugins::init_libinput_plugin_system(&libinput) };
 
@@ -622,6 +622,5 @@ fn init_headless_libinput(event_loop: LoopHandle<'static, State>, seat: &str) {
         .is_err()
     {
         debug!("headless: failed to insert libinput backend; input will be unavailable");
-        return;
     }
 }

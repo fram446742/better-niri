@@ -28,7 +28,7 @@ pub fn render_cursor(
     let mut pixels_rgba = pixmap.data().to_vec();
     // tiny-skia gives premultiplied RGBA, while XCursor/ARGB8888 memory is BGRA
     // on little-endian systems. Match the byte order used by parsed XCursor files.
-    for pixel in pixels_rgba.chunks_exact_mut(4) {
+    for pixel in pixels_rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 

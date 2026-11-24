@@ -22,11 +22,10 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
     // programs keep the one of a niri that has since restarted.
     let socket_exists = env::var_os(SOCKET_PATH_ENV)
         .is_some_and(|path| !path.is_empty() && Path::new(&path).exists());
-    if !socket_exists {
-        if let Some(path) = find_niri_socket() {
-            env::set_var(SOCKET_PATH_ENV, path);
+    if !socket_exists
+        && let Some(path) = find_niri_socket() {
+            unsafe { env::set_var(SOCKET_PATH_ENV, path) };
         }
-    }
 
     // For actions taking paths, prepend the niri CLI's working directory.
     if let Msg::Action {
@@ -35,11 +34,9 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
             | Action::ScreenshotScreen { path, .. }
             | Action::ScreenshotWindow { path, .. },
     } = &mut msg
-    {
-        if let Some(path) = path {
+        && let Some(path) = path {
             ensure_absolute_path(path).context("error making the path absolute")?;
         }
-    }
 
     // Resolve `niri msg actions` before the request match, since it may read stdin.
     let batched_actions = if let Msg::Actions { actions } = &msg {
@@ -56,11 +53,9 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
             if let Action::Screenshot { path, .. }
             | Action::ScreenshotScreen { path, .. }
             | Action::ScreenshotWindow { path, .. } = action
-            {
-                if let Some(path) = path {
+                && let Some(path) = path {
                     ensure_absolute_path(path).context("error making the path absolute")?;
                 }
-            }
         }
         Some(parsed)
     } else {
@@ -1145,14 +1140,13 @@ fn prepare_agent_action(
 ) -> anyhow::Result<AgentAction> {
     let mut action = action.clone();
 
-    if let AgentAction::Type { text, .. } = &mut action {
-        if text == "-" {
+    if let AgentAction::Type { text, .. } = &mut action
+        && text == "-" {
             text.clear();
             std::io::stdin()
                 .read_to_string(text)
                 .context("error reading text from stdin")?;
         }
-    }
 
     let Some(image) = image else {
         return Ok(action);
@@ -1215,11 +1209,10 @@ fn find_niri_socket() -> Option<PathBuf> {
         found.push((display.to_owned(), is_session, entry.path()));
     }
 
-    if let Some(display) = wayland_display {
-        if let Some((_, _, path)) = found.iter().find(|(d, _, _)| *d == display) {
+    if let Some(display) = wayland_display
+        && let Some((_, _, path)) = found.iter().find(|(d, _, _)| *d == display) {
             return Some(path.clone());
         }
-    }
     if found.len() == 1 {
         return found.pop().map(|(_, _, path)| path);
     }

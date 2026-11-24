@@ -118,8 +118,8 @@ impl Niri {
 
         let mut announcement = None;
         let ws_id = self.layout.active_workspace().map(|ws| ws.id());
-        if let Some(ws_id) = ws_id {
-            if self.a11y.workspace_id != Some(ws_id) {
+        if let Some(ws_id) = ws_id
+            && self.a11y.workspace_id != Some(ws_id) {
                 let (_, idx, ws) = self
                     .layout
                     .workspaces()
@@ -134,7 +134,6 @@ impl Niri {
 
                 announcement = Some(buf);
             }
-        }
         self.a11y.workspace_id = ws_id;
 
         let focus = self.a11y_focus();

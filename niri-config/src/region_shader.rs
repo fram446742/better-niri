@@ -59,14 +59,14 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for CoordF64 {
         ctx: &mut knuffel::decode::Context<S>,
     ) -> Result<Self, DecodeError<S>> {
         match &**val {
-            knuffel::ast::Literal::Int(ref value) => match <i64 as TryFrom<_>>::try_from(value) {
+            knuffel::ast::Literal::Int(value) => match <i64 as TryFrom<_>>::try_from(value) {
                 Ok(v) => Ok(CoordF64(v as f64)),
                 Err(e) => {
                     ctx.emit_error(DecodeError::conversion(val, e));
                     Ok(CoordF64::default())
                 }
             },
-            knuffel::ast::Literal::Decimal(ref value) => match <f64 as TryFrom<_>>::try_from(value)
+            knuffel::ast::Literal::Decimal(value) => match <f64 as TryFrom<_>>::try_from(value)
             {
                 Ok(v) => Ok(CoordF64(v)),
                 Err(e) => {

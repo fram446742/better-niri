@@ -232,8 +232,8 @@ fn send_workspace_enter_leave(
     data: &ExtWorkspaceData,
     enter: bool,
 ) {
-    if let Some(output) = &data.output {
-        if let Some(group_data) = workspace_groups.get(output) {
+    if let Some(output) = &data.output
+        && let Some(group_data) = workspace_groups.get(output) {
             for group in &group_data.instances {
                 let manager: &WrappedManager = group.data().unwrap();
                 for workspace in &data.instances {
@@ -247,7 +247,6 @@ fn send_workspace_enter_leave(
                 }
             }
         }
-    }
 }
 
 fn remove_workspace_instances(

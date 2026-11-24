@@ -182,11 +182,10 @@ impl State {
             return;
         };
         for watch in &mut agent.watches {
-            if &watch.shell == shell {
-                if let Some(sent) = watch.ping_sent.take() {
+            if &watch.shell == shell
+                && let Some(sent) = watch.ping_sent.take() {
                     watch.answered = Some(sent);
                 }
-            }
         }
     }
 
@@ -476,7 +475,7 @@ pub(super) fn popup_surfaces(mapped: &Mapped) -> Vec<(f64, f64)> {
             PopupKind::Xdg(ref xdg) => {
                 let origin = offset - popup.geometry().loc;
                 Some((
-                    popup_depth(&xdg),
+                    popup_depth(xdg),
                     (f64::from(origin.x), f64::from(origin.y)),
                 ))
             }

@@ -83,8 +83,8 @@ impl TouchOverviewGrab {
         let layout = &mut data.niri.layout;
 
         // Check if we should become interactive move.
-        if matches!(self.gesture, GestureState::Recognizing) {
-            if let Some(window) = self.window.as_ref().filter(|win| win.alive()) {
+        if matches!(self.gesture, GestureState::Recognizing)
+            && let Some(window) = self.window.as_ref().filter(|win| win.alive()) {
                 let passed = timestamp.saturating_sub(self.start_timestamp);
                 if INTERACTIVE_MOVE_THRESHOLD <= passed
                     && layout.interactive_move_begin(
@@ -102,7 +102,6 @@ impl TouchOverviewGrab {
                     }
                 }
             }
-        }
 
         // Check if we should become a spatial scroll.
         if matches!(self.gesture, GestureState::Recognizing) {
@@ -114,9 +113,9 @@ impl TouchOverviewGrab {
                     .map(|policy| policy.gesture_prefers_view_offset(c.x, c.y))
                     .unwrap_or(false);
 
-                if let Some(ws_id) = self.workspace_id.filter(|_| start_view_offset) {
-                    if let Some((ws_idx, ws)) = layout.find_workspace_by_id(ws_id) {
-                        if ws.current_output() == Some(&self.output) {
+                if let Some(ws_id) = self.workspace_id.filter(|_| start_view_offset)
+                    && let Some((ws_idx, ws)) = layout.find_workspace_by_id(ws_id)
+                        && ws.current_output() == Some(&self.output) {
                             layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
                             self.gesture = GestureState::ViewOffset;
 
@@ -126,8 +125,6 @@ impl TouchOverviewGrab {
                                 );
                             }
                         }
-                    }
-                }
 
                 if matches!(self.gesture, GestureState::Recognizing) {
                     layout.workspace_switch_gesture_begin(&self.output, false);
@@ -265,12 +262,11 @@ impl TouchGrab<State> for TouchOverviewGrab {
             return;
         }
 
-        if matches!(self.gesture, GestureState::InteractiveMove) {
-            if let Some(window) = &self.window.as_ref() {
+        if matches!(self.gesture, GestureState::InteractiveMove)
+            && let Some(window) = &self.window.as_ref() {
                 data.niri.layout.toggle_window_floating(Some(window));
                 data.niri.queue_redraw_all();
             }
-        }
     }
 
     fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent) {

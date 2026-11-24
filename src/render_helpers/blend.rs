@@ -248,10 +248,10 @@ pub fn srgb_to_pq(color: Color32F, ref_lum_scale: f32) -> Color32F {
     let unpremul = |c: f32| if a > 0. { c / a } else { c };
 
     let pq = |lin: f32| {
-        const M1: f32 = 0.1593017578125;
+        const M1: f32 = 0.159_301_76;
         const M2: f32 = 78.84375;
         const C1: f32 = 0.8359375;
-        const C2: f32 = 18.8515625;
+        const C2: f32 = 18.851_563;
         const C3: f32 = 18.6875;
         let y = lin.clamp(0., 1.).powf(M1);
         ((C1 + C2 * y) / (1. + C3 * y)).powf(M2)

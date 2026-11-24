@@ -113,11 +113,10 @@ impl PointerGrab<State> for PickColorGrab {
 
         if let Some(tx) = data.niri.pick_color.take() {
             let color = Self::pick_color_at_point(handle.current_location(), data);
-            if self.copy_to_clipboard {
-                if let Some(color) = &color {
+            if self.copy_to_clipboard
+                && let Some(color) = &color {
                     Self::copy_to_clipboard(color, data);
                 }
-            }
             let _ = tx.send_blocking(color);
         }
 

@@ -3,13 +3,13 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use glam::{Mat3, Vec2};
+use smithay::backend::renderer::DebugFlags;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{
-    ffi, link_program, Capability, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform,
-    UniformDesc, UniformName, UniformType,
+    Capability, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, UniformDesc, UniformName,
+    UniformType, ffi, link_program,
 };
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
-use smithay::backend::renderer::DebugFlags;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size};
 
@@ -94,75 +94,77 @@ unsafe fn compile_program(
     let alpha = c"niri_alpha";
     let tint = c"niri_tint";
 
-    Ok(ShaderProgram(Rc::new(ShaderProgramInner {
-        normal: ShaderProgramInternal {
-            program,
-            uniform_matrix: gl.GetUniformLocation(program, matrix.as_ptr()),
-            uniform_tex_matrix: gl.GetUniformLocation(program, tex_matrix.as_ptr()),
-            uniform_size: gl.GetUniformLocation(program, size.as_ptr()),
-            uniform_scale: gl.GetUniformLocation(program, scale.as_ptr()),
-            uniform_alpha: gl.GetUniformLocation(program, alpha.as_ptr()),
-            attrib_vert: gl.GetAttribLocation(program, vert.as_ptr()),
-            attrib_vert_position: gl.GetAttribLocation(program, vert_position.as_ptr()),
-            additional_uniforms: additional_uniforms
-                .iter()
-                .map(|uniform| {
-                    let name =
-                        CString::new(uniform.name.as_bytes()).expect("Interior null in name");
-                    let location = gl.GetUniformLocation(program, name.as_ptr());
-                    (
-                        uniform.name.clone().into_owned(),
-                        UniformDesc {
-                            location,
-                            type_: uniform.type_,
-                        },
-                    )
-                })
-                .collect(),
-            texture_uniforms: texture_uniforms
-                .iter()
-                .map(|name_| {
-                    let name = CString::new(name_.as_bytes()).expect("Interior null in name");
-                    let location = gl.GetUniformLocation(program, name.as_ptr());
-                    (name_.to_string(), location)
-                })
-                .collect(),
-        },
-        debug: ShaderProgramInternal {
-            program: debug_program,
-            uniform_matrix: gl.GetUniformLocation(debug_program, matrix.as_ptr()),
-            uniform_tex_matrix: gl.GetUniformLocation(debug_program, tex_matrix.as_ptr()),
-            uniform_size: gl.GetUniformLocation(debug_program, size.as_ptr()),
-            uniform_scale: gl.GetUniformLocation(debug_program, scale.as_ptr()),
-            uniform_alpha: gl.GetUniformLocation(debug_program, alpha.as_ptr()),
-            attrib_vert: gl.GetAttribLocation(debug_program, vert.as_ptr()),
-            attrib_vert_position: gl.GetAttribLocation(debug_program, vert_position.as_ptr()),
-            additional_uniforms: additional_uniforms
-                .iter()
-                .map(|uniform| {
-                    let name =
-                        CString::new(uniform.name.as_bytes()).expect("Interior null in name");
-                    let location = gl.GetUniformLocation(debug_program, name.as_ptr());
-                    (
-                        uniform.name.clone().into_owned(),
-                        UniformDesc {
-                            location,
-                            type_: uniform.type_,
-                        },
-                    )
-                })
-                .collect(),
-            texture_uniforms: texture_uniforms
-                .iter()
-                .map(|name_| {
-                    let name = CString::new(name_.as_bytes()).expect("Interior null in name");
-                    let location = gl.GetUniformLocation(debug_program, name.as_ptr());
-                    (name_.to_string(), location)
-                })
-                .collect(),
-        },
-        uniform_tint: gl.GetUniformLocation(debug_program, tint.as_ptr()),
-    })))
+    unsafe {
+        Ok(ShaderProgram(Rc::new(ShaderProgramInner {
+            normal: ShaderProgramInternal {
+                program,
+                uniform_matrix: gl.GetUniformLocation(program, matrix.as_ptr()),
+                uniform_tex_matrix: gl.GetUniformLocation(program, tex_matrix.as_ptr()),
+                uniform_size: gl.GetUniformLocation(program, size.as_ptr()),
+                uniform_scale: gl.GetUniformLocation(program, scale.as_ptr()),
+                uniform_alpha: gl.GetUniformLocation(program, alpha.as_ptr()),
+                attrib_vert: gl.GetAttribLocation(program, vert.as_ptr()),
+                attrib_vert_position: gl.GetAttribLocation(program, vert_position.as_ptr()),
+                additional_uniforms: additional_uniforms
+                    .iter()
+                    .map(|uniform| {
+                        let name =
+                            CString::new(uniform.name.as_bytes()).expect("Interior null in name");
+                        let location = gl.GetUniformLocation(program, name.as_ptr());
+                        (
+                            uniform.name.clone().into_owned(),
+                            UniformDesc {
+                                location,
+                                type_: uniform.type_,
+                            },
+                        )
+                    })
+                    .collect(),
+                texture_uniforms: texture_uniforms
+                    .iter()
+                    .map(|name_| {
+                        let name = CString::new(name_.as_bytes()).expect("Interior null in name");
+                        let location = gl.GetUniformLocation(program, name.as_ptr());
+                        (name_.to_string(), location)
+                    })
+                    .collect(),
+            },
+            debug: ShaderProgramInternal {
+                program: debug_program,
+                uniform_matrix: gl.GetUniformLocation(debug_program, matrix.as_ptr()),
+                uniform_tex_matrix: gl.GetUniformLocation(debug_program, tex_matrix.as_ptr()),
+                uniform_size: gl.GetUniformLocation(debug_program, size.as_ptr()),
+                uniform_scale: gl.GetUniformLocation(debug_program, scale.as_ptr()),
+                uniform_alpha: gl.GetUniformLocation(debug_program, alpha.as_ptr()),
+                attrib_vert: gl.GetAttribLocation(debug_program, vert.as_ptr()),
+                attrib_vert_position: gl.GetAttribLocation(debug_program, vert_position.as_ptr()),
+                additional_uniforms: additional_uniforms
+                    .iter()
+                    .map(|uniform| {
+                        let name =
+                            CString::new(uniform.name.as_bytes()).expect("Interior null in name");
+                        let location = gl.GetUniformLocation(debug_program, name.as_ptr());
+                        (
+                            uniform.name.clone().into_owned(),
+                            UniformDesc {
+                                location,
+                                type_: uniform.type_,
+                            },
+                        )
+                    })
+                    .collect(),
+                texture_uniforms: texture_uniforms
+                    .iter()
+                    .map(|name_| {
+                        let name = CString::new(name_.as_bytes()).expect("Interior null in name");
+                        let location = gl.GetUniformLocation(debug_program, name.as_ptr());
+                        (name_.to_string(), location)
+                    })
+                    .collect(),
+            },
+            uniform_tint: gl.GetUniformLocation(debug_program, tint.as_ptr()),
+        })))
+    }
 }
 
 impl ShaderProgram {

@@ -217,7 +217,8 @@ where
                         ));
                     }
                     let mut args = child.arguments.iter();
-                    let action = if let Some(arg) = args.next() {
+                    
+                    if let Some(arg) = args.next() {
                         let action = knuffel::traits::DecodeScalar::decode(arg, ctx)?;
                         if let Some(arg) = args.next() {
                             ctx.emit_error(knuffel::errors::DecodeError::unexpected(
@@ -288,8 +289,7 @@ where
                         action
                     } else {
                         HotCornerAction::Overview
-                    };
-                    action
+                    }
                 }
                 _ => {
                     ctx.emit_error(knuffel::errors::DecodeError::unexpected(

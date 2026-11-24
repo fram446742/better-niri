@@ -23,7 +23,7 @@ use smithay::utils::{Logical, Physical, Rectangle, Scale, Size, Transform};
 
 fn save_png(path: &str, width: u32, height: u32, xrgb: &[u8]) -> anyhow::Result<()> {
     let mut rgba = Vec::with_capacity(xrgb.len());
-    for chunk in xrgb.chunks_exact(4) {
+    for chunk in xrgb.as_chunks::<4>().0 {
         rgba.push(chunk[2]);
         rgba.push(chunk[1]);
         rgba.push(chunk[0]);
@@ -135,7 +135,7 @@ fn make_env() -> anyhow::Result<Env> {
 
 fn make_layout(
     clock: &Clock,
-    size: Size<i32, Logical>,
+    _size: Size<i32, Logical>,
     output: &Output,
 ) -> niri::layout::Layout<TestWindow> {
     let options = Options {
@@ -297,7 +297,7 @@ fn main() -> anyhow::Result<()> {
         }
         layout.activate_window(&2);
 
-        let mut step = |layout: &mut niri::layout::Layout<TestWindow>,
+        let step = |layout: &mut niri::layout::Layout<TestWindow>,
                         env: &mut Env,
                         t: u64,
                         name: &str|
@@ -422,12 +422,11 @@ fn main() -> anyhow::Result<()> {
         'outer: for y in (20..700).step_by(20) {
             for x in (20..1260).step_by(20) {
                 let pos = smithay::utils::Point::<f64, Logical>::from((x as f64, y as f64));
-                if let Some((win, _)) = mon.window_under(pos) {
-                    if win.id() == &0 {
+                if let Some((win, _)) = mon.window_under(pos)
+                    && win.id() == &0 {
                         grab_pos = Some(pos);
                         break 'outer;
                     }
-                }
             }
         }
         let grab_pos = grab_pos.expect("minimized window should be hit-testable in the grid");

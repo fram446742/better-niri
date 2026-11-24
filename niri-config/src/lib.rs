@@ -336,13 +336,11 @@ where
                     //
                     // So, let's just work around the problem here, preserving the original
                     // behavior.
-                    if recursion == 0 {
-                        if let Some(border) = part.border.as_mut() {
-                            if !border.on && !border.off {
+                    if recursion == 0
+                        && let Some(border) = part.border.as_mut()
+                            && !border.on && !border.off {
                                 border.on = true;
                             }
-                        }
-                    }
 
                     config.borrow_mut().layout.merge_with(&part);
                 }

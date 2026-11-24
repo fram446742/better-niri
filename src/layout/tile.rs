@@ -481,34 +481,29 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn advance_animations(&mut self) {
-        if let Some(open) = &mut self.open_animation {
-            if open.is_done() {
+        if let Some(open) = &mut self.open_animation
+            && open.is_done() {
                 self.open_animation = None;
             }
-        }
 
-        if let Some(resize) = &mut self.resize_animation {
-            if resize.anim.is_done() {
+        if let Some(resize) = &mut self.resize_animation
+            && resize.anim.is_done() {
                 self.resize_animation = None;
             }
-        }
 
-        if let Some(move_) = &mut self.move_x_animation {
-            if move_.anim.is_done() {
+        if let Some(move_) = &mut self.move_x_animation
+            && move_.anim.is_done() {
                 self.move_x_animation = None;
             }
-        }
-        if let Some(move_) = &mut self.move_y_animation {
-            if move_.anim.is_done() {
+        if let Some(move_) = &mut self.move_y_animation
+            && move_.anim.is_done() {
                 self.move_y_animation = None;
             }
-        }
 
-        if let Some(alpha) = &mut self.alpha_animation {
-            if !alpha.hold_after_done && alpha.anim.is_done() {
+        if let Some(alpha) = &mut self.alpha_animation
+            && !alpha.hold_after_done && alpha.anim.is_done() {
                 self.alpha_animation = None;
             }
-        }
 
         if self
             .focus_ring_anim
@@ -840,13 +835,12 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn ensure_alpha_animates_to_1(&mut self) {
-        if let Some(alpha) = &self.alpha_animation {
-            if alpha.anim.to() != 1. {
+        if let Some(alpha) = &self.alpha_animation
+            && alpha.anim.to() != 1. {
                 // Cancel animation instead of starting a new one because the user likely wants to
                 // see the tile right away.
                 self.alpha_animation = None;
             }
-        }
     }
 
     pub fn hold_alpha_animation_after_done(&mut self) {
@@ -868,11 +862,10 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     fn fullscreen_progress(&self) -> f64 {
-        if let Some(resize) = &self.resize_animation {
-            if let Some(anim) = &resize.fullscreen_progress {
+        if let Some(resize) = &self.resize_animation
+            && let Some(anim) = &resize.fullscreen_progress {
                 return anim.clamped_value().clamp(0., 1.);
             }
-        }
 
         if self.sizing_mode.is_fullscreen() {
             1.
@@ -882,11 +875,10 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn expanded_progress(&self) -> f64 {
-        if let Some(resize) = &self.resize_animation {
-            if let Some(anim) = &resize.expanded_progress {
+        if let Some(resize) = &self.resize_animation
+            && let Some(anim) = &resize.expanded_progress {
                 return anim.clamped_value().clamp(0., 1.);
             }
-        }
 
         if self.sizing_mode.is_normal() {
             0.
@@ -1437,9 +1429,9 @@ impl<W: LayoutElement> Tile<W> {
             let clip = |elem| match elem {
                 LayoutElementRenderElement::Wayland(elem) => {
                     // If we should clip to geometry, render a clipped window.
-                    if clip_to_geometry {
-                        if let Some(shader) = clip_shader.clone() {
-                            if ClippedSurfaceRenderElement::will_clip(
+                    if clip_to_geometry
+                        && let Some(shader) = clip_shader.clone()
+                            && ClippedSurfaceRenderElement::will_clip(
                                 elem.inner(),
                                 scale,
                                 geo,
@@ -1456,8 +1448,6 @@ impl<W: LayoutElement> Tile<W> {
                                 )
                                 .into();
                             }
-                        }
-                    }
 
                     // Otherwise, render it normally.
                     LayoutElementRenderElement::Wayland(elem).into()
@@ -1639,23 +1629,21 @@ impl<W: LayoutElement> Tile<W> {
         #[cfg(feature = "effects")]
         if self.open_animation.is_none() && self.expanded_progress() < 1. {
             let location = location + self.bob_offset();
-            if focus_ring {
-                if let Some(light) =
+            if focus_ring
+                && let Some(light) =
                     self.focus_ring
                         .render_light(ctx.renderer, location, tile_alpha)
                 {
                     push(light.into());
                 }
-            }
-            if let Some(width) = self.visual_border_width() {
-                if let Some(light) = self.border.render_light(
+            if let Some(width) = self.visual_border_width()
+                && let Some(light) = self.border.render_light(
                     ctx.renderer,
                     location + Point::from((width, width)),
                     tile_alpha,
                 ) {
                     push(light.into());
                 }
-            }
         }
 
         let mut pushed = false;
@@ -1688,8 +1676,8 @@ impl<W: LayoutElement> Tile<W> {
                     warn!("error rendering window opening animation: {err:?}");
                 }
             }
-        } else if alpha_animations {
-            if let Some(alpha) = &self.alpha_animation {
+        } else if alpha_animations
+            && let Some(alpha) = &self.alpha_animation {
                 let mut ctx = ctx.as_gles();
                 let mut elements = Vec::new();
                 self.render_inner(
@@ -1713,7 +1701,6 @@ impl<W: LayoutElement> Tile<W> {
                     }
                 }
             }
-        }
 
         if !pushed {
             self.render_inner(ctx, location, xray_pos, focus_ring, &mut |elem| push(elem));

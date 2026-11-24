@@ -19,7 +19,7 @@ use niri_config::input::XkbFile;
 use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
-    Bind, Config, CornerRadius, FloatOrInt, GradientInterpolation, Key, Modifiers, OutputName,
+    Bind, Config, FloatOrInt, Key, Modifiers, OutputName,
     TrackLayout, WarpMouseToFocusMode, WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
@@ -793,6 +793,7 @@ impl Drop for InRenderInnerGuard {
 /// `(source Id, generation)` and never on the per-buffer damage-bag `CommitCounter`s (those are
 /// independent between A and B and reset to default on recreation).
 #[cfg(feature = "navigation")]
+#[derive(Default)]
 pub struct PanelSource {
     /// Scratch buffer index in [`OutputState::panel_offscreen`] that the next render targets.
     /// Toggled only on publish, so it never names the buffer backing `elem`.
@@ -822,19 +823,6 @@ pub struct PanelSource {
 }
 
 #[cfg(feature = "navigation")]
-impl Default for PanelSource {
-    fn default() -> Self {
-        Self {
-            flip: false,
-            elem: None,
-            generation: 0,
-            // Never equals a real stamp on first use: `Niri::panel_frame` starts at 0 and is
-            // bumped to 1 before the first `redraw_queued_outputs` cycle even begins iterating.
-            frame: 0,
-            last_extent: None,
-        }
-    }
-}
 
 #[cfg(feature = "navigation")]
 impl PanelSource {
@@ -1732,11 +1720,10 @@ impl State {
                 if self.niri.layout.confirm_grid_selection_for_window(&window) {
                     let new_active = self.niri.layout.active_output().cloned();
                     if new_active != active_output {
-                        if let Some(output) = new_active {
-                            if !self.maybe_warp_cursor_to_focus_centered() {
+                        if let Some(output) = new_active
+                            && !self.maybe_warp_cursor_to_focus_centered() {
                                 self.move_cursor_to_output(&output);
                             }
-                        }
                     } else {
                         self.maybe_warp_cursor_to_focus();
                     }
@@ -1872,11 +1859,10 @@ impl State {
     }
 
     pub fn refresh_popup_grab(&mut self) {
-        if let Some(grab) = &mut self.niri.popup_grab {
-            if grab.grab.has_ended() {
+        if let Some(grab) = &mut self.niri.popup_grab
+            && grab.grab.has_ended() {
                 self.niri.popup_grab = None;
             }
-        }
     }
 
     pub fn update_keyboard_focus(&mut self) {
@@ -2029,16 +2015,13 @@ impl State {
             if let KeyboardFocus::Layout {
                 surface: Some(surface),
             } = &self.niri.keyboard_focus
-            {
-                if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
+                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
                     mapped.set_is_focused(false);
                 }
-            }
             if let KeyboardFocus::Layout {
                 surface: Some(surface),
             } = &focus
-            {
-                if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
+                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
                     mapped.set_is_focused(true);
 
                     // If `mapped` does not have a focus timestamp, then the window is newly
@@ -2075,10 +2058,9 @@ impl State {
                         }
                     }
                 }
-            }
 
-            if let Some(grab) = self.niri.popup_grab.as_mut() {
-                if grab.has_keyboard_grab && Some(&grab.root) != focus.surface() {
+            if let Some(grab) = self.niri.popup_grab.as_mut()
+                && grab.has_keyboard_grab && Some(&grab.root) != focus.surface() {
                     trace!(
                         "grab root {:?} is not the new focus {:?}, ungrabbing",
                         grab.root,
@@ -2094,7 +2076,6 @@ impl State {
                     );
                     self.niri.popup_grab = None;
                 }
-            }
 
             if self.niri.current_keyboard.track_layout == TrackLayout::Window {
                 let current_layout = keyboard.with_xkb_state(self, |context| {
@@ -2164,11 +2145,10 @@ impl State {
             .xkb
             .file
             .clone();
-        if let Some(XkbFile(Some(keymap))) = xkb_file {
-            if let Err(err) = self.set_xkb_file_content(keymap) {
+        if let Some(XkbFile(Some(keymap))) = xkb_file
+            && let Err(err) = self.set_xkb_file_content(keymap) {
                 warn!("error loading xkb_file: {err:?}");
             }
-        }
     }
 
     pub fn set_xkb_config(&mut self, xkb: XkbConfig) {
@@ -2219,18 +2199,16 @@ impl State {
 
         let mut mods = keyboard.modifier_state();
         let mut mods_changed = false;
-        if let Some(caps_lock) = state.caps_lock {
-            if mods.caps_lock != caps_lock {
+        if let Some(caps_lock) = state.caps_lock
+            && mods.caps_lock != caps_lock {
                 mods.caps_lock = caps_lock;
                 mods_changed = true;
             }
-        }
-        if let Some(num_lock) = state.num_lock {
-            if mods.num_lock != num_lock {
+        if let Some(num_lock) = state.num_lock
+            && mods.num_lock != num_lock {
                 mods.num_lock = num_lock;
                 mods_changed = true;
             }
-        }
         if mods_changed {
             keyboard.set_modifier_state(mods);
             // set_modifier_state() doesn't update the LED state of physical keyboards.
@@ -2698,11 +2676,10 @@ impl State {
                 .flatten()
                 .map(|satellite| satellite.display_name().to_owned());
 
-            if let Some(name) = &display_name {
-                if !was_working {
+            if let Some(name) = &display_name
+                && !was_working {
                     info!("listening on X11 socket: {name}");
                 }
-            }
 
             // This won't change the systemd environment, but oh well.
             *CHILD_DISPLAY.write().unwrap() = display_name;
@@ -2767,12 +2744,11 @@ impl State {
             backdrop_color[3] = 1.;
             let backdrop_color = Color32F::from(backdrop_color);
 
-            if let Some(state) = self.niri.output_state.get_mut(output) {
-                if state.backdrop_buffer.color() != backdrop_color {
+            if let Some(state) = self.niri.output_state.get_mut(output)
+                && state.backdrop_buffer.color() != backdrop_color {
                     state.backdrop_buffer.set_color(backdrop_color);
                     recolored_outputs.push(output.clone());
                 }
-            }
 
             for mon in self.niri.layout.monitors_mut() {
                 if mon.output() != output {
@@ -2781,11 +2757,10 @@ impl State {
 
                 let mut layout_config = config.and_then(|c| c.layout.clone());
                 // Support the deprecated non-layout background-color key.
-                if let Some(layout) = &mut layout_config {
-                    if layout.background_color.is_none() {
+                if let Some(layout) = &mut layout_config
+                    && layout.background_color.is_none() {
                         layout.background_color = config.and_then(|c| c.background_color);
                     }
-                }
 
                 if mon.update_layout_config(layout_config) {
                     // Also redraw these; if anything, the background color could've changed.
@@ -4920,11 +4895,10 @@ impl Niri {
 
         let mut layout_config = c.and_then(|c| c.layout.clone());
         // Support the deprecated non-layout background-color key.
-        if let Some(layout) = &mut layout_config {
-            if layout.background_color.is_none() {
+        if let Some(layout) = &mut layout_config
+            && layout.background_color.is_none() {
                 layout.background_color = c.and_then(|c| c.background_color);
             }
-        }
         let isolated = c.is_some_and(|c| c.isolated);
         drop(config);
 
@@ -5299,11 +5273,10 @@ impl Niri {
                 // the monitor whose hot corner was hit.
                 #[cfg(feature = "navigation")]
                 {
-                    if !self.config.borrow().grid_overview.grid_all_monitors {
-                        if let Some(output) = output {
+                    if !self.config.borrow().grid_overview.grid_all_monitors
+                        && let Some(output) = output {
                             self.layout.focus_output(output);
                         }
-                    }
                     self.layout.toggle_grid_overview();
                 }
                 #[cfg(not(feature = "navigation"))]
@@ -5974,13 +5947,11 @@ impl Niri {
                 .barrier
                 .clone();
 
-            if let Some(fifo_barrier) = fifo_barrier {
-                if !fifo_barrier.is_signaled() {
-                    if let Some(client) = surface.client() {
+            if let Some(fifo_barrier) = fifo_barrier
+                && !fifo_barrier.is_signaled()
+                    && let Some(client) = surface.client() {
                         barriers.push((fifo_barrier, client));
                     }
-                }
-            }
         });
 
         barriers
@@ -6143,10 +6114,9 @@ impl Niri {
             1.0
         };
 
-        if self.pointer_scale_animation.is_none()
-            || (self.pointer_scale_animation.as_ref().unwrap().to() - target_scale).abs() > 0.01
-        {
-            if target_scale != 1.0 || current_scale != 1.0 {
+        if (self.pointer_scale_animation.is_none()
+            || (self.pointer_scale_animation.as_ref().unwrap().to() - target_scale).abs() > 0.01)
+            && (target_scale != 1.0 || current_scale != 1.0) {
                 let anim_config = niri_config::Animation {
                     off: false,
                     kind: self.config.borrow().animations.cursor_enlarge.0.kind,
@@ -6161,7 +6131,6 @@ impl Niri {
                 self.pointer_scale_animation = Some(anim);
                 self.queue_redraw_all();
             }
-        }
     }
 
     #[cfg(feature = "navigation")]
@@ -6210,16 +6179,14 @@ impl Niri {
 
     #[cfg(feature = "navigation")]
     pub fn update_magnifier_animation(&mut self) {
-        if let Some(anim) = &self.magnifier_animation {
-            if anim.is_done() {
+        if let Some(anim) = &self.magnifier_animation
+            && anim.is_done() {
                 self.magnifier_animation = None;
             }
-        }
-        if let Some(anim) = &self.magnifier_center_anim {
-            if anim.is_done() {
+        if let Some(anim) = &self.magnifier_center_anim
+            && anim.is_done() {
                 self.magnifier_center_anim = None;
             }
-        }
     }
 
     #[cfg(feature = "navigation")]
@@ -6302,7 +6269,7 @@ impl Niri {
         let center = self.clamp_magnifier_center_to_output(output, center);
         *self.magnifier_center.borrow_mut() = Some((output.downgrade(), center));
         self.magnifier_center_anim = None;
-        self.queue_redraw(&output);
+        self.queue_redraw(output);
         true
     }
 
@@ -6444,11 +6411,10 @@ impl Niri {
         state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
 
         #[cfg(feature = "xdp-gnome-screencast")]
-        if let Some(host) = picker_host {
-            if let Some(state) = self.output_state.get_mut(&host) {
+        if let Some(host) = picker_host
+            && let Some(state) = self.output_state.get_mut(&host) {
                 state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
             }
-        }
     }
 
     /// Cancel any pending `shader-animation-max-fps` throttle wake for `output`.
@@ -6570,7 +6536,7 @@ impl Niri {
         let render_cursor = self.cursor_manager.get_render_cursor(cursor_scale);
 
         // Pre-extract frame widths for adjusted zoom calculation.
-        let enlarged_frame_width = if let RenderCursor::Named { cursor: ref c, .. } = &render_cursor
+        let enlarged_frame_width = if let RenderCursor::Named { cursor: c, .. } = &render_cursor
         {
             let (_, f) = c.frame(0);
             Some(f.width)
@@ -6709,18 +6675,17 @@ impl Niri {
         // Tablet cursor.
         if let Some(tablet_pos) = self.tablet_cursor_location {
             let contents = self.contents_under(tablet_pos);
-            if let Some((w, HitType::Input { win_pos })) = contents.window {
-                if w == mapped.window {
+            if let Some((w, HitType::Input { win_pos })) = contents.window
+                && w == mapped.window {
                     // Tablet tools don't currently expose current focus, and don't currently
                     // have grabs. When those are implemented, this branch should be adjusted
                     // to look more similar to the branch below.
                     return Some((tablet_pos, win_pos));
                 }
-            }
         }
         // Regular cursor.
-        else if let Some((w, HitType::Input { win_pos })) = &self.pointer_contents.window {
-            if w == &mapped.window {
+        else if let Some((w, HitType::Input { win_pos })) = &self.pointer_contents.window
+            && w == &mapped.window {
                 // Grabs can modify the pointer focus, making it different from
                 // pointer_contents. Notably, gestures like Mod+MMB will remove the pointer
                 // focus, and ClickGrab will keep pointer focus on the clicked window even
@@ -6753,7 +6718,6 @@ impl Niri {
                     return Some((pointer.current_location(), *win_pos));
                 }
             }
-        }
 
         None
     }
@@ -6773,7 +6737,7 @@ impl Niri {
             .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
 
         match self.cursor_manager.cursor_image() {
-            CursorImageStatus::Surface(ref surface) => {
+            CursorImageStatus::Surface(surface) => {
                 let hotspot = with_states(surface, |states| {
                     states
                         .data_map
@@ -7050,11 +7014,10 @@ impl Niri {
         self.window_mru_ui.advance_animations();
 
         for state in self.output_state.values_mut() {
-            if let Some(transition) = &mut state.screen_transition {
-                if transition.is_done() {
+            if let Some(transition) = &mut state.screen_transition
+                && transition.is_done() {
                     state.screen_transition = None;
                 }
-            }
         }
         screen_cast_picker_closed
     }
@@ -7166,11 +7129,10 @@ impl Niri {
         // reload gate clears stale selections and warns the user; this is only the silent
         // safety net for any path that reads the state in between, so it must not warn itself —
         // it runs every frame, from both the render path and the redraw gate.
-        if let Some(selected) = &selected {
-            if let Some(preset) = config.output_shaders.iter().find(|p| &p.name == selected) {
+        if let Some(selected) = &selected
+            && let Some(preset) = config.output_shaders.iter().find(|p| &p.name == selected) {
                 return preset.pass_sources(&read_scoped_shader_path);
             }
-        }
 
         let Some(out_config) = config.outputs.find(name) else {
             return Vec::new();
@@ -7415,14 +7377,13 @@ impl Niri {
         let _span = tracy_client::span!("Niri::render");
 
         let rendering_output = ctx.target == RenderTarget::Output;
-        if rendering_output {
-            if let Some(preview) = self.config.borrow().debug.preview_render {
+        if rendering_output
+            && let Some(preview) = self.config.borrow().debug.preview_render {
                 ctx.target = match preview {
                     PreviewRender::Screencast => RenderTarget::Screencast,
                     PreviewRender::ScreenCapture => RenderTarget::ScreenCapture,
                 };
             }
-        }
 
         #[cfg(feature = "xdp-gnome-screencast")]
         if rendering_output && self.screen_cast_picker.is_visible() {
@@ -7478,12 +7439,9 @@ impl Niri {
             let scale_cursor = self.config.borrow().magnifier.scale_cursor;
             let mut magnifier_push = |elem| {
                 if !scale_cursor {
-                    match &elem {
-                        OutputRenderElements::Pointer(_) => {
-                            push(elem);
-                            return;
-                        }
-                        _ => {}
+                    if let OutputRenderElements::Pointer(_) = &elem {
+                        push(elem);
+                        return;
                     }
                 }
                 let rescaled = RescaleRenderElement::from_element(Box::new(elem), pivot, zoom);
@@ -7711,11 +7669,10 @@ impl Niri {
 
             // When reads_cursor is on, push the global shader element first so the cursor is
             // composited into niri_screen (the cursor becomes part of the captured screen texture).
-            if reads_cursor {
-                if let Some(elem) = global_shader_elem.take() {
+            if reads_cursor
+                && let Some(elem) = global_shader_elem.take() {
                     push(elem.into());
                 }
-            }
 
             // The pointer goes on the top (or below the global shader when reads_cursor is on).
             if include_pointer && self.pointer_visibility.is_visible() {
@@ -7724,11 +7681,10 @@ impl Niri {
 
             // When reads_cursor is off (default), push the global shader element after the pointer
             // so the hardware cursor remains above the effect.
-            if !reads_cursor {
-                if let Some(elem) = global_shader_elem {
+            if !reads_cursor
+                && let Some(elem) = global_shader_elem {
                     push(elem.into());
                 }
-            }
         }
 
         // Push region shader elements for regions matching this output.
@@ -7797,7 +7753,7 @@ impl Niri {
                     config
                         .region_shaders
                         .iter()
-                        .filter(|r| r.output.as_deref().map_or(true, |want| out_name == want))
+                        .filter(|r| r.output.as_deref().is_none_or(|want| out_name == want))
                         .map(|r| {
                             let chain = r.pass_sources(|p| {
                                 let path = match expand_home(std::path::Path::new(p)) {
@@ -7826,8 +7782,8 @@ impl Niri {
                     let area =
                         Rectangle::new((geom.x, geom.y).into(), (geom.width, geom.height).into());
                     let region_norm = [
-                        ((area.loc.x - full.loc.x as f64) / full.size.w) as f32,
-                        ((area.loc.y - full.loc.y as f64) / full.size.h) as f32,
+                        ((area.loc.x - full.loc.x) / full.size.w) as f32,
+                        ((area.loc.y - full.loc.y) / full.size.h) as f32,
                         (area.size.w / full.size.w) as f32,
                         (area.size.h / full.size.h) as f32,
                     ];
@@ -7870,11 +7826,10 @@ impl Niri {
             .render(ctx.renderer, output, &mut |elem| push(elem.into()));
 
         // Next, the config error notification too. Isolated outputs stay free of compositor chrome.
-        if !self.is_output_isolated(output) {
-            if let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
+        if !self.is_output_isolated(output)
+            && let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
                 push(element.into());
             }
-        }
 
         // If the session is locked, draw the lock surface.
         if self.is_locked() {
@@ -8109,13 +8064,13 @@ impl Niri {
 
             // Macro instead of closure to avoid borrowing push().
             macro_rules! process {
-                ($geo:expr) => {{
+                ($geo:expr) => {
                     &mut |elem| {
                         if let Some(elem) = scale_relocate_crop(elem, output_scale, zoom, $geo) {
                             push(elem.into());
                         }
                     }
-                }};
+                };
             }
 
             // Suppressed while `host_strip_suppressed`: this output's own workspace strip
@@ -8768,7 +8723,7 @@ impl Niri {
             let region_shader_animate = {
                 let cfg = self.config.borrow();
                 cfg.region_shaders.iter().any(|r| {
-                    if r.output.as_deref().map_or(false, |want| out_name != want) {
+                    if r.output.as_deref().is_some_and(|want| out_name != want) {
                         return false;
                     }
                     let chain = r.pass_sources(|p| {
@@ -8807,7 +8762,7 @@ impl Niri {
             #[cfg(feature = "effects")]
             let window_shader_animate = {
                 let shader_animates = |win: &Mapped| {
-                    win.effective_shader().map_or(false, |shader| {
+                    win.effective_shader().is_some_and(|shader| {
                         niri_config::GlobalShaderCaps::scan_chain(&shader.passes).is_animating()
                     })
                 };
@@ -9559,11 +9514,10 @@ impl Niri {
 
             // If we already sent a frame callback to this surface this output refresh
             // cycle, don't send one again to prevent empty-damage commit busy loops.
-            if let Some((last_output, last_sequence)) = &*last_sent_at {
-                if last_output == output && *last_sequence == sequence {
+            if let Some((last_output, last_sequence)) = &*last_sent_at
+                && last_output == output && *last_sequence == sequence {
                     send = false;
                 }
-            }
 
             if send {
                 *last_sent_at = Some((output.clone(), sequence));
@@ -9895,7 +9849,8 @@ impl Niri {
     ) -> anyhow::Result<SyncPoint> {
         let sync = match screencopy.buffer() {
             CaptureBuffer::Dma(dmabuf) => {
-                let sync = render_to_dmabuf(
+                
+                render_to_dmabuf(
                     renderer,
                     damage_tracker,
                     dmabuf.clone(),
@@ -9903,8 +9858,7 @@ impl Niri {
                     states,
                     reference_luminance,
                 )
-                .context("error rendering to screencopy dmabuf")?;
-                sync
+                .context("error rendering to screencopy dmabuf")?
             }
             CaptureBuffer::Shm(wl_buffer) => {
                 render_to_shm(
@@ -9934,8 +9888,8 @@ impl Niri {
 
         screencopy_state.with_queues_mut(|queue| {
             let (damage_tracker, screencopy) = queue.split();
-            if let Some(screencopy) = screencopy {
-                if screencopy.output() == output {
+            if let Some(screencopy) = screencopy
+                && screencopy.output() == output {
                     let ctx = RenderCtx {
                         renderer,
                         target: RenderTarget::ScreenCapture,
@@ -9997,7 +9951,6 @@ impl Niri {
                         trace!("no damage found, waiting till next redraw");
                     }
                 };
-            }
         });
 
         self.screencopy_state = screencopy_state;
@@ -10898,8 +10851,8 @@ impl Niri {
         let mut elements: Vec<WindowScreenshotRenderElement<GlesRenderer>> = Vec::new();
 
         // Add pointer if requested and it's over this window.
-        if show_pointer {
-            if let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
+        if show_pointer
+            && let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
                 // Pointer elements are at output-local physical coords.
                 // Relocate by -win_pos to make them window-relative.
                 let pos = win_pos.to_physical_precise_round(scale).upscale(-1);
@@ -10908,7 +10861,6 @@ impl Niri {
                     elements.push(elem.into());
                 });
             }
-        }
         let pointer_count = elements.len();
 
         set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
@@ -11138,18 +11090,15 @@ impl Niri {
             if let Some((path, create_parent)) = path {
                 debug!("saving screenshot to {path:?}");
 
-                if create_parent {
-                    if let Some(parent) = path.parent() {
+                if create_parent
+                    && let Some(parent) = path.parent() {
                         // Relative paths with one component, i.e. "test.png", have Some("") parent.
-                        if !parent.as_os_str().is_empty() {
-                            if let Err(err) = std::fs::create_dir_all(parent) {
-                                if err.kind() != std::io::ErrorKind::AlreadyExists {
+                        if !parent.as_os_str().is_empty()
+                            && let Err(err) = std::fs::create_dir_all(parent)
+                                && err.kind() != std::io::ErrorKind::AlreadyExists {
                                     warn!("error creating screenshot directory: {err:?}");
                                 }
-                            }
-                        }
                     }
-                }
 
                 match std::fs::write(&path, &*buf) {
                     Ok(()) => image_path = Some(path),
@@ -11247,7 +11196,7 @@ impl Niri {
             )
             .context("error rendering")?;
 
-            set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(&output));
+            set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
             let buffer = TextureBuffer::from_texture(
                 renderer,
                 texture,
@@ -11594,8 +11543,8 @@ impl Niri {
     }
 
     pub fn focus_layer_surface_if_on_demand(&mut self, surface: Option<LayerSurface>) {
-        if let Some(surface) = surface {
-            if surface.cached_state().keyboard_interactivity
+        if let Some(surface) = surface
+            && surface.cached_state().keyboard_interactivity
                 == wlr_layer::KeyboardInteractivity::OnDemand
             {
                 if self.layer_shell_on_demand_focus.as_ref() != Some(&surface) {
@@ -11607,7 +11556,6 @@ impl Niri {
 
                 return;
             }
-        }
 
         // Something else got clicked, clear on-demand layer-shell focus.
         if self.layer_shell_on_demand_focus.is_some() {
@@ -11742,11 +11690,10 @@ impl Niri {
         // Recompute the current pointer focus because we don't update it during animations.
         let current_focus = self.contents_under(prev_location);
 
-        if let Some(output) = &new_focus.output {
-            if current_focus.output.as_ref() != Some(output) {
+        if let Some(output) = &new_focus.output
+            && current_focus.output.as_ref() != Some(output) {
                 self.layout.focus_output(output);
             }
-        }
 
         // Skip focusing the window/layer when outputs-only=true
         if let Some(true) = ffm.outputs_only {
@@ -11776,22 +11723,20 @@ impl Niri {
                     return;
                 }
 
-                if let Some(threshold) = ffm.max_scroll_amount {
-                    if self.layout.scroll_amount_to_activate(window) > threshold.0 {
+                if let Some(threshold) = ffm.max_scroll_amount
+                    && self.layout.scroll_amount_to_activate(window) > threshold.0 {
                         return;
                     }
-                }
 
                 self.layout.activate_window_without_raising(window);
                 self.layer_shell_on_demand_focus = None;
             }
         }
 
-        if let Some(layer) = &new_focus.layer {
-            if current_focus.layer.as_ref() != Some(layer) {
+        if let Some(layer) = &new_focus.layer
+            && current_focus.layer.as_ref() != Some(layer) {
                 self.layer_shell_on_demand_focus = Some(layer.clone());
             }
-        }
     }
 
     pub fn do_screen_transition(&mut self, renderer: &mut GlesRenderer, delay_ms: Option<u16>) {
@@ -12071,11 +12016,10 @@ fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription>
                 let mut guard = states
                     .cached_state
                     .get::<ColorManagementSurfaceCachedState>();
-                if let Some(desc) = guard.current().description {
-                    if desc.is_hdr() {
+                if let Some(desc) = guard.current().description
+                    && desc.is_hdr() {
                         found = Some(desc);
                     }
-                }
             }
         },
         |_, _, _| true,
@@ -12542,14 +12486,13 @@ fn tearing_allowed(
     }
 
     // Then a declared content type the rule accepts.
-    if let Some(types) = types {
-        if types
+    if let Some(types) = types
+        && types
             .iter()
             .any(|ty| content_type_allowed(*ty, content_type))
         {
             return true;
         }
-    }
 
     // Otherwise keep the stock behavior: only what the client asked for.
     client_hint

@@ -209,8 +209,8 @@ impl PickColorUi {
 
         rendered.set(true);
 
-        if let Some(magnifier) = magnifier {
-            if magnifier.output == *output {
+        if let Some(magnifier) = magnifier
+            && magnifier.output == *output {
                 push(PrimaryGpuTextureRenderElement(
                     TextureRenderElement::from_texture_buffer(
                         magnifier.buffer.clone(),
@@ -222,7 +222,6 @@ impl PickColorUi {
                     ),
                 ));
             }
-        }
     }
 }
 

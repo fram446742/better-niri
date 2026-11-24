@@ -129,7 +129,7 @@ impl FramebufferEffectElement {
 
         let clip_geo_size = (self.clip_geo.size.w as f32, self.clip_geo.size.h as f32);
 
-        let (surface_to_geo, alpha_mask_enabled, alpha_threshold) = match &self.alpha_mask {
+        let (_surface_to_geo, _alpha_mask_enabled, _alpha_threshold) = match &self.alpha_mask {
             Some(mask) if mask.surface_geo.size.w > 0. && mask.surface_geo.size.h > 0. => {
                 let surface_offset = crop.loc - (mask.surface_geo.loc - self.geometry.loc);
                 let surface_offset = Vec2::new(surface_offset.x as f32, surface_offset.y as f32);

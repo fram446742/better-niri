@@ -2621,11 +2621,10 @@ impl OutputAction {
                 if refresh.is_none() {
                     return Err("refresh rate is required for custom modes".to_string());
                 }
-                if let Some(refresh) = refresh {
-                    if *refresh <= 0. {
+                if let Some(refresh) = refresh
+                    && *refresh <= 0. {
                         return Err(format!("custom mode refresh rate {refresh} must be > 0"));
                     }
-                }
                 Ok(())
             }
             _ => Ok(()),

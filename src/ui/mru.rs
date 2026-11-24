@@ -380,8 +380,8 @@ impl Thumbnail {
         // FIXME: deduplicate code with Tile::render_inner()
         let clip = move |elem| match elem {
             LayoutElementRenderElement::Wayland(elem) => {
-                if let Some(shader) = clip_shader.clone() {
-                    if ClippedSurfaceRenderElement::will_clip(elem.inner(), s, geo, radius) {
+                if let Some(shader) = clip_shader.clone()
+                    && ClippedSurfaceRenderElement::will_clip(elem.inner(), s, geo, radius) {
                         let content = elem.content();
                         let elem = ClippedSurfaceRenderElement::new(
                             elem.into_inner(),
@@ -393,7 +393,6 @@ impl Thumbnail {
                         );
                         return ThumbnailRenderElement::ClippedSurface(elem);
                     }
-                }
 
                 // If we don't have the shader, render it normally.
                 let elem = LayoutElementRenderElement::Wayland(elem);
@@ -899,11 +898,10 @@ impl ViewPos {
     }
 
     fn advance_animations(&mut self) {
-        if let ViewPos::Animation(anim) = self {
-            if anim.is_done() {
+        if let ViewPos::Animation(anim) = self
+            && anim.is_done() {
                 *self = ViewPos::Static(anim.to());
             }
-        }
     }
 
     fn animate_from_with_config(

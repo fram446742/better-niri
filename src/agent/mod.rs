@@ -607,13 +607,13 @@ impl State {
             .is_ok_and(|client| match device {
                 Device::Pointer => {
                     let pointer = seat.get_pointer().unwrap();
-                    let listens = pointer.client_pointers(&client).next().is_some();
-                    listens
+                    
+                    pointer.client_pointers(&client).next().is_some()
                 }
                 Device::Keyboard => {
                     let keyboard = seat.get_keyboard().unwrap();
-                    let listens = keyboard.client_keyboards(&client).next().is_some();
-                    listens
+                    
+                    keyboard.client_keyboards(&client).next().is_some()
                 }
             });
         if !listens {
@@ -669,11 +669,10 @@ impl State {
     /// Shows the agent cursor on the window, moving it off the window it was on before.
     fn agent_update_cursor(&mut self, toplevel: &WlSurface, update: impl FnOnce(&mut AgentCursor)) {
         let previous = self.agent().cursor_window.replace(toplevel.clone());
-        if let Some(previous) = previous.filter(|previous| previous != toplevel) {
-            if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&previous) {
+        if let Some(previous) = previous.filter(|previous| previous != toplevel)
+            && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&previous) {
                 mapped.agent_cursor = None;
             }
-        }
 
         let Some((_, output)) = self.niri.layout.find_window_and_output(toplevel) else {
             return;
@@ -730,8 +729,8 @@ impl State {
 
         let mut redraw = None;
         let mut visible = false;
-        if let Some((mapped, output)) = self.niri.layout.find_window_and_output_mut(&toplevel) {
-            if let Some(cursor) = &mapped.agent_cursor {
+        if let Some((mapped, output)) = self.niri.layout.find_window_and_output_mut(&toplevel)
+            && let Some(cursor) = &mapped.agent_cursor {
                 visible = cursor.is_visible();
                 if cursor.is_animating() || !visible {
                     redraw = Some(output.cloned());
@@ -740,7 +739,6 @@ impl State {
                     mapped.agent_cursor = None;
                 }
             }
-        }
 
         match redraw {
             Some(Some(output)) => self.niri.queue_redraw(&output),

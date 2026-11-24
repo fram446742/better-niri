@@ -23,8 +23,7 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
+    delegate_registry, registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
@@ -574,15 +573,8 @@ impl ShmHandler for Picker {
         &mut self.shm
     }
 }
-
-delegate_compositor!(Picker);
-delegate_output!(Picker);
-delegate_shm!(Picker);
-delegate_seat!(Picker);
-delegate_keyboard!(Picker);
-delegate_pointer!(Picker);
-delegate_layer!(Picker);
 delegate_registry!(Picker);
+smithay_client_toolkit::delegate_dispatch2!(Picker);
 
 impl ProvidesRegistryState for Picker {
     fn registry(&mut self) -> &mut RegistryState {

@@ -15,8 +15,8 @@
 | Component | Source | Revision | Notes |
 | --- | --- | --- | --- |
 | better-niri | `fram446742/better-niri` | branch `integration/elite-base` | niri upstream + niri-elite feature base, reconciled. |
-| better-smithay | `fram446742/better-smithay` | `2e8e9edbe8a89af91d6bf3369c379cff21af76ff` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
-| smithay-drm-extras | same better-smithay commit | `2e8e9edb…` | |
+| better-smithay | `fram446742/better-smithay` | `252e346b8244e8e95029526e7d174b4fe7bce0aa` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
+| smithay-drm-extras | same better-smithay commit | `252e346b…` | |
 | niri-config / niri-ipc | workspace | `26.4.0-elite` | Elitish version string; to be renamed for better-niri. |
 | Rust | toolchain | MSRV 1.88 | |
 

@@ -1,8 +1,8 @@
 use std::os::fd::BorrowedFd;
 use std::{ptr, slice};
 
-use anyhow::{ensure, Context as _};
-use smithay::reexports::rustix::mm::{mmap, munmap, MapFlags, ProtFlags};
+use anyhow::{Context as _, ensure};
+use smithay::reexports::rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 
 /// Owns a mapping of a sealed, fixed-size memfd. No references into it escape.
 #[derive(Debug)]

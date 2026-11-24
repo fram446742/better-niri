@@ -88,8 +88,8 @@ impl XdgShellHandler for State {
         pointer.with_grab(|grab_serial, grab| {
             if grab_serial == serial {
                 let start_data = grab.start_data();
-                if let Some((focus, _)) = &start_data.focus {
-                    if focus.id().same_client_as(&wl_surface.id()) {
+                if let Some((focus, _)) = &start_data.focus
+                    && focus.id().same_client_as(&wl_surface.id()) {
                         // Deny move requests from DnD grabs to work around
                         // https://gitlab.gnome.org/GNOME/gtk/-/issues/7113
                         let is_dnd_grab = Self::is_dnd_grab(grab.as_any());
@@ -98,7 +98,6 @@ impl XdgShellHandler for State {
                             grab_start_data = Some(AnyStartData::Pointer(start_data.clone()));
                         }
                     }
-                }
             }
         });
 
@@ -107,8 +106,8 @@ impl XdgShellHandler for State {
             touch.with_grab(|grab_serial, grab| {
                 if grab_serial == serial {
                     let start_data = grab.start_data();
-                    if let Some((focus, _)) = &start_data.focus {
-                        if focus.id().same_client_as(&wl_surface.id()) {
+                    if let Some((focus, _)) = &start_data.focus
+                        && focus.id().same_client_as(&wl_surface.id()) {
                             // Deny move requests from DnD grabs to work around
                             // https://gitlab.gnome.org/GNOME/gtk/-/issues/7113
                             let is_dnd_grab = Self::is_dnd_grab(grab.as_any());
@@ -117,7 +116,6 @@ impl XdgShellHandler for State {
                                 grab_start_data = Some(AnyStartData::Touch(start_data.clone()));
                             }
                         }
-                    }
                 }
             });
         }
@@ -129,8 +127,8 @@ impl XdgShellHandler for State {
             let found = tool.with_grab(|grab_serial, grab| {
                 if grab_serial == serial {
                     let start_data = grab.start_data();
-                    if let Some((focus, _)) = &start_data.focus {
-                        if focus.id().same_client_as(&wl_surface.id()) {
+                    if let Some((focus, _)) = &start_data.focus
+                        && focus.id().same_client_as(&wl_surface.id()) {
                             // Deny move requests from DnD grabs to work around
                             // https://gitlab.gnome.org/GNOME/gtk/-/issues/7113
                             let is_dnd_grab = Self::is_dnd_grab(grab.as_any());
@@ -142,7 +140,6 @@ impl XdgShellHandler for State {
                                 return true;
                             }
                         }
-                    }
                 }
                 false
             });
@@ -204,44 +201,34 @@ impl XdgShellHandler for State {
 
         // See if this comes from a pointer grab.
         let pointer = self.niri.seat.get_pointer().unwrap();
-        if pointer.has_grab(serial) {
-            if let Some(start_data) = pointer.grab_start_data() {
-                if let Some((focus, _)) = &start_data.focus {
-                    if focus.id().same_client_as(&wl_surface.id()) {
+        if pointer.has_grab(serial)
+            && let Some(start_data) = pointer.grab_start_data()
+                && let Some((focus, _)) = &start_data.focus
+                    && focus.id().same_client_as(&wl_surface.id()) {
                         grab_start_data = Some(AnyStartData::Pointer(start_data));
                     }
-                }
-            }
-        }
 
         // See if this comes from a touch grab.
-        if let Some(touch) = self.niri.seat.get_touch() {
-            if touch.has_grab(serial) {
-                if let Some(start_data) = touch.grab_start_data() {
-                    if let Some((focus, _)) = &start_data.focus {
-                        if focus.id().same_client_as(&wl_surface.id()) {
+        if let Some(touch) = self.niri.seat.get_touch()
+            && touch.has_grab(serial)
+                && let Some(start_data) = touch.grab_start_data()
+                    && let Some((focus, _)) = &start_data.focus
+                        && focus.id().same_client_as(&wl_surface.id()) {
                             grab_start_data = Some(AnyStartData::Touch(start_data));
                         }
-                    }
-                }
-            }
-        }
 
         // See if this comes from a tablet tool grab.
         let mut tablet_tool = None;
         let tools = self.niri.seat.tablet_seat().get_tools();
         'outer: for tool in tools.values() {
-            if tool.has_grab(serial) {
-                if let Some(start_data) = tool.grab_start_data() {
-                    if let Some((focus, _)) = &start_data.focus {
-                        if focus.id().same_client_as(&wl_surface.id()) {
+            if tool.has_grab(serial)
+                && let Some(start_data) = tool.grab_start_data()
+                    && let Some((focus, _)) = &start_data.focus
+                        && focus.id().same_client_as(&wl_surface.id()) {
                             grab_start_data = Some(AnyStartData::TabletTool(start_data));
                             tablet_tool = Some(tool.clone());
                             break 'outer;
                         }
-                    }
-                }
-            }
         }
 
         let Some(start_data) = grab_start_data else {
@@ -268,8 +255,8 @@ impl XdgShellHandler for State {
             last_cell.set(None);
         }
 
-        if let Some((last_time, last_edges)) = last {
-            if time.saturating_sub(last_time) <= DOUBLE_CLICK_TIME {
+        if let Some((last_time, last_edges)) = last
+            && time.saturating_sub(last_time) <= DOUBLE_CLICK_TIME {
                 // Allow quick resize after a triple click.
                 last_cell.set(None);
 
@@ -288,7 +275,6 @@ impl XdgShellHandler for State {
                 self.niri.queue_redraw_all();
                 return;
             }
-        }
 
         if !self
             .niri
@@ -335,11 +321,10 @@ impl XdgShellHandler for State {
 
     fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
         #[cfg(feature = "agent")]
-        if let Some(seat) = Seat::from_resource(&seat) {
-            if self.agent_popup_grab(&surface, &seat, serial) {
+        if let Some(seat) = Seat::from_resource(&seat)
+            && self.agent_popup_grab(&surface, &seat, serial) {
                 return;
             }
-        }
         #[cfg(not(feature = "agent"))]
         let _ = seat;
 
@@ -375,13 +360,12 @@ impl XdgShellHandler for State {
             if let Some(layer) = layers.layer_for_surface(&root, WindowSurfaceType::TOPLEVEL) {
                 // This is a grab for a layer surface.
 
-                if let Some(mapped) = self.niri.mapped_layer_surfaces.get(layer) {
-                    if mapped.place_within_backdrop() {
+                if let Some(mapped) = self.niri.mapped_layer_surfaces.get(layer)
+                    && mapped.place_within_backdrop() {
                         trace!("ignoring popup grab for a layer surface within overview backdrop");
                         let _ = PopupManager::dismiss_popup(&root, &popup);
                         return;
                     }
-                }
 
                 let mon = self.niri.layout.monitor_for_output(output).unwrap();
                 if mon.render_above_top_layer() && layer.layer() != Layer::Overlay {
@@ -709,8 +693,8 @@ impl XdgShellHandler for State {
 
             let window = mapped.window.clone();
 
-            if let Some(requested_output) = requested_output {
-                if Some(&requested_output) != current_output {
+            if let Some(requested_output) = requested_output
+                && Some(&requested_output) != current_output {
                     self.niri.layout.move_to_output(
                         Some(&window),
                         &requested_output,
@@ -718,7 +702,6 @@ impl XdgShellHandler for State {
                         ActivateWindow::Smart,
                     );
                 }
-            }
 
             self.niri.layout.set_fullscreen(&window, true);
         } else if let Some(unmapped) = self.niri.unmapped_windows.get_mut(toplevel.wl_surface()) {
@@ -1017,11 +1000,10 @@ impl XdgShellHandler for State {
         if let Some((mapped, output)) = self.niri.layout.find_window_and_output_mut(&parent) {
             let output = output.cloned();
             let window = mapped.window.clone();
-            if self.niri.layout.descendants_added(&window) {
-                if let Some(output) = output {
+            if self.niri.layout.descendants_added(&window)
+                && let Some(output) = output {
                     self.niri.queue_redraw(&output);
                 }
-            }
         }
     }
 }
@@ -1298,11 +1280,10 @@ impl State {
                 return;
             }
 
-            if let Some(unmapped) = state.niri.unmapped_windows.get(toplevel.wl_surface()) {
-                if unmapped.needs_initial_configure() {
+            if let Some(unmapped) = state.niri.unmapped_windows.get(toplevel.wl_surface())
+                && unmapped.needs_initial_configure() {
                     state.send_initial_configure(&toplevel);
                 }
-            }
         });
     }
 
@@ -1504,8 +1485,7 @@ impl State {
             .niri
             .layout
             .find_window_and_output_mut(toplevel.wl_surface())
-        {
-            if mapped.recompute_window_rules(window_rules, self.niri.is_at_startup) {
+            && mapped.recompute_window_rules(window_rules, self.niri.is_at_startup) {
                 drop(config);
                 let output = output.cloned();
                 let window = mapped.window.clone();
@@ -1515,7 +1495,6 @@ impl State {
                     self.niri.queue_redraw(&output);
                 }
             }
-        }
     }
 }
 
@@ -1676,11 +1655,11 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
             error!("commit on a mapped surface without a configured serial");
         };
 
-        if let Some(client) = surface.client() {
-            if let Some(dmabuf) = dmabuf {
+        if let Some(client) = surface.client()
+            && let Some(dmabuf) = dmabuf {
                 let mut blocker_added = false;
-                if let Some(acquire_point) = acquire_point {
-                    if let Ok((blocker, source)) = acquire_point.generate_blocker() {
+                if let Some(acquire_point) = acquire_point
+                    && let Ok((blocker, source)) = acquire_point.generate_blocker() {
                         blocker_added = try_add_pre_commit_blocker!(
                             state,
                             surface,
@@ -1691,10 +1670,9 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
                             "syncobj"
                         );
                     }
-                }
 
-                if !blocker_added {
-                    if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
+                if !blocker_added
+                    && let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
                         let _ = try_add_pre_commit_blocker!(
                             state,
                             surface,
@@ -1705,9 +1683,7 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
                             "dmabuf"
                         );
                     }
-                }
             }
-        }
 
         let window = mapped.window.clone();
         if got_unmapped {

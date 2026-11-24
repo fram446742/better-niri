@@ -151,11 +151,10 @@ fn resolve_body(
     }
 
     // A top-level `preset` may name a user preset, which shadows a built-in of the same name.
-    if let (Some(r), Some(presets)) = (preset, user_presets) {
-        if let Some(user) = presets.iter().find(|p| p.name == r.name) {
+    if let (Some(r), Some(presets)) = (preset, user_presets)
+        && let Some(user) = presets.iter().find(|p| p.name == r.name) {
             return user.pass_sources(expand);
         }
-    }
 
     match resolve_leaf(source, path, default_mode, preset, expand) {
         Some(pair) => vec![pair],

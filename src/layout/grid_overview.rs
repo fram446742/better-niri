@@ -255,7 +255,7 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     pub fn is_animation(&self) -> bool {
-        self.progress.as_ref().map_or(false, |p| p.is_moving()) || self.rearrange_anim.is_some()
+        self.progress.as_ref().is_some_and(|p| p.is_moving()) || self.rearrange_anim.is_some()
     }
 
     /// Shows the grid `value` of the way open, following a touchpad gesture.
@@ -726,11 +726,9 @@ impl<W: LayoutElement> GridOverview<W> {
                 window_id: wid,
                 ..
             } = item
-            {
-                if *c == col_idx {
+                && *c == col_idx {
                     *wid = window_id.clone();
                 }
-            }
         }
     }
 
@@ -890,8 +888,8 @@ impl<W: LayoutElement> GridOverview<W> {
             );
 
             highlight.dim_loc = None;
-            if config.dim > 0. {
-                if let Some((rect, radius)) = entry.tile_rect {
+            if config.dim > 0.
+                && let Some((rect, radius)) = entry.tile_rect {
                     highlight.dim.update_render_elements(
                         rect.size,
                         true,
@@ -904,7 +902,6 @@ impl<W: LayoutElement> GridOverview<W> {
                     );
                     highlight.dim_loc = Some(rect.loc);
                 }
-            }
 
             self.minimized_highlights.push(highlight);
         }
@@ -1032,8 +1029,8 @@ impl<W: LayoutElement> GridOverview<W> {
                             Some(Animation::new(clock.clone(), from, target, 0., anim_config));
                     }
                 }
-                if let Some(focus) = focus {
-                    if !self.focus_rings.iter().any(|ring| &ring.window == focus) {
+                if let Some(focus) = focus
+                    && !self.focus_rings.iter().any(|ring| &ring.window == focus) {
                         let mut ring = new_ring(focus);
                         if focus_moved {
                             ring.fade =
@@ -1041,7 +1038,6 @@ impl<W: LayoutElement> GridOverview<W> {
                         }
                         self.focus_rings.push(ring);
                     }
-                }
                 self.drop_hidden_focus_rings();
             }
         }
@@ -1377,8 +1373,8 @@ impl<W: LayoutElement> GridOverview<W> {
 
     pub fn advance_animations(&mut self) {
         self.advance_focus_rings();
-        if let Some(OverviewProgress::Animation(anim)) = &mut self.progress {
-            if anim.is_done() {
+        if let Some(OverviewProgress::Animation(anim)) = &mut self.progress
+            && anim.is_done() {
                 self.progress = if self.open {
                     Some(OverviewProgress::Open)
                 } else {
@@ -1388,15 +1384,13 @@ impl<W: LayoutElement> GridOverview<W> {
                     self.sync_entries_to_layout();
                 }
             }
-        }
-        if let Some(anim) = &mut self.rearrange_anim {
-            if anim.is_done() {
+        if let Some(anim) = &mut self.rearrange_anim
+            && anim.is_done() {
                 self.rearrange_anim = None;
                 self.window_transition_starts.clear();
                 self.flying_in_windows.clear();
                 self.sync_entries_to_layout();
             }
-        }
     }
 
     fn sync_entries_to_layout(&mut self) {
@@ -1422,7 +1416,7 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.progress.as_ref().map_or(false, |p| p.is_animation())
+        self.progress.as_ref().is_some_and(|p| p.is_animation())
             || self.rearrange_anim.is_some()
             || self.minimized_highlights_animating()
             || self.focus_rings_animating()
@@ -1670,8 +1664,8 @@ impl<W: LayoutElement> GridLayout<W> {
         let (mut chosen, mut scale) = best.unwrap();
 
         // The rows the windows were in, or a small change to them, rather than new rows.
-        if let Some(prev) = prev {
-            if let Some(kept) = rows.kept(&prev.float_rows, min_scale) {
+        if let Some(prev) = prev
+            && let Some(kept) = rows.kept(&prev.float_rows, min_scale) {
                 let mut changes = rows.changes(kept).into_iter();
                 let kept = changes.next().unwrap();
                 let mut near = (rows.max_scale(&kept, min_scale), kept);
@@ -1692,7 +1686,6 @@ impl<W: LayoutElement> GridLayout<W> {
                     }
                 }
             }
-        }
 
         let placed = rows.place(&chosen, scale);
         let entries = items

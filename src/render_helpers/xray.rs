@@ -318,7 +318,7 @@ impl Xray {
 
 impl XrayElement {
     fn compute_uniforms(&self) -> Vec<Uniform<'static>> {
-        let (surface_to_geo, alpha_mask_enabled, alpha_threshold) = match &self.alpha_mask {
+        let (_surface_to_geo, _alpha_mask_enabled, _alpha_threshold) = match &self.alpha_mask {
             Some(mask) => (mask.surface_to_geo, 1i32, mask.threshold),
             None => (Mat3::IDENTITY, 0i32, 0.0),
         };
