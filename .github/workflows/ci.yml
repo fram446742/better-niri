@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
 
     name: test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -48,7 +48,7 @@ jobs:
       fail-fast: false
 
     name: check feature combinations
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -90,7 +90,7 @@ jobs:
       fail-fast: false
 
     name: alpine musl
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: alpine:3
     steps:
       - uses: actions/checkout@v6
@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
 
     name: randomized and slow tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     env:
       RUST_BACKTRACE: 1
@@ -147,7 +147,7 @@ jobs:
       fail-fast: false
 
     name: visual tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -171,7 +171,7 @@ jobs:
       fail-fast: false
 
     name: msrv
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -194,7 +194,7 @@ jobs:
       fail-fast: false
 
     name: clippy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -216,7 +216,7 @@ jobs:
         run: cargo clippy --all --all-targets
 
   rustfmt:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v6
@@ -231,7 +231,7 @@ jobs:
         run: cargo fmt --all -- --check
 
   fedora:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: fedora:42
 
     steps:
@@ -248,7 +248,7 @@ jobs:
       - run: cargo build --all
 
   freebsd:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       CARGO_HOME: /home/runner/work/cargo-home
 
@@ -318,7 +318,7 @@ jobs:
               --no-default-features --features dbus,xdp-gnome-screencast
 
   nix:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -343,7 +343,7 @@ jobs:
       - publish-docs
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -358,7 +358,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'niri-wm/niri'
     needs:
       - test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -394,7 +394,7 @@ jobs:
           path: ./publish
 
   publish-docs:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs:
       - build-docs
     permissions:
