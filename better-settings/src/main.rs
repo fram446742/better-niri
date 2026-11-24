@@ -1,15 +1,19 @@
 //! `better-settings`: a small GTK4 frontend for niri's KDL config.
 //!
-//! The window edits a fixed catalog of settings and writes them through the
+//! The window edits the expanded catalog and writes through the
 //! text-preserving model in the library, so comments and formatting survive
-//! and every save keeps a timestamped backup.
+//! and every save keeps a timestamped backup. Binds, rules, startup commands
+//! and environment variables are shown as read-only summaries; use
+//! `better-settingsctl` to edit those lists.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use better_settings::{
-    CATALOG, Edit, Kind, SettingSpec, config_path, current, normalize, patch_many, save,
+    Bind, Kind, OwnedSetting, RuleKind, binds, catalog_for, config_path, current,
+    default_column_width, environment, normalize, patch_many, preset_column_widths, rules, save,
+    spawn_at_startup, validate,
 };
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -21,7 +25,7 @@ enum Control {
 }
 
 struct Row {
-    spec: SettingSpec,
+    spec: OwnedSetting,
     control: Control,
     initial: String,
 }
@@ -41,7 +45,9 @@ fn value_of(control: &Control) -> String {
 fn set_initial(control: &Control, value: Option<&str>) -> String {
     match control {
         Control::Switch(switch) => {
-            let active = matches!(value, Some("true"));
+            // A flag with properties (`variable-refresh-rate on-demand=true`)
+            // still counts as enabled.
+            let active = matches!(value, Some(value) if value != "false");
             switch.set_active(active);
             active.to_string()
         }
@@ -59,7 +65,7 @@ fn set_initial(control: &Control, value: Option<&str>) -> String {
     }
 }
 
-fn build_control(spec: &SettingSpec) -> Control {
+fn build_control(spec: &OwnedSetting) -> Control {
     match spec.kind {
         Kind::Bool | Kind::Flag => Control::Switch(gtk::Switch::new()),
         Kind::Choice(choices) => Control::DropDown(gtk::DropDown::from_strings(choices), choices),
@@ -87,6 +93,147 @@ fn read(path: &PathBuf) -> Result<String, String> {
     }
 }
 
+fn section_heading(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.add_css_class("heading");
+    label.set_margin_top(8);
+    label
+}
+
+fn note_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.add_css_class("dim-label");
+    label
+}
+
+fn add_read_only(content: &gtk::Box, title: &str, items: Vec<String>) {
+    if items.is_empty() {
+        return;
+    }
+    content.append(&section_heading(title));
+    for item in items {
+        content.append(&note_label(&item));
+    }
+}
+
+fn build_rows(content: &gtk::Box, rows: &Rc<RefCell<Vec<Row>>>, text: &str) {
+    while let Some(child) = content.first_child() {
+        content.remove(&child);
+    }
+    rows.borrow_mut().clear();
+
+    let mut section = "";
+    for spec in catalog_for(text) {
+        if spec.section != section {
+            section = spec.section;
+            content.append(&section_heading(section));
+        }
+        let control = build_control(&spec);
+        let value = current(text, &spec.path).unwrap_or(None);
+        let initial = set_initial(&control, value.as_deref());
+
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let label = gtk::Label::new(Some(&spec.label));
+        label.set_xalign(0.0);
+        label.set_width_chars(28);
+        label.set_tooltip_text(Some(spec.help));
+        line.append(&label);
+        line.append(&widget_of(&control));
+        row.append(&line);
+        row.append(&note_label(spec.help));
+        content.append(&row);
+
+        rows.borrow_mut().push(Row {
+            spec,
+            control,
+            initial,
+        });
+    }
+
+    add_read_only(
+        content,
+        &format!("Binds ({})", binds(text).len()),
+        binds(text).iter().map(Bind::summary).collect::<Vec<_>>(),
+    );
+    add_read_only(
+        content,
+        &format!("Window rules ({})", rules(text, RuleKind::Window).len()),
+        rules(text, RuleKind::Window)
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| format!("#{index}: {}", rule.summary()))
+            .collect(),
+    );
+    add_read_only(
+        content,
+        &format!("Layer rules ({})", rules(text, RuleKind::Layer).len()),
+        rules(text, RuleKind::Layer)
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| format!("#{index}: {}", rule.summary()))
+            .collect(),
+    );
+    add_read_only(
+        content,
+        &format!("Startup ({})", spawn_at_startup(text).len()),
+        spawn_at_startup(text)
+            .iter()
+            .map(|command| format!("spawn-at-startup {}", command.join(" ")))
+            .collect(),
+    );
+    add_read_only(
+        content,
+        &format!("Environment ({})", environment(text).len()),
+        environment(text)
+            .into_iter()
+            .map(|(name, value)| match value {
+                Some(value) => format!("{name} = {value}"),
+                None => format!("{name} (unset)"),
+            })
+            .collect(),
+    );
+    add_read_only(
+        content,
+        "Column widths",
+        vec![
+            format!(
+                "default: {}",
+                default_column_width(text).unwrap_or_else(|| "(not set)".to_owned())
+            ),
+            format!(
+                "presets: {}",
+                if preset_column_widths(text).is_empty() {
+                    "(not set)".to_owned()
+                } else {
+                    preset_column_widths(text).join(", ")
+                }
+            ),
+        ],
+    );
+}
+
+fn validation_message(text: &str) -> String {
+    let report = validate(text);
+    if report.ok() {
+        format!("Config OK: {} blocks, {} keys", report.blocks, report.keys)
+    } else {
+        format!(
+            "Config problems:\n{}",
+            report
+                .errors
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+}
+
 fn main() -> gtk::glib::ExitCode {
     let app = gtk::Application::builder()
         .application_id("org.better.Settings")
@@ -104,8 +251,8 @@ fn build_ui(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Better Settings — niri")
-        .default_width(620)
-        .default_height(780)
+        .default_width(720)
+        .default_height(820)
         .build();
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -133,7 +280,7 @@ fn build_ui(app: &gtk::Application) {
     path_label.set_margin_end(16);
     path_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
     content.set_margin_top(8);
     content.set_margin_bottom(16);
     content.set_margin_start(16);
@@ -152,55 +299,26 @@ fn build_ui(app: &gtk::Application) {
     match read(&path) {
         Ok(loaded) => {
             *text.borrow_mut() = loaded;
-            for spec in CATALOG {
-                let control = build_control(spec);
-                let value = current(&text.borrow(), spec.path).unwrap_or(None);
-                let initial = set_initial(&control, value.as_deref());
-
-                let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-                let label = gtk::Label::new(Some(spec.label));
-                label.set_xalign(0.0);
-                label.set_width_chars(26);
-                label.set_tooltip_text(Some(spec.help));
-                line.append(&label);
-                line.append(&widget_of(&control));
-                row.append(&line);
-
-                let help = gtk::Label::new(Some(spec.help));
-                help.set_xalign(0.0);
-                help.set_wrap(true);
-                help.add_css_class("dim-label");
-                help.add_css_class("caption");
-                row.append(&help);
-
-                content.append(&row);
-                rows.borrow_mut().push(Row {
-                    spec: *spec,
-                    control,
-                    initial,
-                });
-            }
+            build_rows(&content, &rows, &text.borrow());
+            status.set_text(&validation_message(&text.borrow()));
         }
         Err(err) => {
             status.set_text(&err);
         }
     }
 
-    // Reload: re-read the file and reset every widget to its stored value.
+    // Reload: re-read the file, rebuild the sections and report validation.
     {
         let rows = rows.clone();
         let text = text.clone();
         let status = status.clone();
         let path = path.clone();
+        let content = content.clone();
         reload.connect_clicked(move |_| match read(&path) {
             Ok(loaded) => {
                 *text.borrow_mut() = loaded;
-                for row in rows.borrow_mut().iter_mut() {
-                    let value = current(&text.borrow(), row.spec.path).unwrap_or(None);
-                    row.initial = set_initial(&row.control, value.as_deref());
-                }
-                status.set_text("Reloaded");
+                build_rows(&content, &rows, &text.borrow());
+                status.set_text(&validation_message(&text.borrow()));
             }
             Err(err) => status.set_text(&err),
         });
@@ -222,17 +340,35 @@ fn build_ui(app: &gtk::Application) {
                 if raw == row.initial {
                     continue;
                 }
-                let flag = matches!(row.spec.kind, Kind::Flag);
-                match normalize(row.spec.kind, &raw) {
-                    Ok(value) => {
-                        edits.push(Edit {
-                            path: row.spec.path.to_owned(),
-                            value,
-                            flag,
-                        });
-                        changed += 1;
+                let edit = match row.spec.kind {
+                    Kind::Flag => {
+                        let value = match normalize(Kind::Flag, &raw) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                errors.push(format!("{}: {err}", row.spec.label));
+                                continue;
+                            }
+                        };
+                        Some(better_settings::Edit::flag(
+                            row.spec.path.clone(),
+                            value == "true",
+                        ))
                     }
-                    Err(err) => errors.push(format!("{}: {err}", row.spec.label)),
+                    Kind::Raw => Some(better_settings::Edit::raw(
+                        row.spec.path.clone(),
+                        raw.trim(),
+                    )),
+                    kind => match normalize(kind, &raw) {
+                        Ok(value) => Some(better_settings::Edit::new(row.spec.path.clone(), value)),
+                        Err(err) => {
+                            errors.push(format!("{}: {err}", row.spec.label));
+                            None
+                        }
+                    },
+                };
+                if let Some(edit) = edit {
+                    edits.push(edit);
+                    changed += 1;
                 }
             }
             if !errors.is_empty() {
@@ -244,22 +380,38 @@ fn build_ui(app: &gtk::Application) {
                 return;
             }
             match patch_many(&current_text, &edits) {
-                Ok(patched) => match save(&path, &patched, false) {
-                    Ok(backup) => {
-                        *text.borrow_mut() = patched;
-                        for row in rows.borrow_mut().iter_mut() {
-                            row.initial = value_of(&row.control);
+                Ok(patched) => {
+                    let report = validate(&patched);
+                    if !report.ok() {
+                        status.set_text(&format!(
+                            "Refusing to save invalid config:\n{}",
+                            report.errors.join("\n")
+                        ));
+                        return;
+                    }
+                    match save(&path, &patched, false) {
+                        Ok(backup) => {
+                            *text.borrow_mut() = patched;
+                            for row in rows.borrow_mut().iter_mut() {
+                                row.initial = value_of(&row.control);
+                            }
+                            let summary = match backup {
+                                Some(backup) => format!(
+                                    "Saved {changed} settings; backup at {}",
+                                    backup.display()
+                                ),
+                                None => format!("Saved {changed} settings"),
+                            };
+                            status.set_text(&format!(
+                                "{summary}\n{}",
+                                validation_message(&text.borrow())
+                            ));
                         }
-                        match backup {
-                            Some(backup) => status.set_text(&format!(
-                                "Saved {changed} settings; backup at {}",
-                                backup.display()
-                            )),
-                            None => status.set_text(&format!("Saved {changed} settings")),
+                        Err(err) => {
+                            status.set_text(&format!("cannot write {}: {err}", path.display()))
                         }
                     }
-                    Err(err) => status.set_text(&format!("cannot write {}: {err}", path.display())),
-                },
+                }
                 Err(err) => status.set_text(&format!("cannot patch config: {err}")),
             }
         });

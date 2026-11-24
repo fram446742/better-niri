@@ -14,6 +14,25 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod catalog;
+pub mod cli;
+pub mod diff;
+pub mod model;
+pub mod nodes;
+
+pub use catalog::{
+    CATALOG, Kind, OUTPUT_TEMPLATES, OutputTemplate, OwnedSetting, SettingSpec, catalog_for, find,
+    normalize, output_names,
+};
+pub use diff::unified_diff;
+pub use model::{Model, SettingValue, export_model, import_model};
+pub use nodes::{
+    Bind, Node, RuleKind, RuleSpec, Validation, add_preset_column_width, add_rule, add_startup,
+    binds, default_column_width, environment, nodes, preset_column_widths, remove_bind,
+    remove_preset_column_width, remove_rule, remove_startup, rules, set_bind,
+    set_default_column_width, spawn_at_startup, validate,
+};
+
 /// One segment of a KDL path: a node name plus optional arguments.
 ///
 /// `output "eDP-1"` → `Segment { name: "output", args: ["eDP-1"] }`.
@@ -284,13 +303,23 @@ pub fn tokens(text: &str) -> Vec<String> {
     out
 }
 
-/// Quotes a value when it would not survive as a bare KDL token.
+/// Quotes a value unless it is a plain KDL number or identifier.
+///
+/// Deliberately conservative: paths (`~/…`, `a/b`), colors (`#rrggbb`),
+/// modes (`1920x1080@120.030`) and anything with spaces are quoted, because
+/// they are not valid bare KDL identifiers.
 pub fn quote_if_needed(value: &str) -> String {
-    let bare = !value.is_empty()
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '@')
-        });
-    if bare {
+    let number = value.parse::<f64>().is_ok_and(|number| number.is_finite())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '-' | '+' | '.' | 'e' | 'E'));
+    let mut chars = value.chars();
+    let identifier = !value.is_empty()
+        && chars
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'));
+    if number || identifier {
         value.to_owned()
     } else {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
@@ -436,41 +465,21 @@ fn split_key_line(analysis: &str, original: &str) -> Option<(String, String, Str
     // Find where the value starts.
     let value_offset = after.len() - after.trim_start().len();
     let value_start = after_start + value_offset;
-    let mut value_end = value_start;
-    let bytes = analysis.as_bytes();
-    if bytes.get(value_start) == Some(&b'"') {
-        value_end = value_start + 1;
-        let mut escaped = false;
-        while value_end < bytes.len() {
-            let ch = analysis[value_end..].chars().next().unwrap();
-            value_end += ch.len_utf8();
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match ch {
-                '\\' => escaped = true,
-                '"' => break,
-                _ => {}
-            }
-        }
-    } else {
-        while value_end < bytes.len() {
-            let ch = analysis[value_end..].chars().next().unwrap();
-            if ch.is_whitespace() || ch == ';' {
-                break;
-            }
-            value_end += ch.len_utf8();
+    // The value may have several tokens (`position x=0 y=5`,
+    // `scroll-factor vertical=1.0 horizontal=-2.0`). Take everything up to a
+    // terminating semicolon or trailing comment.
+    let mut value_end = analysis.len();
+    while value_end > value_start && analysis.as_bytes()[value_end - 1].is_ascii_whitespace() {
+        value_end -= 1;
+    }
+    if value_end > value_start && analysis.as_bytes()[value_end - 1] == b';' {
+        value_end -= 1;
+        while value_end > value_start && analysis.as_bytes()[value_end - 1].is_ascii_whitespace() {
+            value_end -= 1;
         }
     }
     let raw_value = &original[value_start..value_end];
-    let value = if raw_value.starts_with('"') && raw_value.ends_with('"') && raw_value.len() >= 2 {
-        raw_value[1..raw_value.len() - 1]
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-    } else {
-        raw_value.to_owned()
-    };
+    let value = unquote_single(raw_value).unwrap_or_else(|| raw_value.to_owned());
     // `tail` keeps the semicolon and any trailing comment. It must be read
     // from the original line: `analysis` has comments blanked out.
     let tail = original
@@ -479,6 +488,29 @@ fn split_key_line(analysis: &str, original: &str) -> Option<(String, String, Str
         .unwrap_or_default()
         .to_owned();
     Some((key.to_owned(), value, tail))
+}
+
+/// Unquotes `raw` only when the whole value is one quoted string.
+fn unquote_single(raw: &str) -> Option<String> {
+    if !raw.starts_with('"') {
+        return None;
+    }
+    let mut escaped = false;
+    for (index, ch) in raw.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => {
+                return (index + ch.len_utf8() == raw.len())
+                    .then(|| raw[1..index].replace("\\\"", "\"").replace("\\\\", "\\"));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Recognizes a bare flag line (`prefer-no-csd`, `tap`) and its trailing text.
@@ -512,7 +544,29 @@ fn split_flag(analysis: &str, original: &str) -> Option<(String, String)> {
 /// The current value at `path`, if the config sets it.
 pub fn current(text: &str, path: &str) -> Result<Option<String>, PatchError> {
     let path = parse_path(path)?;
+    if let Some((parent, kind)) = special_block(&path) {
+        return match kind {
+            "default-column-width" => nodes::default_column_width_at(text, parent),
+            "preset-column-widths" => nodes::preset_column_widths_at(text, parent)
+                .map(|sizes| (!sizes.is_empty()).then(|| sizes.join(", "))),
+            _ => Ok(None),
+        };
+    }
     Ok(scan(text)?.value(&path).map(str::to_owned))
+}
+
+/// Detects the two layout settings that are KDL blocks rather than key/value
+/// lines (`default-column-width` and `preset-column-widths`).
+fn special_block(path: &[Segment]) -> Option<(&[Segment], &str)> {
+    let last = path.last()?;
+    if last.name != "default-column-width" && last.name != "preset-column-widths" {
+        return None;
+    }
+    let parent = &path[..path.len() - 1];
+    if parent.last().map(|segment| segment.name.as_str()) != Some("layout") {
+        return None;
+    }
+    Some((parent, last.name.as_str()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -521,6 +575,8 @@ pub struct Edit {
     pub value: String,
     /// When set, the setting is a bare flag and `value` is a boolean.
     pub flag: bool,
+    /// When set, `value` is written verbatim instead of being quoted.
+    pub raw: bool,
 }
 
 impl Edit {
@@ -529,6 +585,7 @@ impl Edit {
             path: path.into(),
             value: value.into(),
             flag: false,
+            raw: false,
         }
     }
 
@@ -537,6 +594,16 @@ impl Edit {
             path: path.into(),
             value: if enabled { "true" } else { "false" }.to_owned(),
             flag: true,
+            raw: false,
+        }
+    }
+
+    pub fn raw(path: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            value: value.into(),
+            flag: false,
+            raw: true,
         }
     }
 }
@@ -547,8 +614,28 @@ impl Edit {
 /// rewritten; everything else, including comments, is preserved byte for byte.
 pub fn patch(text: &str, edit: &Edit) -> Result<String, PatchError> {
     let path = parse_path(&edit.path)?;
+    if let Some((parent, kind)) = special_block(&path) {
+        if edit.flag {
+            return Err(PatchError::Syntax(format!(
+                "`{}` is a block and cannot be set as a flag",
+                edit.path
+            )));
+        }
+        return match kind {
+            "default-column-width" => {
+                nodes::set_default_column_width_at(text, parent, edit.value.trim())
+            }
+            "preset-column-widths" => {
+                let sizes = split_size_list(&edit.value)?;
+                nodes::set_preset_column_widths_at(text, parent, &sizes)
+            }
+            _ => Ok(text.to_owned()),
+        };
+    }
     let value = if edit.flag {
         normalize(Kind::Flag, &edit.value).map_err(PatchError::Syntax)?
+    } else if edit.raw {
+        edit.value.trim().to_owned()
     } else {
         quote_if_needed(&edit.value)
     };
@@ -557,20 +644,21 @@ pub fn patch(text: &str, edit: &Edit) -> Result<String, PatchError> {
     let trailing_newline = text.ends_with('\n');
 
     if let Some(key) = scan.key(&path) {
-        let enabled = value == "true";
-        if key.flag {
-            if enabled {
+        if edit.flag {
+            // A present flag is already enabled; keep any properties it has
+            // (for example `variable-refresh-rate on-demand=true`).
+            if value == "true" {
                 return Ok(text.to_owned());
             }
             lines.remove(key.line);
-            return Ok(join_lines(lines, trailing_newline));
+            return Ok(join_lines_with(lines, trailing_newline, line_ending(text)));
         }
         if key.value == edit.value {
             return Ok(text.to_owned());
         }
         let key_name = &path.last().unwrap().name;
         lines[key.line] = format!("{}{} {value}{}", " ".repeat(key.indent), key_name, key.tail);
-        return Ok(join_lines(lines, trailing_newline));
+        return Ok(join_lines_with(lines, trailing_newline, line_ending(text)));
     }
     // A flag that is not present is already disabled.
     if edit.flag && value == "false" {
@@ -587,7 +675,7 @@ pub fn patch(text: &str, edit: &Edit) -> Result<String, PatchError> {
             lines.push(String::new());
         }
         lines.push(line);
-        return Ok(join_lines(lines, trailing_newline));
+        return Ok(join_lines_with(lines, trailing_newline, line_ending(text)));
     }
 
     let (blocks, key) = (&path[..path.len() - 1], path.last().unwrap());
@@ -638,15 +726,73 @@ pub fn patch(text: &str, edit: &Edit) -> Result<String, PatchError> {
     for (offset, line) in inserted.into_iter().enumerate() {
         lines.insert(insert_at + offset, line);
     }
-    Ok(join_lines(lines, trailing_newline))
+    Ok(join_lines_with(lines, trailing_newline, line_ending(text)))
 }
 
-fn join_lines(lines: Vec<String>, trailing_newline: bool) -> String {
-    let mut text = lines.join("\n");
+/// Splits a comma-separated list of preset sizes and validates each entry.
+pub(crate) fn split_size_list(value: &str) -> Result<Vec<String>, PatchError> {
+    let mut sizes = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let tokens = tokens(part);
+        let valid = match tokens.as_slice() {
+            [kind, amount] if kind == "proportion" => amount.parse::<f64>().is_ok(),
+            [kind, amount] if kind == "fixed" => amount.parse::<i64>().is_ok(),
+            _ => false,
+        };
+        if !valid {
+            return Err(PatchError::Syntax(format!(
+                "`{part}` must be `proportion <0..1>` or `fixed <pixels>`"
+            )));
+        }
+        sizes.push(format!("{} {}", tokens[0], tokens[1]));
+    }
+    Ok(sizes)
+}
+
+/// The dominant line ending of `text`; edits keep it so files do not churn.
+pub(crate) fn line_ending(text: &str) -> &'static str {
+    if text.contains("\r\n") { "\r\n" } else { "\n" }
+}
+
+pub(crate) fn join_lines_with(
+    lines: Vec<String>,
+    trailing_newline: bool,
+    separator: &str,
+) -> String {
+    let mut text = lines.join(separator);
     if trailing_newline {
-        text.push('\n');
+        text.push_str(separator);
     }
     text
+}
+
+/// Removes the key line at `path`, leaving every other byte untouched.
+///
+/// Removing a key that is not present is a no-op.
+pub fn remove_key(text: &str, path: &str) -> Result<String, PatchError> {
+    let path = parse_path(path)?;
+    if let Some((parent, kind)) = special_block(&path) {
+        return match kind {
+            "default-column-width" => nodes::remove_block_at(text, parent, kind),
+            "preset-column-widths" => nodes::remove_block_at(text, parent, kind),
+            _ => Ok(text.to_owned()),
+        };
+    }
+    let scan = scan(text)?;
+    let Some(key) = scan.key(&path) else {
+        return Ok(text.to_owned());
+    };
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    lines.remove(key.line);
+    Ok(join_lines_with(
+        lines,
+        text.ends_with('\n'),
+        line_ending(text),
+    ))
 }
 
 /// Applies several edits in order.
@@ -709,167 +855,6 @@ pub fn save(path: &Path, text: &str, dry_run: bool) -> std::io::Result<Option<Pa
     std::fs::write(&temp, text)?;
     std::fs::rename(temp, path)?;
     Ok(backup)
-}
-
-/// One entry in the settings catalog.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Kind {
-    Float {
-        min: f64,
-        max: f64,
-    },
-    Int {
-        min: i64,
-        max: i64,
-    },
-    Bool,
-    /// A bare flag: present means enabled.
-    Flag,
-    Text,
-    Choice(&'static [&'static str]),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SettingSpec {
-    pub path: &'static str,
-    pub label: &'static str,
-    pub help: &'static str,
-    pub kind: Kind,
-}
-
-/// Settings exposed by the GUI. Paths are relative to the config root.
-pub const CATALOG: &[SettingSpec] = &[
-    SettingSpec {
-        path: "layout.gaps",
-        label: "Gaps",
-        help: "Logical pixels between windows.",
-        kind: Kind::Float {
-            min: 0.0,
-            max: 256.0,
-        },
-    },
-    SettingSpec {
-        path: "layout.center-focused-column",
-        label: "Center focused column",
-        help: "Whether the focused column is centered.",
-        kind: Kind::Choice(&["never", "always", "on-overflow"]),
-    },
-    SettingSpec {
-        path: "layout.empty-workspace-above-first",
-        label: "Empty workspace above first",
-        help: "Start the workspace list with an empty workspace.",
-        kind: Kind::Bool,
-    },
-    SettingSpec {
-        path: "layout.focus-ring.width",
-        label: "Focus ring width",
-        help: "Thickness of the focus ring in logical pixels.",
-        kind: Kind::Int { min: 0, max: 64 },
-    },
-    SettingSpec {
-        path: "input.keyboard.repeat-delay",
-        label: "Keyboard repeat delay",
-        help: "Milliseconds before key repeat starts.",
-        kind: Kind::Int { min: 0, max: 2000 },
-    },
-    SettingSpec {
-        path: "input.keyboard.repeat-rate",
-        label: "Keyboard repeat rate",
-        help: "Repeats per second.",
-        kind: Kind::Int { min: 1, max: 500 },
-    },
-    SettingSpec {
-        path: "input.touchpad.tap",
-        label: "Touchpad tap to click",
-        help: "Enable tap-to-click.",
-        kind: Kind::Flag,
-    },
-    SettingSpec {
-        path: "input.touchpad.natural-scroll",
-        label: "Natural scroll",
-        help: "Scroll direction follows finger movement.",
-        kind: Kind::Flag,
-    },
-    SettingSpec {
-        path: "input.touchpad.dwt",
-        label: "Disable while typing",
-        help: "Ignore touchpad input while typing.",
-        kind: Kind::Flag,
-    },
-    SettingSpec {
-        path: "input.keyboard.xkb.layout",
-        label: "Keyboard layout",
-        help: "XKB layout, for example `us` or `us,de`.",
-        kind: Kind::Text,
-    },
-    SettingSpec {
-        path: "prefer-no-csd",
-        label: "Prefer no client-side decorations",
-        help: "Ask clients to use server-side decorations.",
-        kind: Kind::Flag,
-    },
-    SettingSpec {
-        path: "screenshot-path",
-        label: "Screenshot path",
-        help: "Where screenshots are saved (supports ~).",
-        kind: Kind::Text,
-    },
-    SettingSpec {
-        path: "animations.slowdown",
-        label: "Animation slowdown",
-        help: "Multiplier for animation durations.",
-        kind: Kind::Float {
-            min: 0.1,
-            max: 10.0,
-        },
-    },
-    SettingSpec {
-        path: "cursor.hide-after-ms",
-        label: "Hide cursor after",
-        help: "Milliseconds of inactivity before hiding the cursor.",
-        kind: Kind::Int {
-            min: 0,
-            max: 10_000,
-        },
-    },
-];
-
-/// Validates a raw value against a setting kind, normalizing it for KDL.
-pub fn normalize(kind: Kind, raw: &str) -> Result<String, String> {
-    let raw = raw.trim();
-    match kind {
-        Kind::Float { min, max } => {
-            let value: f64 = raw
-                .parse()
-                .map_err(|_| format!("`{raw}` is not a number"))?;
-            if !(min..=max).contains(&value) {
-                return Err(format!("{value} is outside {min}..={max}"));
-            }
-            Ok(format!("{value}"))
-        }
-        Kind::Int { min, max } => {
-            let value: i64 = raw
-                .parse()
-                .map_err(|_| format!("`{raw}` is not an integer"))?;
-            if !(min..=max).contains(&value) {
-                return Err(format!("{value} is outside {min}..={max}"));
-            }
-            Ok(value.to_string())
-        }
-        Kind::Flag | Kind::Bool => match raw {
-            "true" | "yes" | "on" | "1" => Ok("true".to_owned()),
-            "false" | "no" | "off" | "0" => Ok("false".to_owned()),
-            other => Err(format!("`{other}` is not a boolean")),
-        },
-        Kind::Text => Ok(raw.to_owned()),
-        Kind::Choice(choices) => {
-            if choices.contains(&raw) {
-                Ok(raw.to_owned())
-            } else {
-                Err(format!("`{raw}` must be one of {}", choices.join(", ")))
-            }
-        }
-    }
 }
 
 #[cfg(test)]
