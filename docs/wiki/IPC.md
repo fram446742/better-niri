@@ -46,6 +46,27 @@ printf 'focus-column-right\nclose-window\n' | niri msg actions
 
 Over the raw IPC socket this is `Request::Actions`, a JSON array of actions.
 
+### Capabilities
+
+`niri msg capabilities` reports which optional features the running build
+supports. Companions should use it instead of probing actions, so they can
+degrade gracefully on a stock niri or a build with modules disabled:
+
+```sh
+niri msg capabilities          # one "name: yes/no" line per feature
+niri msg capabilities --json   # {"sticky":true,"vulkan":true,...}
+```
+
+Over the raw IPC socket this is `Request::Capabilities`, and the reply is
+`{"Ok":{"Capabilities":{...}}}`. Fields are additive: older clients ignore
+unknown ones and missing fields default to `false`. The report covers the
+window-management primitives (`sticky`, virtual/isolated outputs, hidden
+workspaces, minimise, grid, magnifier, carousel, vertical axis, multi-action
+binds, per-keyboard config), rendering (`shaders`, decoration light, liquid
+glass, HDR, Vulkan), presentation (tearing, FIFO, explicit sync, pointer warp,
+async flips), capture (screencopy, ext-image-copy, screencast, screenshots,
+pick-colour), the agent seat, and KDE/portal integrations.
+
 ### Event Stream
 
 <sup>Since: 0.1.9</sup>
