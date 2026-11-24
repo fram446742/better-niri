@@ -117,11 +117,63 @@ companionctl call audio status
 Adapters are disabled by default. `dispatch` is the only action that executes
 a command; hooks just store/resolve them.
 
+### Rule match conditions
+
+Every populated field in `match` is ANDed; strings are case-insensitive.
+
+| Field | Matches |
+| --- | --- |
+| `app_id` / `title` | substring |
+| `app_id_regex` / `title_regex` | regular expression |
+| `app_id_not` / `title_not` | negated substring |
+| `app_id_not_regex` | negated regular expression |
+| `workspace` | stable workspace id |
+| `workspace_name` / `workspace_name_regex` | name from `auto:workspaces` |
+| `is_floating` / `is_minimized` / `is_sticky` / `is_urgent` | exact boolean |
+
+`rules.set` rejects invalid regular expressions before storing anything, and
+older rule files keep loading because every new field is optional.
+
+`rules.explain` reports each matching rule with its `match` object and a
+`window_state` snapshot (including the resolved `workspace_name`), plus the
+steps. `rules.apply` reports the same matcher/window state with a `step_count`
+instead of the steps:
+
+```sh
+companionctl call rules set '{
+  "name":"dev-tools",
+  "match":{
+    "app_id_regex":"^(Alacritty|kitty)$",
+    "title_regex":"nvim",
+    "workspace_name":"dev",
+    "app_id_not":"chrome"
+  },
+  "steps":[{"namespace":"parker","action":"park","params":{}}]
+}'
+companionctl call rules explain '{"window":10}'
+```
+
+### Run-or-raise selection
+
+When several windows match, `windows.run-or-raise`/`windows.singleton` sort
+matches by window id and raise the lowest-id focused match, or the lowest id
+when none is focused. The response reports what happened:
+
+```json
+{"action":"raised","raised":11,"title":"firefox","matches":3,
+ "candidate_ids":[10,11,12],"was_focused":true}
+```
+
+If nothing matched, the `spawn`/`spawn_sh` command runs and the response has
+`"action":"spawned"` with `"matches":0` and an empty `candidate_ids`.
+`windows.find` also returns matches sorted by id plus a `count`.
+
 ## Terminal swallowing
 
 `swallow.*` is opt-in. When enabled, a newly opened window whose process is a
 descendant of an allowlisted terminal window minimizes that terminal; closing
-the child restores it.
+the child restores it. Swallowing also runs for windows that already exist when
+the daemon connects, so a restart does not miss open children.
 
 ```sh
 companionctl call swallow enable
@@ -129,12 +181,68 @@ companionctl call swallow status
 companionctl call swallow add-terminal '{"app_id":"myterm"}'
 companionctl call swallow list
 companionctl call swallow restore '{"child":42}'
+companionctl call swallow reconcile   # drop pairs whose child is gone
 ```
 
 The parent chain is read from `/proc/<pid>/status`; the default terminal
 allowlist covers Alacritty, foot, kitty, WezTerm, Ghostty, Konsole,
-gnome-terminal and xterm. Swallowed pairs are stored in the `swallow` parking
-lot and restored when the child closes.
+gnome-terminal and xterm. Multiple terminal app ids are supported through the
+allowlist or per-rule matching.
+
+### Swallow rules and ignore lists
+
+`swallow.add-rule` adds an ordered rule; the first matching rule decides and
+`add-rule` with the same `name` replaces it. Every populated field must match:
+
+| Field | Matches |
+| --- | --- |
+| `terminal_app_id` | terminal app-id substrings |
+| `terminal_app_id_regex` / `terminal_title_regex` | terminal regex |
+| `child_app_id` | child app-id substrings |
+| `child_app_id_regex` / `child_title_regex` | child regex |
+| `ignore` | veto swallowing when the rule matches |
+| `child_age_ms` | override the child process age window |
+| `restore_on_exit` | override restoring the terminal on child exit |
+
+A matching non-ignore rule allows swallowing even when the terminal is not in
+the global allowlist. Rules are persisted with the rest of the swallow config.
+
+```sh
+# Media apps launched from any allowlisted terminal are swallowed.
+companionctl call swallow add-rule '{
+  "name":"media",
+  "terminal_app_id":["alacritty","kitty"],
+  "child_app_id":["mpv","vlc"]
+}'
+
+# Never swallow file dialogs by title.
+companionctl call swallow add-rule '{
+  "name":"dialogs",
+  "child_title_regex":"^(Open|Save|Confirm)",
+  "ignore":true
+}'
+
+# Veto children by app id/title before rules are evaluated.
+companionctl call swallow set-ignore '{"ignore":["zenity","yad"]}'
+
+# Only swallow children whose process started in the last 5 seconds.
+companionctl call swallow configure '{"child_age_ms":5000}'
+companionctl call swallow remove-rule '{"name":"dialogs"}'
+```
+
+`child_age_ms` is a time window measured from the child's process start
+(`/proc/<pid>/stat`, via `/proc/uptime`). It prevents long-running processes
+from being swallowed when they merely open another window; a per-rule
+`child_age_ms` overrides the global value. `configure` also accepts
+`"restore_on_exit": false` to leave terminals minimized when a child exits.
+
+Swallowed pairs are stored in the `swallow` parking lot, including the terminal,
+child, matching rule and restore preference, so they survive a daemon restart.
+Restoring is idempotent: a missing pair reports `"restored": false` instead of
+failing. Closing the terminal first drops its pairs without trying to restore
+it; on reconnect (or `swallow reconcile`) pairs whose child no longer exists are
+removed and a still-open terminal is unminimized. `swallow.status` reports the
+allowlist, ignore list, age window, restore preference, rules and live pairs.
 
 ## Contexts
 
