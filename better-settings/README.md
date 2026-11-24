@@ -165,7 +165,9 @@ entries are set one by one.
 ```
 
 `version` must be `1` (or lower). `import -` reads the model from stdin.
-`--dry-run` previews the diff without writing anything.
+`--dry-run` previews the diff without writing anything. A flag with properties
+(for example `variable-refresh-rate on-demand=true`) is stored with `flag` and
+`raw` both true and its property text as `value`, so import preserves it.
 
 ## Supported syntax
 

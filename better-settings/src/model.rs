@@ -68,13 +68,15 @@ pub fn export_model(text: &str) -> Model {
             continue;
         };
         let (flag, raw) = match spec.kind {
-            Kind::Flag => (true, false),
+            // A flag with properties (`variable-refresh-rate on-demand=true`)
+            // keeps them as a raw value instead of collapsing to `true`.
+            Kind::Flag => (true, value != "true"),
             Kind::Raw => (false, true),
             _ => (false, false),
         };
         model.settings.push(SettingValue {
             path: spec.path,
-            value: if flag { "true".to_owned() } else { value },
+            value,
             flag,
             raw,
         });
@@ -117,7 +119,7 @@ pub fn import_model(text: &str, model: &Model) -> Result<String, PatchError> {
     }
 
     for setting in &model.settings {
-        let edit = if setting.flag {
+        let edit = if setting.flag && !setting.raw {
             Edit::flag(setting.path.clone(), setting.value != "false")
         } else if setting.raw {
             Edit::raw(setting.path.clone(), setting.value.clone())
@@ -233,6 +235,23 @@ environment {
         assert_eq!(exported.binds[0].key, "Mod+Return");
         assert_eq!(exported.window_rules.len(), 1);
         assert_eq!(exported.spawn_at_startup, Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn flag_properties_survive_export_import() {
+        let text = "output \"eDP-1\" {\n    variable-refresh-rate on-demand=true\n}\n";
+        let model = export_model(text);
+        let setting = model
+            .settings
+            .iter()
+            .find(|setting| setting.path == "output \"eDP-1\".variable-refresh-rate")
+            .unwrap();
+        assert!(setting.flag);
+        assert!(setting.raw);
+        assert_eq!(setting.value, "on-demand=true");
+        let rebuilt = import_model("", &model).unwrap();
+        assert!(rebuilt.contains("variable-refresh-rate on-demand=true"));
+        assert_eq!(export_model(&rebuilt).settings, model.settings);
     }
 
     #[test]
