@@ -309,14 +309,21 @@ picked up without re-auditing.
    JSON reports; `better-shot/` added `record` with `wf-recorder`/command
    backends, region/window/output selection, codecs/containers, audio, HDR
    handling, PID state, `--stop` and JSON reports.
-   Still open across the ecosystem: Noctalia plugins (Phase 6); session
-   orchestration of monitor/audio/wallpaper profiles with partial-success
-   reporting; monitor confirmation timer and graphical arrangement editor;
-   shot editor extras (blur/pixelate/crop/spotlight/history), wallpaper
-   transitions, sidepanel auto-hide and audio input/profile management;
-   companion event subscriptions and window marks; nsticky delegating sticky to
-   the compositor when the capability is present; systemd units for companion
-   daemons and CI jobs for the companion workspaces. On the compositor side all planned core
+   Delivered since: session orchestration of monitor/audio/wallpaper/companion
+   profiles with partial-success reports, history/snapshots, import/export and
+   `.desktop`/Flatpak launches; monitor confirmation timer (`apply
+   --confirm-timeout`, `confirm`, `cancel`); the shot editor
+   (blur/pixelate/redaction/crop/zoom/spotlight/lines, annotation log with
+   undo/redo, capture history, OCR and multi-output stitching); companion
+   protocol v2 (request ids, error codes, UDS event subscriptions), window
+   marks, workspace-triggered rules, automation history and an optional config
+   file; and the Noctalia plugin source (manifest + Lua syntax checked, live
+   shell check pending).
+   Still open across the ecosystem: settings tabs for the other apps, wallpaper
+   transitions/playlists, sidepanel auto-hide/profiles, audio input/profile
+   management, the graphical monitor arrangement editor, nsticky delegating
+   sticky to the compositor when the capability is present, systemd units for
+   companion daemons and CI jobs for the companion workspaces. On the compositor side all planned core
    protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
    DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
