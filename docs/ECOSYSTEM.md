@@ -87,16 +87,16 @@ operate the desktop without the shell.
 | better-niri | Compositor, core + built-in modules | active |
 | better-smithay | Wayland/DRM/render infrastructure | active |
 | better-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; better-companion absorbs its code and offers compatibility aliases/config |
-| better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | new, high priority |
-| better-session | Context/session save/restore | **started**: `better-session/` workspace/window snapshots + restore |
-| better-sidepanels | Persistent side panels | **started**: `better-sidepanels/` layer-shell panels + modules |
-| better-shot | Capture/recording/annotation | **started**: `better-shot/` UI/screen/window capture + copy/annotate |
-| better-monitor | Output profiles, safe apply | **started**: `better-monitor/` profiles + dry-run + rollback |
-| better-audio | PipeWire routing | **started**: `better-audio/` rules + `pactl` backend + watcher |
-| better-wallpaper | Scenes, per-workspace wallpapers | **started**: `better-wallpaper/` scenes + focus watcher |
-| better-settings | Unified GTK4 settings frontend | **started**: `better-settings/` text-preserving model + GTK4 UI + `settingsctl` |
-| better-portal | XDG portal backend + external layer-shell picker daemon | committed, after Phase 1 |
-| better-noctalia-plugins | Shell integration | new, later |
+| better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | **delivered**: one daemon + per-context crates; parking, rules, windows, stage/scratchpad, nsticky aliases, swallow, idle/rotate modules and event adapters (187 tests) |
+| better-session | Context/session save/restore | **delivered**: named contexts with outputs, workspaces, windows, hooks, ordered idempotent restore and late-app waiting (16 tests) |
+| better-sidepanels | Persistent side panels | **delivered**: layer-shell panels on all edges, built-in modules (clock/workspaces/title/media/battery/cpu/memory/network/volume/custom), actions, per-output config, reload (45 tests) |
+| better-shot | Capture/recording/annotation | **delivered**: screenshots with HDR modes, built-in annotations, PNG/JPEG/WebP, metadata; recording in progress (35+ tests) |
+| better-monitor | Output profiles, safe apply | **delivered**: schema v2 with matching, rules, watch, validation, rollback and JSON output; confirmation timer and GUI editor still open (58 tests) |
+| better-audio | PipeWire routing | **delivered**: native PipeWire backend (registry, port-link moves, metadata default sink, volume/mute) with pactl/wpctl fallbacks and restore (31 tests) |
+| better-wallpaper | Scenes, per-workspace wallpapers | **delivered**: native layer-shell background backend with cover-scaled shm images, reload and command fallback (30 tests); transitions open |
+| better-settings | Unified GTK4 settings frontend | **delivered**: full niri catalog coverage with byte-preserving KDL edits, dry-run diffs, import/export and a sectioned GTK UI (58 tests); other apps' tabs open |
+| better-portal | XDG portal backend + external layer-shell picker daemon | **delivered**: Screenshot/PickColor native, ScreenCast proxy, picker, install/uninstall, portal descriptor, D-Bus/systemd units and smoke script (41 tests) |
+| better-noctalia-plugins | Shell integration | not started (Phase 6; requires a current Noctalia plugin API audit) |
 
 **Do not create repositories or publish anything without explicit approval.**
 Piri and niri-sidepanels should preserve upstream history/attribution if reused.
@@ -110,7 +110,10 @@ applications**. Internal compositor modules do not get a repository:
 - companion features that are not yet independent: scratchpads, staging,
   run-or-raise, singleton, swallow, idle handling, auto-rotate.
 
-Candidate projects, not yet committed:
+Candidate projects: `better-idle` and `better-rotate` were delivered as
+`companion-idle`/`companion-rotate` modules (idle policies/inhibitors and
+accelerometer rotation) rather than separate repositories. `better-desktop`
+exists as packaging recipes and `docs/PACKAGING.md`, not as a runtime component.
 
 | Candidate | Purpose | Recommendation |
 | --- | --- | --- |

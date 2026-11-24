@@ -299,6 +299,16 @@ picked up without re-auditing.
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
    byte-preserving edits, dry-run diffs, export/import and a sectioned GTK UI.
+   Still open across the ecosystem: Noctalia plugins (Phase 6); session
+   orchestration of monitor/audio/wallpaper profiles with partial-success
+   reporting; monitor confirmation timer and graphical arrangement editor;
+   shot recording/editor extras, wallpaper transitions, sidepanel auto-hide and
+   audio input/profile management; companion event subscriptions and window
+   marks; nsticky delegating sticky to the compositor when the capability is
+   present; systemd units for companion daemons and CI jobs for the companion
+   workspaces. On the compositor side the only planned port left is
+   `wp-commit-timing-v1` plus SurfaceBarrier; DPMS VRAM/GTT cleanup stays
+   deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and

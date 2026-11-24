@@ -26,7 +26,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 pub use companion_core::{AUTO_WINDOWS, AUTO_WORKSPACES};
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use companion_parking::Parking;
 use niri_ipc::socket::{SOCKET_PATH_ENV, Socket};
 use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
@@ -98,6 +98,17 @@ impl Compositor {
         self.send(request)
     }
 
+    /// Queries the compositor's capability report.
+    ///
+    /// Returns an error on a niri build that predates `Request::Capabilities`; callers should
+    /// treat that as "no optional features" rather than failing outright.
+    pub fn capabilities(&self) -> Result<niri_ipc::Capabilities, String> {
+        match self.send(Request::Capabilities)? {
+            Response::Capabilities(capabilities) => Ok(capabilities),
+            other => Err(format!("unexpected response to Capabilities: {other:?}")),
+        }
+    }
+
     fn to_value<T: serde::Serialize>(value: T) -> Result<Value, String> {
         serde_json::to_value(value).map_err(|err| format!("cannot encode niri response: {err}"))
     }
@@ -117,12 +128,19 @@ impl Context for Compositor {
 
     fn actions(&self) -> Vec<ActionInfo> {
         vec![
-            ActionInfo::new("action", "Perform a niri `Action` given as `action` JSON"),
-            ActionInfo::new("outputs", "List connected outputs"),
-            ActionInfo::new("workspaces", "List workspaces"),
-            ActionInfo::new("windows", "List windows"),
-            ActionInfo::new("focused-window", "Focused window, if any"),
-            ActionInfo::new("version", "Running niri version"),
+            ActionInfo::new("action", "Perform a niri `Action` given as `action` JSON")
+                .with_params([ParamInfo::object("action", true, "niri action JSON")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("outputs", "List connected outputs").with_permissions(&["niri"]),
+            ActionInfo::new("workspaces", "List workspaces").with_permissions(&["niri"]),
+            ActionInfo::new("windows", "List windows").with_permissions(&["niri"]),
+            ActionInfo::new("focused-window", "Focused window, if any").with_permissions(&["niri"]),
+            ActionInfo::new("version", "Running niri version").with_permissions(&["niri"]),
+            ActionInfo::new(
+                "capabilities",
+                "Features the running compositor supports (sticky, outputs, shaders, HDR, ...)",
+            )
+            .with_permissions(&["niri"]),
         ]
     }
 
@@ -153,6 +171,10 @@ impl Context for Compositor {
             },
             "version" => match self.send(Request::Version)? {
                 Response::Version(version) => Ok(json!(version)),
+                other => Self::to_value(other),
+            },
+            "capabilities" => match self.send(Request::Capabilities)? {
+                Response::Capabilities(capabilities) => Self::to_value(capabilities),
                 other => Self::to_value(other),
             },
             other => Err(format!("unknown action `compositor.{other}`")),
@@ -1201,5 +1223,80 @@ mod tests {
         assert_eq!(applied, 1);
         server.join().unwrap();
         assert!(parking.lot(AUTO_WINDOWS).contains_key("70"));
+    }
+
+    #[test]
+    fn queries_and_reports_compositor_capabilities() {
+        let dir = temp_path("capabilities");
+        let socket_path = dir.join("niri.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                requests.push(serde_json::from_str::<Request>(line.trim()).unwrap());
+                let response = json!({ "Ok": { "Capabilities": {
+                    "sticky": true,
+                    "virtual_outputs": true,
+                    "isolated_outputs": true,
+                    "hidden_workspaces": true,
+                    "window_minimize": true,
+                    "grid_overview": true,
+                    "magnifier": true,
+                    "carousel": true,
+                    "vertical_axis": true,
+                    "multi_action_binds": true,
+                    "per_keyboard_config": true,
+                    "float_above_fullscreen": true,
+                    "svg_cursors": true,
+                    "shake_to_enlarge": true,
+                    "shaders": true,
+                    "decoration_light": true,
+                    "liquid_glass": true,
+                    "hdr": true,
+                    "vulkan": true,
+                    "tearing": true,
+                    "fifo": true,
+                    "explicit_sync": true,
+                    "pointer_warp": true,
+                    "async_flips": true,
+                    "screencopy": true,
+                    "ext_image_copy_capture": true,
+                    "screencast": true,
+                    "screenshot": true,
+                    "pick_color": true,
+                    "agent_seat": false,
+                    "kde_blur": true,
+                    "kde_screenshot": true,
+                    "kde_output_order": true,
+                    "xdp_gnome_screencast": true,
+                    "portal_screencast_selection": true
+                } } });
+                let mut stream = stream;
+                stream
+                    .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                    .unwrap();
+                stream.write_all(b"\n").unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        });
+
+        let compositor = Compositor::at(&socket_path);
+        let capabilities = compositor.capabilities().unwrap();
+        assert!(capabilities.sticky);
+        assert!(capabilities.vulkan);
+        assert!(!capabilities.agent_seat);
+
+        let value = Context::call(&compositor, "capabilities", &json!({})).unwrap();
+        assert_eq!(value["hdr"], true);
+        assert_eq!(value["agent_seat"], false);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(requests[0], Request::Capabilities));
+        assert!(matches!(requests[1], Request::Capabilities));
     }
 }

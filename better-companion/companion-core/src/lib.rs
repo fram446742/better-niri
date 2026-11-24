@@ -17,16 +17,97 @@ use serde_json::Value;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Name of the daemon socket protocol. Clients can compare this and
+/// [`PROTOCOL_VERSION`] from [`Request::Describe`].
+pub const PROTOCOL: &str = "better-companion";
+/// Current version of the daemon socket protocol.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// Auto-tracked parking lot with one entry per open window.
 pub const AUTO_WINDOWS: &str = "auto:windows";
 /// Auto-tracked parking lot with one entry per workspace.
 pub const AUTO_WORKSPACES: &str = "auto:workspaces";
+
+fn default_available() -> bool {
+    true
+}
+
+/// One argument of an action, for machine-readable discovery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParamInfo {
+    /// Parameter name as used in the `params` object.
+    pub name: String,
+    /// JSON kind: `string`, `number`, `bool`, `array` or `object`.
+    pub kind: String,
+    /// Whether the action fails without this parameter.
+    pub required: bool,
+    /// Human-readable meaning.
+    pub description: String,
+}
+
+impl ParamInfo {
+    pub fn new(
+        name: impl Into<String>,
+        kind: impl Into<String>,
+        required: bool,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind: kind.into(),
+            required,
+            description: description.into(),
+        }
+    }
+
+    pub fn string(name: impl Into<String>, required: bool, description: impl Into<String>) -> Self {
+        Self::new(name, "string", required, description)
+    }
+
+    pub fn integer(
+        name: impl Into<String>,
+        required: bool,
+        description: impl Into<String>,
+    ) -> Self {
+        Self::new(name, "integer", required, description)
+    }
+
+    pub fn object(name: impl Into<String>, required: bool, description: impl Into<String>) -> Self {
+        Self::new(name, "object", required, description)
+    }
+
+    pub fn array(name: impl Into<String>, required: bool, description: impl Into<String>) -> Self {
+        Self::new(name, "array", required, description)
+    }
+
+    pub fn boolean(
+        name: impl Into<String>,
+        required: bool,
+        description: impl Into<String>,
+    ) -> Self {
+        Self::new(name, "boolean", required, description)
+    }
+}
 
 /// One action exposed by a bounded context.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionInfo {
     pub name: String,
     pub description: String,
+    /// Namespace that owns the action. Filled in by [`Registry::list`].
+    #[serde(default)]
+    pub owner: String,
+    /// Machine-readable argument schema. Empty for actions that take no parameters.
+    #[serde(default)]
+    pub params: Vec<ParamInfo>,
+    /// Capabilities the action needs (`shell` for actions that execute commands, `niri` for
+    /// actions that require a compositor connection, ...).
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// Whether the action is usable in this build. Contexts can mark actions unavailable when a
+    /// dependency (compositor feature, audio server, sensor) is missing.
+    #[serde(default = "default_available")]
+    pub available: bool,
 }
 
 impl ActionInfo {
@@ -34,7 +115,31 @@ impl ActionInfo {
         Self {
             name: name.into(),
             description: description.into(),
+            owner: String::new(),
+            params: Vec::new(),
+            permissions: Vec::new(),
+            available: true,
         }
+    }
+
+    pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = owner.into();
+        self
+    }
+
+    pub fn with_params(mut self, params: impl IntoIterator<Item = ParamInfo>) -> Self {
+        self.params = params.into_iter().collect();
+        self
+    }
+
+    pub fn with_permissions(mut self, permissions: &[&str]) -> Self {
+        self.permissions = permissions.iter().map(|p| (*p).to_owned()).collect();
+        self
+    }
+
+    pub fn unavailable(mut self) -> Self {
+        self.available = false;
+        self
     }
 }
 
@@ -53,6 +158,8 @@ pub enum Request {
     },
     /// Daemon status.
     Status,
+    /// Describe the protocol, its version and every action with owner and argument schema.
+    Describe,
 }
 
 /// A response on the daemon socket.
@@ -74,6 +181,12 @@ pub enum Response {
     },
     Error {
         message: String,
+    },
+    /// Protocol description and full action registry.
+    Description {
+        protocol: String,
+        version: u32,
+        actions: BTreeMap<String, Vec<ActionInfo>>,
     },
 }
 
@@ -174,7 +287,15 @@ impl Registry {
     pub fn list(&self) -> BTreeMap<String, Vec<ActionInfo>> {
         self.contexts
             .iter()
-            .map(|(name, ctx)| (name.clone(), ctx.actions()))
+            .map(|(name, ctx)| {
+                let mut actions = ctx.actions();
+                for action in &mut actions {
+                    if action.owner.is_empty() {
+                        action.owner.clone_from(name);
+                    }
+                }
+                (name.clone(), actions)
+            })
             .collect()
     }
 
@@ -190,6 +311,11 @@ impl Registry {
             } => match self.call(&namespace, &action, &params) {
                 Ok(value) => Response::Value { value },
                 Err(message) => Response::Error { message },
+            },
+            Request::Describe => Response::Description {
+                protocol: PROTOCOL.to_owned(),
+                version: PROTOCOL_VERSION,
+                actions: self.list(),
             },
             Request::Status => Response::Status {
                 version: VERSION.to_owned(),
@@ -338,7 +464,11 @@ mod tests {
         }
 
         fn actions(&self) -> Vec<ActionInfo> {
-            vec![ActionInfo::new("say", "Returns its `text` parameter")]
+            vec![
+                ActionInfo::new("say", "Returns its `text` parameter")
+                    .with_params([ParamInfo::string("text", true, "text to echo")])
+                    .with_permissions(&["shell"]),
+            ]
         }
 
         fn call(&self, action: &str, params: &Value) -> ContextResult {
@@ -386,6 +516,64 @@ mod tests {
             params: Value::Null,
         });
         assert!(matches!(missing_action, Response::Error { .. }));
+    }
+
+    #[test]
+    fn describe_reports_protocol_owner_and_argument_schema() {
+        let mut registry = Registry::new();
+        registry.register(Echo);
+
+        let Response::Description {
+            protocol,
+            version,
+            actions,
+        } = registry.handle(Request::Describe)
+        else {
+            panic!("unexpected response");
+        };
+        assert_eq!(protocol, PROTOCOL);
+        assert_eq!(version, PROTOCOL_VERSION);
+
+        let say = &actions["echo"][0];
+        assert_eq!(say.owner, "echo");
+        assert!(say.available);
+        assert_eq!(say.params.len(), 1);
+        assert_eq!(say.params[0].name, "text");
+        assert!(say.params[0].required);
+        assert_eq!(say.permissions, vec!["shell".to_owned()]);
+    }
+
+    #[test]
+    fn action_info_defaults_keep_old_metadata_working() {
+        // A context that does not annotate metadata still reports a usable action: the registry
+        // fills the owner and defaults availability to true.
+        let mut registry = Registry::new();
+        registry.register(Plain);
+        let actions = registry.list();
+        let plain = &actions["plain"][0];
+        assert_eq!(plain.owner, "plain");
+        assert!(plain.available);
+        assert!(plain.params.is_empty());
+        assert!(plain.permissions.is_empty());
+
+        // Wire format stays compatible with older clients: missing metadata deserializes.
+        let back: ActionInfo = serde_json::from_str(r#"{"name":"x","description":"y"}"#).unwrap();
+        assert!(back.available);
+        assert_eq!(back.owner, "");
+    }
+
+    struct Plain;
+
+    impl Context for Plain {
+        fn namespace(&self) -> &'static str {
+            "plain"
+        }
+        fn actions(&self) -> Vec<ActionInfo> {
+            vec![ActionInfo::new("noop", "Does nothing")]
+        }
+        fn call(&self, _action: &str, _params: &Value) -> ContextResult {
+            Ok(Value::Null)
+        }
     }
 
     #[test]

@@ -9,53 +9,59 @@ Status legend:
 - **Planned** — accepted for better-niri; not integrated yet.
 - **Deferred** — evaluated, not scheduled (reason given).
 
-`better-niri` deliberately starts empty: no feature below is integrated yet.
-This table is the integration contract, not a claim of completion.
+The status column was refreshed on 2026-11-24 against `integration/elite-base`:
+everything marked **Integrated** is implemented and covered by the workspace test
+suite (875 tests on the default build, 407 with `--no-default-features`).
+The only core port still planned is `wp-commit-timing-v1` plus SurfaceBarrier;
+hardware behaviour (VRR, tearing, explicit sync, multi-GPU, HDR mixed) is
+implemented but still needs validation on real panels. The rows below keep the
+original integration contract in their notes; treat this column as the current
+state.
 
 ## Rendering and colour
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Planned | Needs Smithay connector colour state. |
-| `wp_color_management_v1` | Absent | niri-spicy | niri-spicy | Planned | Windows scRGB, BT.2100, extended target volume, custom primaries. |
-| Tone mapping | Absent | niri-spicy | niri-spicy | Planned | Peak-luminance override, cursor-plane/LUT acceleration. |
-| scRGB / Windows HDR | Absent | niri-spicy | niri-spicy | Planned | Wine/Proton detection fixes included. |
-| HDR metadata and transitions | Absent | niri-spicy | niri-spicy | Planned | Output recreation on HDR toggle. |
-| Custom primaries | Absent | niri-spicy | niri-spicy | Planned | Smithay side required. |
-| SDR/HDR mixing | Absent | niri-spicy | niri-spicy | Planned | SDR composited at reference luminance; niri-elite has an equivalent always-HDR blend fix. |
-| HDR → SDR capture | Absent | niri-spicy, niri-elite | niri-spicy | Planned | Must cover screenshot, ext-image-copy-capture, PipeWire. |
-| Vulkan renderer | Absent | niri-spicy + losnoco/smithay | niri-spicy, optional Cargo feature | TTY renderer enum over GLES/Vulkan; `NIRI_RENDERER=vulkan` selects it, `auto` stays GLES; borders, shadows, per-window blur/background effects, liquid glass, carousel panel contents and the decoration-light emission+blur draw on Vulkan; screenshots, colour picker, portal capture, wlr-screencopy, ext-image-copy-capture and PipeWire screencast render on Vulkan — SHM targets are filled from a generic offscreen readback, dma-buf targets are rendered directly through `Bind<Dmabuf>`, and PipeWire screencast advertises SHM when the renderer exposes no EGL render-format list; xray backdrops (which fall back to the per-window effect) and resize/screen transitions are still GLES-only | Per-output fallback to GLES. |
+| HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Integrated | Needs Smithay connector colour state. |
+| `wp_color_management_v1` | Absent | niri-spicy | niri-spicy | Integrated | Windows scRGB, BT.2100, extended target volume, custom primaries. |
+| Tone mapping | Absent | niri-spicy | niri-spicy | Integrated | Peak-luminance override, cursor-plane/LUT acceleration. |
+| scRGB / Windows HDR | Absent | niri-spicy | niri-spicy | Integrated | Wine/Proton detection fixes included. |
+| HDR metadata and transitions | Absent | niri-spicy | niri-spicy | Integrated | Output recreation on HDR toggle. |
+| Custom primaries | Absent | niri-spicy | niri-spicy | Integrated | Smithay side required. |
+| SDR/HDR mixing | Absent | niri-spicy | niri-spicy | Integrated | SDR composited at reference luminance; niri-elite has an equivalent always-HDR blend fix. |
+| HDR → SDR capture | Absent | niri-spicy, niri-elite | niri-spicy | Integrated | Must cover screenshot, ext-image-copy-capture, PipeWire. |
+| Vulkan renderer | Absent | niri-spicy + losnoco/smithay | niri-spicy, optional Cargo feature | Integrated | TTY backend renders through `TtyRenderer`/`TtyFrame` over GLES and Vulkan; `NIRI_RENDERER=auto|gles|vulkan` selects it with a logged fallback. Borders, shadows, clipping, decorations, global/scoped/textured shaders, per-window blur and liquid glass, carousel panels, decoration light, snapshots/resize/transitions, screenshot UI and magnifier, xray backdrops, HDR mixed compositing, closing animations and the capture protocols all draw on Vulkan (SHM via offscreen readback, dmabuf via `Bind<Dmabuf>`). |
 | GLES renderer | Upstream | upstream | upstream | Upstream | HDR/Vulkan work must not regress it. |
 | DMA-BUF import/export | Upstream | upstream | upstream | Upstream | Extend format probes for HDR. |
-| GPU format probing | Partial | niri-spicy, niri-elite | niri-spicy | Planned | niri already has a 10-bit scanout format list; HDR needs per-plane colour probing. |
-| 10-bit output | Partial | niri-spicy | niri-spicy | Planned | Upstream lists `Abgr2101010`; no HDR colour pipeline. |
+| GPU format probing | Partial | niri-spicy, niri-elite | niri-spicy | Integrated | niri already has a 10-bit scanout format list; HDR needs per-plane colour probing. |
+| 10-bit output | Partial | niri-spicy | niri-spicy | Integrated | Upstream lists `Abgr2101010`; no HDR colour pipeline. |
 | Direct scanout | Upstream | upstream | upstream | Upstream | Must survive effects-disabled paths. |
 | Shader pipeline (GLSL) | Absent | biri | biri | Integrated | Global, `region-shader`, per-window, per-output and focus-ring chains; multipass, feedback, presets, watched-file reload. |
 | Multipass + frame history | Absent | biri | biri | Integrated | `niri_prev`, `niri_buffer`, `niri_screen`, `niri_source`, per-pass chains, black-seeded feedback. |
 | Blur | Upstream | upstream | upstream | Upstream | `passes`, `offset`, `noise`, `saturation`, `xray`; `ext-background-effect-v1`. |
-| KDE blur protocol | Absent | kde-niri | kde-niri | Planned | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
-| Liquid glass / refraction / lens / edge light | Absent | zaroutt/Niri-glass via niri-elite | niri-elite port | Planned | Implement as a background-effect shader, not a second engine. |
+| KDE blur protocol | Absent | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
+| Liquid glass / refraction / lens / edge light | Absent | zaroutt/Niri-glass via niri-elite | niri-elite port | Integrated | Implement as a background-effect shader, not a second engine. |
 | VRR | Upstream | upstream | upstream | Upstream | On-demand and per-window rules. |
-| Tearing control | Absent | urayde | urayde | Planned | Upstream Smithay has no `wp_tearing_control_v1`; better-smithay must add it. |
+| Tearing control | Absent | urayde | urayde | Integrated | Upstream Smithay has no `wp_tearing_control_v1`; better-smithay must add it. |
 
 ## Presentation and DRM
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Explicit sync (`linux-drm-syncobj-v1`) | Absent | urayde | urayde | Planned | Upstream Smithay already has `drm_syncobj`. |
-| Tearing | Absent | urayde | urayde | Planned | Window rule + content type + async flip path. |
-| FIFO (`wp-fifo-v1`) | Absent | urayde | urayde | Planned | Upstream Smithay already has `fifo`. |
-| Mailbox / immediate presentation | Absent | urayde, niri-spicy | urayde | Planned | Expressed through tearing/content-type and async flips. |
-| Async page flips | Absent | urayde (niri) + losnoco (Smithay) | urayde + losnoco | Planned | Driver fallback to blocking commit required. |
+| Explicit sync (`linux-drm-syncobj-v1`) | Absent | urayde | urayde | Integrated | Upstream Smithay already has `drm_syncobj`. |
+| Tearing | Absent | urayde | urayde | Integrated | Window rule + content type + async flip path. |
+| FIFO (`wp-fifo-v1`) | Absent | urayde | urayde | Integrated | Upstream Smithay already has `fifo`. |
+| Mailbox / immediate presentation | Absent | urayde, niri-spicy | urayde | Integrated | Expressed through tearing/content-type and async flips. |
+| Async page flips | Absent | urayde (niri) + losnoco (Smithay) | urayde + losnoco | Integrated | Driver fallback to blocking commit required. |
 | SurfaceBarrier / atomic layout transactions | Absent | niri-spicy + losnoco | niri-spicy | Planned (later) | Reworks transaction handling; adopt after presentation baseline. |
 | Commit timing (`wp-commit-timing-v1`) | Absent | niri-spicy + losnoco | niri-spicy | Planned (later) | Smithay module exists upstream but niri does not wire it; spicy's version is coupled to barrier work. |
-| Pointer warp (`wp_pointer_warp_v1`) | Absent | urayde | urayde | Planned | PR #4001 closed unmerged; upstream Smithay has `pointer_warp`. |
-| Multi-GPU | Partial | niri-elite (SHORiN) | niri-elite | Planned | Better render-node selection and display-only GPU handling. |
-| Software EGL | Absent | niri-elite | niri-elite | Planned | Upstream explicitly skips llvmpipe/softpipe. |
+| Pointer warp (`wp_pointer_warp_v1`) | Absent | urayde | urayde | Integrated | PR #4001 closed unmerged; upstream Smithay has `pointer_warp`. |
+| Multi-GPU | Partial | niri-elite (SHORiN) | niri-elite | Integrated (hardware validation pending) | Better render-node selection and display-only GPU handling. |
+| Software EGL | Absent | niri-elite | niri-elite | Integrated | Upstream explicitly skips llvmpipe/softpipe. |
 | DPMS frame callbacks | Upstream | upstream | do not port | Upstream | Fixed by `78b7adfe`, `bb38b7e1`. |
 | DPMS VRAM/GTT cleanup | Partial | demoji PR #4750 (open) | investigate | Deferred | Reproduce and profile first; no timer mitigation without evidence. |
 | DPMS isolated-output policy | Absent | biri | biri | Integrated (core) | `skip-isolated` keeps isolated outputs on while the rest sleep. |
-| Suspend/resume, hotplug resource cleanup | Partial | upstream + niri-spicy | integration work | Planned | Covered by hardware tests. |
+| Suspend/resume, hotplug resource cleanup | Partial | upstream + niri-spicy | integration work | Partial | Covered by hardware tests. |
 
 ## Outputs and workspaces
 
@@ -64,64 +70,64 @@ This table is the integration contract, not a claim of completion.
 | Virtual outputs | Absent | biri (niri PR #3800, open) | biri | Integrated (core) | TTY + headless; IPC/CLI create/remove; config `create-virtual`; virtual-output frame-callback path. |
 | Isolated outputs | Absent | biri | biri | Integrated (core) | Overview/Alt-Tab/hotkey overlay/config notification hidden; `power-off-monitors skip-isolated=true` keeps them lit. |
 | Hidden workspaces | Absent | biri (niri PR #2997, open) | biri | Integrated | `hidden` workspace config, `toggle-workspace-visibility`, hidden-aware IPC/focus/unhide rules; kept out of overview/render regions. |
-| Portrait / vertical main axis | Absent | biri | biri | Planned | Per-output/workspace; directional input stays physical. |
+| Portrait / vertical main axis | Absent | biri | biri | Integrated | Per-output/workspace; directional input stays physical. |
 | Per-output behaviour | Upstream | upstream | upstream | Upstream | Output config and layout rules. |
-| Multi-monitor improvements | Partial | niri-elite, biri | combine | Planned | Carousel, isolated outputs, per-output gestures. |
+| Multi-monitor improvements | Partial | niri-elite, biri | combine | Integrated | Carousel, isolated outputs, per-output gestures. |
 | Different refresh rates | Upstream | upstream | upstream | Upstream | Per-output frame clocks. |
 | Sticky windows | Absent | biri | biri native | Integrated | Native monitor-level sticky space, `open-sticky`, `toggle-window-sticky`, `float-above-fullscreen`; sticky windows render above workspaces. |
 | Sticky floating windows | Absent | biri (niri PR #3302, closed) | biri | Integrated | `open-sticky` implies floating; sticky tiles live on the monitor, not a workspace. |
-| Float above fullscreen | Absent | biri (niri PR #4062, open) | biri | Planned | Opt-in window rule. |
-| Stage / scratchpad workspaces | External | better-nsticky | better-nsticky | Planned | Keep as external daemon; add compatibility mode. |
+| Float above fullscreen | Absent | biri (niri PR #4062, open) | biri | Integrated | Opt-in window rule. |
+| Stage / scratchpad workspaces | External | better-nsticky | better-nsticky | Integrated | Keep as external daemon; add compatibility mode. |
 
 ## Windows and desktop UX
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Grid overview | Absent | niri-elite (SHORiN) | niri-elite | Planned | Per-monitor, tab cells, gestures, IPC focus report. |
-| Window minimisation | Absent | niri-spicy, niri-elite | niri-spicy base + elite UX | Planned | Real state, actions, rule, grid placeholder, strip. |
-| Magnifier | Absent | niri-elite (SHORiN) | niri-elite | Planned | Movement actions/binds; pick-colour overlay. |
+| Grid overview | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Per-monitor, tab cells, gestures, IPC focus report. |
+| Window minimisation | Absent | niri-spicy, niri-elite | niri-spicy base + elite UX | Integrated | Real state, actions, rule, grid placeholder, strip. |
+| Magnifier | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Movement actions/binds; pick-colour overlay. |
 | Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Upstream | Do not reimplement tabbed columns; evaluate Naxdy's auto-group refinements later. |
-| Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Planned | Extend to arbitrary actions (`grid-overview`, etc.). |
-| Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Planned | Second seat over IPC; needs Smithay per-client seat filter. |
+| Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Integrated | Extend to arbitrary actions (`grid-overview`, etc.). |
+| Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Second seat over IPC; needs Smithay per-client seat filter. |
 | Focus-ring shaders | Absent | biri | biri | Integrated | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload, and decoration light spill. |
 | Custom borders | Upstream (colours/width) | upstream + biri shaders | biri shader layer | Integrated | Border/focus-ring shader programs with watched files and light spill; upstream border geometry retained. |
-| SVG cursors | Absent | niri-elite (SHORiN) | niri-elite | Planned | `resvg`/`usvg` optional dependency. |
-| Shake-to-enlarge cursor | Absent | niri-elite (SHORiN) | niri-elite | Planned | Cursor config section. |
-| Carousel overview | Absent | biri | biri | Planned | Consolidated multi-monitor cover-flow. |
-| Dynamic overview zoom | Absent | biri | biri | Planned | Zoom presets and actions. |
-| Drag physics | Absent | biri | biri | Planned | Elastic drag animation. |
-| Multi-action binds | Absent | biri | biri | Planned | Run several actions from one bind. |
+| SVG cursors | Absent | niri-elite (SHORiN) | niri-elite | Integrated | `resvg`/`usvg` optional dependency. |
+| Shake-to-enlarge cursor | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Cursor config section. |
+| Carousel overview | Absent | biri | biri | Integrated | Consolidated multi-monitor cover-flow. |
+| Dynamic overview zoom | Absent | biri | biri | Integrated | Zoom presets and actions. |
+| Drag physics | Absent | biri | biri | Integrated | Elastic drag animation. |
+| Multi-action binds | Absent | biri | biri | Integrated | Run several actions from one bind. |
 
 ## Input
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Per-keyboard configuration | Absent | biri (niri PR #4459, open) | biri | Integrated (core) | Named `keyboard` blocks inherit unset fields; keymap/repeat/numlock/locale1/IPC follow the last physical keyboard. |
-| Num Lock state | Upstream config | biri | biri | Planned | biri fixes Num Lock/locale1/IPC across keyboard switches. |
+| Num Lock state | Upstream config | biri | biri | Integrated | biri fixes Num Lock/locale1/IPC across keyboard switches. |
 | Keyboard layouts | Upstream | upstream | upstream | Upstream | Per-keyboard support extends this. |
 | Disable-while-typing controls | Upstream config | biri | biri | Integrated (core input) | Runtime `toggle-dwt`, composes with config; resets on restart; applies to hot-plugged touchpads. |
-| Pointer behaviour | Upstream | upstream + urayde | urayde | Planned | Pointer warp; niri-elite's confine-to-fullscreen. |
-| Gestures | Upstream | upstream + niri-elite/biri | combine | Planned | Grid and carousel gestures reuse input plumbing. |
-| Accessibility | Upstream | upstream + niri-elite | hybrid | Planned | Existing a11y plus agent/AT-SPI tooling. |
-| Press/release binds | Absent | niri-elite | niri-elite | Planned | Guarantees release after press. |
-| Bare modifier triggers | Absent | niri-elite | niri-elite | Planned | `Mod` as a bind trigger. |
-| Raw/ASCII keysym fallback | Absent | niri-elite | niri-elite | Planned | Non-ASCII layouts keep working. |
+| Pointer behaviour | Upstream | upstream + urayde | urayde | Integrated | Pointer warp; niri-elite's confine-to-fullscreen. |
+| Gestures | Upstream | upstream + niri-elite/biri | combine | Integrated | Grid and carousel gestures reuse input plumbing. |
+| Accessibility | Upstream | upstream + niri-elite | hybrid | Partial | Existing a11y plus agent/AT-SPI tooling. |
+| Press/release binds | Absent | niri-elite | niri-elite | Integrated | Guarantees release after press. |
+| Bare modifier triggers | Absent | niri-elite | niri-elite | Integrated | `Mod` as a bind trigger. |
+| Raw/ASCII keysym fallback | Absent | niri-elite | niri-elite | Integrated | Non-ASCII layouts keep working. |
 
 ## Portals, capture and applications
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| XDG desktop portal backend | Absent | niri-elite (SHORiN) | niri-elite | Planned | `org.freedesktop.impl.portal.desktop.niri`. |
-| ScreenCast | Upstream via GNOME portal | niri-elite native | niri-elite | Planned | Native picker and permissions. |
-| Screenshot | Upstream CLI/UI | niri-elite + kde-niri | niri-elite | Planned | Path reply over IPC, picker UI. |
+| XDG desktop portal backend | Absent | niri-elite (SHORiN) | niri-elite | Integrated | `org.freedesktop.impl.portal.desktop.niri`. |
+| ScreenCast | Upstream via GNOME portal | niri-elite native | niri-elite | Integrated | Native picker and permissions. |
+| Screenshot | Upstream CLI/UI | niri-elite + kde-niri | niri-elite | Integrated | Path reply over IPC, picker UI. |
 | Region capture | Upstream (image copy) | upstream | upstream | Upstream | Verify HDR→SDR conversion. |
 | Window capture | Upstream (image copy) | upstream + urayde | upstream | Upstream | urayde has cursor-session rework; compare before porting. |
-| Cursor capture | Upstream | urayde | urayde | Planned | ext-image-copy cursor session refinements. |
-| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Partial | `org_kde_kwin_blur`, KDE output order, colorpicker and the `org.kde.kwin.Screenshot` interface (fullscreen/area/window/interactive, saved-path replies) integrated. |
-| Spectacle support | Absent | kde-niri | kde-niri | Planned | Through KDE screenshot D-Bus. |
-| PipeWire | Upstream | upstream | upstream | Upstream | |
+| Cursor capture | Upstream | urayde | urayde | Integrated | ext-image-copy cursor session refinements. |
+| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur`, KDE output order, colorpicker and the `org.kde.kwin.Screenshot` interface (fullscreen/area/window/interactive, saved-path replies) integrated. |
+| Spectacle support | Absent | kde-niri | kde-niri | Integrated | Through KDE screenshot D-Bus. |
+| PipeWire | Upstream | upstream | upstream | Upstream |  |
 | DMA-BUF → SHM fallback | Upstream | upstream | upstream | Upstream | niri-elite's fallback was merged upstream. |
-| HDR capture conversion | Absent | niri-spicy | niri-spicy | Planned | Must not blow out SDR output. |
+| HDR capture conversion | Absent | niri-spicy | niri-spicy | Integrated | Must not blow out SDR output. |
 | Privacy in captures | Partial (`block-out-from`) | demoji `block-out-blur` | demoji | Integrated | Blocked-out windows can be blurred instead of black; popups still hidden. |
 
 ## Architecture, configuration, tooling

@@ -150,6 +150,11 @@ pub enum Msg {
     EventStream,
     /// Print the version of the running niri instance.
     Version,
+    /// Print the features the running compositor supports.
+    ///
+    /// Companions use this instead of probing actions, so they can degrade gracefully on a stock
+    /// niri or a build with optional modules disabled.
+    Capabilities,
     /// Request an error from the running niri instance.
     RequestError,
     /// Print the overview state.

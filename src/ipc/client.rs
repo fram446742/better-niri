@@ -65,6 +65,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
 
     let request = match &msg {
         Msg::Version => Request::Version,
+        Msg::Capabilities => Request::Capabilities,
         Msg::Outputs => Request::Outputs,
         Msg::FocusedWindow => Request::FocusedWindow,
         Msg::FocusedOutput => Request::FocusedOutput,
@@ -205,6 +206,26 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
 
             println!("Compositor version: {compositor_version}");
             println!("CLI version:        {cli_version}");
+        }
+        Msg::Capabilities => {
+            let Response::Capabilities(capabilities) = response else {
+                bail!("unexpected response: expected Capabilities, got {response:?}");
+            };
+
+            if json {
+                let capabilities =
+                    serde_json::to_string(&capabilities).context("error formatting response")?;
+                println!("{capabilities}");
+                return Ok(());
+            }
+
+            let value = serde_json::to_value(&capabilities).context("error formatting response")?;
+            if let Some(map) = value.as_object() {
+                for (name, supported) in map {
+                    let supported = supported.as_bool().unwrap_or(false);
+                    println!("{name}: {}", if supported { "yes" } else { "no" });
+                }
+            }
         }
         Msg::Outputs => {
             let Response::Outputs(outputs) = response else {
