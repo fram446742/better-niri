@@ -7,7 +7,7 @@ use niri_config::{CornerRadius, LayoutPart};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement,
 };
-use smithay::backend::renderer::element::{Element as _, Id};
+use smithay::backend::renderer::element::{Element as _, Id, RenderElement};
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -27,10 +27,11 @@ use super::workspace::{
 use super::{ActivateWindow, HitType, LayoutElement, Options, RemovedTile, compute_overview_zoom};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
-use crate::layout::RenderLayer;
+use crate::layout::{LayoutElementRenderElement, RenderLayer};
 use crate::niri_render_elements;
 use crate::render_helpers::RenderCtx;
 use crate::render_helpers::overview_rescale::OverviewRescaleRenderElement;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
@@ -2658,7 +2659,10 @@ impl<W: LayoutElement> Monitor<W> {
         mut ctx: RenderCtx<R>,
         focus_ring: bool,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Monitor::render_workspaces");
 
         // Render lists are front-to-back. Emit light first, then preserve the exact
@@ -3010,7 +3014,10 @@ impl<W: LayoutElement> Monitor<W> {
         zoom: f64,
         focus_ring: bool,
         push: &mut dyn FnMut(CropRenderElement<MonitorRenderElement<R>>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Monitor::render_overview_at_zoom");
 
         let scale = self.scale.fractional_scale();

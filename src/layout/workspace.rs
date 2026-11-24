@@ -7,8 +7,8 @@ use niri_config::{
     CenterFocusedColumn, CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
+use smithay::backend::renderer::element::{Kind, RenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{Window, layer_map_for_output};
 use smithay::output::Output;
@@ -40,10 +40,11 @@ use super::{
     RemovedTile, SizeFrac, StickyRestoreInfo, StickyRestorePosition,
 };
 use crate::animation::{Animation, Clock};
-use crate::layout::RenderLayer;
+use crate::layout::{LayoutElementRenderElement, RenderLayer};
 use crate::niri_render_elements;
 use crate::render_helpers::RenderCtx;
 use crate::render_helpers::overview_rescale::OverviewRescaleRenderElement;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -3544,7 +3545,10 @@ impl<W: LayoutElement> Workspace<W> {
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         // The tiles above the floating windows may have rendered already.
         let part = if layer.is_normal() && self.tiles_above_floating() {
             self.below_floating_part()
@@ -3570,7 +3574,10 @@ impl<W: LayoutElement> Workspace<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         if !self.tiles_above_floating() {
             return;
         }
@@ -3598,7 +3605,10 @@ impl<W: LayoutElement> Workspace<W> {
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let base_visible = self.is_floating_visible();
 
         let view_rect = Rectangle::from_size(self.view_size);
@@ -3658,7 +3668,10 @@ impl<W: LayoutElement> Workspace<W> {
         focus_ring: bool,
         is_active_workspace: bool,
         render_pass: GridRenderPass,
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let scale = self.scale.fractional_scale();
         let overview_zoom = base_xray_pos.zoom;
         let mindbg = std::env::var_os("NIRI_MINDBG").is_some();

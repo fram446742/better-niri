@@ -23,6 +23,7 @@ use solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
 use self::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use self::texture::{TextureBuffer, TextureRenderElement};
+use crate::backend::tty::TtyOffscreen;
 use crate::render_helpers::blend::{DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend};
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::xray::Xray;
@@ -182,7 +183,7 @@ pub fn target_renders_shaders(target: RenderTarget, capture_enabled: bool) -> bo
     target == RenderTarget::Output || capture_enabled
 }
 
-impl ToRenderElement for BakedBuffer<TextureBuffer<GlesTexture>> {
+impl ToRenderElement for BakedBuffer<TextureBuffer<TtyOffscreen>> {
     type RenderElement = PrimaryGpuTextureRenderElement;
 
     fn to_render_element(
@@ -200,7 +201,7 @@ impl ToRenderElement for BakedBuffer<TextureBuffer<GlesTexture>> {
             self.dst.map(|dst| dst.to_f64()),
             kind,
         );
-        PrimaryGpuTextureRenderElement(elem.map_texture(crate::backend::tty::TtyOffscreen::Gles))
+        PrimaryGpuTextureRenderElement(elem)
     }
 }
 

@@ -46,7 +46,7 @@ use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::{self, Output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
@@ -70,12 +70,14 @@ use self::workspace::{GridWindowVisual, OutputId, Workspace};
 #[cfg(not(feature = "navigation"))]
 use self::workspace::{GridWindowVisual, OutputId, Workspace};
 use crate::animation::{Animation, Clock};
+use crate::backend::tty::TtyOffscreen;
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::scrolling::ScrollDirection;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::blend::BlendSurfaceRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -143,7 +145,7 @@ niri_render_elements! {
 }
 
 pub type LayoutElementRenderSnapshot =
-    RenderSnapshot<BakedBuffer<TextureBuffer<GlesTexture>>, BakedBuffer<SolidColorBuffer>>;
+    RenderSnapshot<BakedBuffer<TextureBuffer<TtyOffscreen>>, BakedBuffer<SolidColorBuffer>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizingMode {
@@ -7974,7 +7976,10 @@ impl<W: LayoutElement> Layout<W> {
         ctx: RenderCtx<R>,
         output: &Output,
         push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         if self.update_render_elements_time != self.clock.now() {
             error!("clock moved between updating render elements and rendering");
         }

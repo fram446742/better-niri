@@ -21,9 +21,10 @@ use super::workspace::{InteractiveResize, ResolvedSize};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
-use crate::layout::{RenderLayer, SizingMode};
+use crate::layout::{LayoutElementRenderElement, RenderLayer, SizingMode};
 use crate::niri_render_elements;
 use crate::render_helpers::RenderCtx;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::utils::ResizeEdge;
@@ -3984,7 +3985,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         layer: RenderLayer,
         part: ScrollingPart,
         push: &mut dyn FnMut(ScrollingSpaceRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let scale = Scale::from(self.scale);
 
         // Draw the closing windows on top of the other windows. When the active tile renders

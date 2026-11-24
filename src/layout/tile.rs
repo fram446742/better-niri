@@ -5,7 +5,7 @@ use std::time::Duration;
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
-use smithay::backend::renderer::element::{Element, Id, Kind};
+use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
@@ -23,7 +23,8 @@ use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::{ClippedSurfaceRenderElement, RoundedCornerDamage};
 use crate::render_helpers::damage::ExtraDamage;
-use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
+use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenData, OffscreenRenderElement};
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
 #[cfg(feature = "effects")]
@@ -1219,6 +1220,72 @@ impl<W: LayoutElement> Tile<W> {
         Point::from((0., y))
     }
 
+    /// Bakes the previous snapshot and the current window contents, then builds the resize
+    /// shader element. Generic over the concrete renderer: GLES and Vulkan both produce
+    /// backend-agnostic [`TtyOffscreen`](crate::backend::tty::TtyOffscreen) textures.
+    #[allow(clippy::too_many_arguments)]
+    fn build_resize_element<R>(
+        &self,
+        mut ctx: RenderCtx<R>,
+        resize: &ResizeAnimation,
+        area: Rectangle<f64, Logical>,
+        scale: Scale<f64>,
+        window_size: Size<f64, Logical>,
+        radius: CornerRadius,
+        clip_to_geometry: bool,
+        win_alpha: f32,
+    ) -> Option<(ResizeRenderElement, OffscreenData)>
+    where
+        R: NiriRenderer,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+    {
+        let texture_from = resize.snapshot.texture(ctx.r(), scale)?;
+
+        let mut window_elements = Vec::new();
+        self.window
+            .render_normal(ctx.r(), Point::from((0., 0.)), scale, 1., &mut |elem| {
+                window_elements.push(elem)
+            });
+
+        let (elem_current, _sync_point, data) = resize
+            .offscreen
+            .render(ctx.renderer, scale, &window_elements)
+            .map_err(|err| warn!("error rendering window to texture: {err:?}"))
+            .ok()?;
+
+        // Clip blocked-out resizes unconditionally because they use solid color render elements.
+        let rules = self.window.rules();
+        let clip_to_geometry = if ctx.target.should_block_out(resize.snapshot.block_out_from)
+            && ctx.target.should_block_out(rules.block_out_from)
+        {
+            true
+        } else {
+            clip_to_geometry
+        };
+
+        // The offset and size are computed in physical pixels and converted to logical with the
+        // same `scale`, so converting them back with rounding inside the geometry() call gives us
+        // the same physical result back.
+        let texture_current_geo = elem_current.geometry(scale);
+
+        let elem = ResizeRenderElement::new(
+            area,
+            scale,
+            (texture_from.texture.clone(), texture_from.geo),
+            resize.snapshot.size,
+            (elem_current.texture().clone(), texture_current_geo),
+            window_size,
+            resize.anim.value() as f32,
+            resize.anim.clamped_value().clamp(0., 1.) as f32,
+            radius,
+            clip_to_geometry,
+            win_alpha,
+        );
+
+        Some((elem, data))
+    }
+
     fn render_inner<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1226,7 +1293,10 @@ impl<W: LayoutElement> Tile<W> {
         mut xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Tile::render_inner");
 
         let scale = Scale::from(self.scale);
@@ -1292,85 +1362,29 @@ impl<W: LayoutElement> Tile<W> {
             &mut |elem| push(elem.into()),
         );
 
-        // If we're resizing, try to render a shader, or a fallback.
+        // If we're resizing, try to render the resize shader, or fall back to the normal window.
         let mut pushed_resize = false;
-        if let Some(resize) = &self.resize_animation {
-            #[allow(clippy::collapsible_if)]
-            if ResizeRenderElement::has_shader(ctx.renderer)
-                && let Some(mut ctx) = ctx.as_gles()
-            {
-                if let Some(texture_from) = resize.snapshot.texture(ctx.r(), scale) {
-                    let mut window_elements = Vec::new();
-                    self.window.render_normal(
-                        ctx.r(),
-                        Point::from((0., 0.)),
-                        scale,
-                        1.,
-                        &mut |elem| window_elements.push(elem),
-                    );
+        if let Some(resize) = &self.resize_animation
+            && ResizeRenderElement::has_shader(ctx.renderer)
+            && let Some((elem, mut data)) = self.build_resize_element(
+                ctx.r(),
+                resize,
+                area,
+                scale,
+                window_size,
+                radius,
+                clip_to_geometry,
+                win_alpha,
+            )
+        {
+            // We're drawing the resize shader, not the offscreen directly.
+            data.id = elem.id().clone();
 
-                    let current = resize
-                        .offscreen
-                        .render(ctx.renderer, scale, &window_elements)
-                        .map_err(|err| warn!("error rendering window to texture: {err:?}"))
-                        .ok();
-
-                    // Clip blocked-out resizes unconditionally because they use solid color render
-                    // elements.
-                    let clip_to_geometry =
-                        if ctx.target.should_block_out(resize.snapshot.block_out_from)
-                            && ctx.target.should_block_out(rules.block_out_from)
-                        {
-                            true
-                        } else {
-                            clip_to_geometry
-                        };
-
-                    if let Some((elem_current, _sync_point, mut data)) = current
-                        && let Some(texture_current) = elem_current.texture_gles().cloned()
-                    {
-                        // The offset and size are computed in physical pixels and converted to
-                        // logical with the same `scale`, so converting them back with rounding
-                        // inside the geometry() call gives us the same physical result back.
-                        let texture_current_geo = elem_current.geometry(scale);
-
-                        let elem = ResizeRenderElement::new(
-                            area,
-                            scale,
-                            texture_from.clone(),
-                            resize.snapshot.size,
-                            (texture_current, texture_current_geo),
-                            window_size,
-                            resize.anim.value() as f32,
-                            resize.anim.clamped_value().clamp(0., 1.) as f32,
-                            radius,
-                            clip_to_geometry,
-                            win_alpha,
-                        );
-
-                        // We're drawing the resize shader, not the offscreen directly.
-                        data.id = elem.id().clone();
-
-                        // This is not a problem for split popups as the code will look for them by
-                        // original id when it doesn't find them on the offscreen.
-                        self.window.set_offscreen_data(Some(data));
-                        push(elem.into());
-                        pushed_resize = true;
-                    }
-                }
-            }
-
-            if !pushed_resize && ctx.renderer.as_gles_renderer().is_some() {
-                let fallback_buffer = SolidColorBuffer::new(area.size, [1., 0., 0., 1.]);
-                let elem = SolidColorRenderElement::from_buffer(
-                    &fallback_buffer,
-                    area.loc,
-                    win_alpha,
-                    Kind::Unspecified,
-                );
-                push(elem.into());
-                pushed_resize = true;
-            }
+            // This is not a problem for split popups as the code will look for them by
+            // original id when it doesn't find them on the offscreen.
+            self.window.set_offscreen_data(Some(data));
+            push(elem.into());
+            pushed_resize = true;
         }
 
         // If a per-window shader is configured and its program chain is compiled, push a
@@ -1586,7 +1600,10 @@ impl<W: LayoutElement> Tile<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, true, push);
     }
 
@@ -1597,7 +1614,10 @@ impl<W: LayoutElement> Tile<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, false, push);
     }
 
@@ -1609,7 +1629,10 @@ impl<W: LayoutElement> Tile<W> {
         focus_ring: bool,
         alpha_animations: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         if ctx.target.should_hide(self.window.rules().block_out_from) {
             return;
         }
@@ -1653,18 +1676,18 @@ impl<W: LayoutElement> Tile<W> {
         self.window().set_offscreen_data(None);
 
         if let Some(open) = &self.open_animation
-            && let Some(mut ctx) = ctx.as_gles()
+            && let Some(mut gles_ctx) = ctx.as_gles()
         {
             let mut elements = Vec::new();
-            self.render_inner(
-                ctx.r(),
+            self.render_inner::<GlesRenderer>(
+                gles_ctx.r(),
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
             match open.render(
-                ctx.renderer,
+                gles_ctx.renderer,
                 &elements,
                 self.animated_tile_size(),
                 location,
@@ -1682,17 +1705,17 @@ impl<W: LayoutElement> Tile<W> {
             }
         } else if alpha_animations
             && let Some(alpha) = &self.alpha_animation
-            && let Some(mut ctx) = ctx.as_gles()
+            && let Some(mut gles_ctx) = ctx.as_gles()
         {
             let mut elements = Vec::new();
-            self.render_inner(
-                ctx.r(),
+            self.render_inner::<GlesRenderer>(
+                gles_ctx.r(),
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
-            match alpha.offscreen.render(ctx.renderer, scale, &elements) {
+            match alpha.offscreen.render(gles_ctx.renderer, scale, &elements) {
                 Ok((elem, _sync, data)) => {
                     let offset = elem.offset();
                     let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
@@ -1727,13 +1750,17 @@ impl<W: LayoutElement> Tile<W> {
             Some(self.render_snapshot(renderer, xray, xray_has_blocked_out_layers, xray_pos));
     }
 
-    fn render_snapshot(
+    fn render_snapshot<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         mut xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
-    ) -> TileRenderSnapshot {
+    ) -> RenderSnapshot<TileRenderElement<R>, TileRenderElement<R>>
+    where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Tile::render_snapshot");
 
         let mut contents = Vec::new();

@@ -137,6 +137,30 @@ impl TextureBuffer<GlesTexture> {
     }
 }
 
+impl TextureBuffer<crate::backend::tty::TtyOffscreen> {
+    /// Builds a buffer from an already-created backend-agnostic texture.
+    ///
+    /// Used by generic offscreen producers (`OffscreenBuffer` on Vulkan, screen transitions,
+    /// screenshot UI) where the texture is not the renderer's raw `TextureId`.
+    pub fn from_tty_texture(
+        texture: crate::backend::tty::TtyOffscreen,
+        renderer_context_id: ErasedContextId,
+        scale: impl Into<Scale<f64>>,
+        transform: Transform,
+        opaque_regions: Vec<Rectangle<i32, Buffer>>,
+    ) -> Self {
+        TextureBuffer {
+            id: Id::new(),
+            commit_counter: CommitCounter::default(),
+            renderer_context_id,
+            texture,
+            scale: scale.into(),
+            transform,
+            opaque_regions,
+        }
+    }
+}
+
 impl<T: Texture + 'static> TextureRenderElement<T> {
     pub fn from_texture_buffer(
         buffer: TextureBuffer<T>,

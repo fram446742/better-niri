@@ -120,6 +120,18 @@ impl Backend {
         }
     }
 
+    /// Runs `f` with the TTY backend's primary renderer abstraction, which also covers the Vulkan
+    /// renderer. Returns `None` on non-TTY backends and when there is no primary renderer.
+    pub fn with_primary_tty_renderer<T>(
+        &mut self,
+        f: impl FnOnce(&mut crate::backend::tty::TtyRenderer<'_>) -> T,
+    ) -> Option<T> {
+        match self {
+            Backend::Tty(tty) => tty.with_primary_tty_renderer(f),
+            Backend::Winit(_) | Backend::Headless(_) => None,
+        }
+    }
+
     /// DRM render node of the primary renderer, if it has one.
     ///
     /// This is the node clients should allocate dma-bufs on for the primary renderer to import

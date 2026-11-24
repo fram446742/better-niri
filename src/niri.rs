@@ -138,7 +138,7 @@ use wayland_server::protocol::wl_output::WlOutput;
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
 use crate::animation::{Animation, Clock};
-use crate::backend::tty::SurfaceDmabufFeedback;
+use crate::backend::tty::{SurfaceDmabufFeedback, TtyOffscreen};
 use crate::backend::{Backend, Headless, OutputHdrCaps, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
@@ -196,6 +196,8 @@ use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 #[cfg(feature = "navigation")]
 use crate::render_helpers::panel::PanelRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+#[cfg(feature = "vulkan")]
+use crate::render_helpers::renderer::AsVulkanRenderer;
 use crate::render_helpers::renderer::NiriRenderer;
 #[cfg(feature = "effects")]
 use crate::render_helpers::scoped_shader_element::{ScopedShaderElement, ScopedSource};
@@ -2442,9 +2444,18 @@ impl State {
             != old_config.animations.window_resize.custom_shader
         {
             let src = config.animations.window_resize.custom_shader.as_deref();
-            self.backend.with_primary_renderer(|renderer| {
+            let set = self.backend.with_primary_renderer(|renderer| {
                 shaders::set_custom_resize_program(renderer, src);
+                true
             });
+            #[cfg(feature = "vulkan")]
+            if set.is_none() {
+                self.backend.with_primary_tty_renderer(|renderer| {
+                    if let Some(renderer) = renderer.as_vulkan_renderer() {
+                        shaders::set_custom_resize_program_vulkan(renderer, src);
+                    }
+                });
+            }
             shaders_changed = true;
         }
 
@@ -7187,6 +7198,10 @@ impl Niri {
     ) -> Vec<OutputRenderElements<R>>
     where
         OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
     {
         let mut elements = Vec::new();
         self.render(ctx, output, include_pointer, &mut |elem| {
@@ -7409,6 +7424,10 @@ impl Niri {
         // `OffscreenBuffer`. The element enum implements `RenderElement` only for the concrete
         // backends (GLES and the TTY renderer), not for every `NiriRenderer`.
         OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::render");
 
@@ -7512,7 +7531,13 @@ impl Niri {
         include_pointer: bool,
         _rendering_output: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
-    ) {
+    ) where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         // See `IN_RENDER_INNER` / `update_panel_sources`: panel content prepasses must run before
         // this, never nested inside it.
         let _in_render_inner = InRenderInnerGuard::enter();
@@ -7926,44 +7951,66 @@ impl Niri {
                 self.screenshot_ui
                     .render_output(output, ctx.target, &mut |elem| ui_elements.push(elem));
 
-                // The magnified screenshot UI renders through a GLES offscreen;
-                // without GLES, draw the UI elements directly.
-                let Some(renderer) = ctx.renderer.as_gles_renderer() else {
-                    self.screenshot_ui
-                        .render_output(output, ctx.target, &mut |elem| push(elem.into()));
-                    push(backdrop);
-                    return;
-                };
-
-                let res = render_to_texture(
-                    renderer,
-                    size,
-                    scale,
-                    transform,
-                    Fourcc::Abgr8888,
-                    ui_elements.iter().rev(),
-                );
-
-                if let Ok((texture, _sync)) = res {
-                    let tex_buffer = TextureBuffer::from_texture(
+                // Bake the UI into one texture to avoid per-element rounding gaps. GLES keeps its
+                // historical capture; Vulkan bakes the same elements through the generic
+                // backend-agnostic offscreen buffer. If the bake is impossible, draw the
+                // elements directly.
+                let mut baked = false;
+                if let Some(renderer) = ctx.renderer.as_gles_renderer() {
+                    let res = render_to_texture(
                         renderer,
-                        texture,
+                        size,
                         scale,
                         transform,
-                        Vec::new(),
+                        Fourcc::Abgr8888,
+                        ui_elements.iter().rev(),
                     );
-                    let tex_elem = PrimaryGpuTextureRenderElement(
-                        TextureRenderElement::from_texture_buffer(
-                            tex_buffer,
-                            (0., 0.),
-                            1.,
-                            None,
-                            None,
-                            Kind::Unspecified,
-                        )
-                        .map_texture(crate::backend::tty::TtyOffscreen::Gles),
-                    );
-                    push(OutputRenderElements::Texture(tex_elem));
+
+                    if let Ok((texture, _sync)) = res {
+                        let tex_buffer = TextureBuffer::from_texture(
+                            renderer,
+                            texture,
+                            scale,
+                            transform,
+                            Vec::new(),
+                        );
+                        let tex_elem = PrimaryGpuTextureRenderElement(
+                            TextureRenderElement::from_texture_buffer(
+                                tex_buffer,
+                                (0., 0.),
+                                1.,
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            )
+                            .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+                        );
+                        push(OutputRenderElements::Texture(tex_elem));
+                        baked = true;
+                    } else if let Err(err) = res {
+                        warn!("error baking magnified screenshot UI: {err:?}");
+                    }
+                } else {
+                    // Bake in the output's untransformed mode space; the output frame applies the
+                    // rotation when compositing.
+                    let bake_size = output.current_mode().unwrap().size;
+                    let bounds = Rectangle::from_size(bake_size);
+                    let buffer = crate::render_helpers::offscreen::OffscreenBuffer::default();
+                    match buffer.render_with_bounds(ctx.renderer, scale, bounds, &ui_elements) {
+                        Ok((elem, _sync, _data)) => {
+                            push(elem.into());
+                            baked = true;
+                        }
+                        Err(err) => {
+                            warn!("error baking magnified screenshot UI: {err:?}");
+                        }
+                    }
+                }
+
+                if !baked {
+                    for elem in ui_elements {
+                        push(elem.into());
+                    }
                 }
             } else {
                 self.screenshot_ui
@@ -8383,6 +8430,10 @@ impl Niri {
         frame: u64,
     ) where
         OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::update_panel_sources");
         debug_assert!(
@@ -11829,6 +11880,83 @@ impl Niri {
                         warn!("error rendering output {}: {err:?}", output.name());
                     }
 
+                    res.map(|(texture, _sync)| {
+                        TextureBuffer::from_texture(
+                            renderer,
+                            texture,
+                            scale,
+                            transform,
+                            Vec::new(), // We want windows below to get frame callbacks.
+                        )
+                        .map_texture(crate::backend::tty::TtyOffscreen::Gles)
+                    })
+                });
+
+                if textures.iter().any(|res| res.is_err()) {
+                    return None;
+                }
+
+                let textures = textures.map(|res| res.unwrap());
+
+                Some((output, textures))
+            })
+            .collect();
+
+        self.install_screen_transitions(textures, delay_ms);
+    }
+
+    /// Screen transition capture for renderers without a GLES path (the Vulkan TTY renderer).
+    ///
+    /// The full output is baked through the generic offscreen buffer, unrotated; the transition
+    /// element keeps `Transform::Normal`, so the output frame applies the rotation once.
+    pub fn do_screen_transition_vulkan<R>(&mut self, renderer: &mut R, delay_ms: Option<u16>)
+    where
+        R: NiriRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
+        let _span = tracy_client::span!("Niri::do_screen_transition_vulkan");
+
+        self.update_render_elements(None);
+
+        let textures: Vec<_> = self
+            .output_state
+            .keys()
+            .cloned()
+            .filter_map(|output| {
+                let size = output.current_mode().unwrap().size;
+
+                let scale = Scale::from(output.current_scale().fractional_scale());
+                let targets = [
+                    RenderTarget::Output,
+                    RenderTarget::Screencast,
+                    RenderTarget::ScreenCapture,
+                ];
+                let textures = targets.map(|target| {
+                    let ctx = RenderCtx {
+                        renderer: &mut *renderer,
+                        target,
+                        intent: RenderIntent::Normal,
+                        xray: None,
+                        shader_time: self.window_shader_start.elapsed().as_secs_f32(),
+                    };
+                    let elements = self.render_to_vec(ctx, &output, false);
+
+                    let bounds = Rectangle::from_size(size);
+                    let buffer = crate::render_helpers::offscreen::OffscreenBuffer::default();
+                    let res = buffer
+                        .render_with_bounds(renderer, scale, bounds, &elements)
+                        .map(|(elem, _sync, _data)| {
+                            elem.texture_buffer(Transform::Normal, Vec::new())
+                        });
+
+                    if let Err(err) = &res {
+                        warn!("error rendering output {}: {err:?}", output.name());
+                    }
+
                     res
                 });
 
@@ -11836,21 +11964,20 @@ impl Niri {
                     return None;
                 }
 
-                let textures = textures.map(|res| {
-                    let texture = res.unwrap().0;
-                    TextureBuffer::from_texture(
-                        renderer,
-                        texture,
-                        scale,
-                        transform,
-                        Vec::new(), // We want windows below to get frame callbacks.
-                    )
-                });
+                let textures = textures.map(|res| res.unwrap());
 
                 Some((output, textures))
             })
             .collect();
 
+        self.install_screen_transitions(textures, delay_ms);
+    }
+
+    fn install_screen_transitions(
+        &mut self,
+        textures: Vec<(Output, [TextureBuffer<TtyOffscreen>; 3])>,
+        delay_ms: Option<u16>,
+    ) {
         let delay = delay_ms.map_or(screen_transition::DELAY, |d| {
             Duration::from_millis(u64::from(d))
         });
@@ -12292,6 +12419,8 @@ niri_render_elements! {
         WindowMruUi = WindowMruUiRenderElement<R>,
         ExitConfirmDialog = ExitConfirmDialogRenderElement,
         Texture = PrimaryGpuTextureRenderElement,
+        // Backend-agnostic offscreen bake (e.g. the magnified screenshot UI on Vulkan).
+        Offscreen = crate::render_helpers::offscreen::OffscreenRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
         Magnified = RescaleRenderElement<Box<OutputRenderElements<R>>>,

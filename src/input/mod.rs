@@ -1311,9 +1311,16 @@ impl State {
                 spawn_sh(command, Some(token.clone()));
             }
             Action::DoScreenTransition(delay_ms) => {
-                self.backend.with_primary_renderer(|renderer| {
+                let ran = self.backend.with_primary_renderer(|renderer| {
                     self.niri.do_screen_transition(renderer, delay_ms);
+                    true
                 });
+                if ran.is_none() {
+                    // Vulkan-only TTY session: there is no GLES primary renderer.
+                    self.backend.with_primary_tty_renderer(|renderer| {
+                        self.niri.do_screen_transition_vulkan(renderer, delay_ms);
+                    });
+                }
             }
             Action::ScreenshotScreen(write_to_disk, show_pointer, path) => {
                 let active = self.niri.layout.active_output().cloned();

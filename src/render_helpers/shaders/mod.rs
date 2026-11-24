@@ -805,6 +805,10 @@ pub struct VulkanShaders {
     pub decoration_light: Option<VulkanPixelProgram>,
     /// Perspective-tilted carousel panel (`ProgramType::Panel`).
     pub panel: Option<VulkanPixelProgram>,
+    /// Window resize crossfade (`ProgramType::Resize`).
+    pub resize: Option<VulkanPixelProgram>,
+    /// Configured custom window resize shader, if any.
+    pub custom_resize: RefCell<Option<VulkanPixelProgram>>,
     /// Dual-Kawase downsample/upsample passes for the Vulkan background blur.
     pub blur_down: Option<VulkanPixelProgram>,
     pub blur_up: Option<VulkanPixelProgram>,
@@ -916,6 +920,10 @@ impl VulkanShaders {
         .map_err(|err| warn!("error compiling Vulkan panel shader: {err:?}"))
         .ok();
 
+        let resize = compile_vulkan_resize_program(renderer, include_str!("resize.frag"))
+            .map_err(|err| warn!("error compiling Vulkan resize shader: {err:?}"))
+            .ok();
+
         let blur_down = compile_vulkan_program(
             renderer,
             include_str!("blur_down.frag"),
@@ -973,6 +981,8 @@ impl VulkanShaders {
             clipped_surface,
             decoration_light,
             panel,
+            resize,
+            custom_resize: RefCell::new(None),
             blur_down,
             blur_up,
             postprocess_and_clip,
@@ -993,6 +1003,11 @@ impl VulkanShaders {
             ProgramType::Border => self.border.clone(),
             ProgramType::Shadow => self.shadow.clone(),
             ProgramType::Panel => self.panel.clone(),
+            ProgramType::Resize => self
+                .custom_resize
+                .borrow()
+                .clone()
+                .or_else(|| self.resize.clone()),
             ProgramType::DecorationLight => self.decoration_light.clone(),
             ProgramType::Decoration(key) => self.decorations.borrow().get(&key).cloned(),
             ProgramType::GlobalPass(pass) => self.global_passes.borrow().get(pass).cloned(),
@@ -1100,6 +1115,15 @@ pub fn init_vulkan(renderer: &mut VulkanRenderer, config: &niri_config::Config) 
                 shaders.decorations.get_mut().insert(key, program);
             }
             Err(err) => warn!("error compiling Vulkan decoration shader: {err:?}"),
+        }
+    }
+
+    if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
+        match compile_vulkan_resize_program(renderer, src) {
+            Ok(program) => {
+                *shaders.custom_resize.get_mut() = Some(program);
+            }
+            Err(err) => warn!("error compiling custom Vulkan resize shader: {err:?}"),
         }
     }
 
@@ -1294,6 +1318,59 @@ fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str])
         out.push('\n');
     }
     out
+}
+
+/// Compiles the window-resize crossfade program (or a configured custom one) for Vulkan.
+///
+/// The source is wrapped exactly like the GLES `compile_resize_program`: the shared prelude
+/// declares the uniforms and texture samplers, the caller-supplied `resize.frag` (or a custom
+/// `resize_color()` implementation) supplies the sampling, and the epilogue writes the result.
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_resize_program(
+    renderer: &mut VulkanRenderer,
+    src: &str,
+) -> anyhow::Result<VulkanPixelProgram> {
+    let mut program = include_str!("resize_prelude.frag").to_string();
+    program.push_str(src);
+    program.push_str(include_str!("resize_epilogue.frag"));
+    program.push_str(include_str!("rounding_alpha.frag"));
+
+    compile_vulkan_program(
+        renderer,
+        &program,
+        &[
+            UniformName::new("niri_input_to_curr_geo", UniformType::Matrix3x3),
+            UniformName::new("niri_curr_geo_to_prev_geo", UniformType::Matrix3x3),
+            UniformName::new("niri_curr_geo_to_next_geo", UniformType::Matrix3x3),
+            UniformName::new("niri_curr_geo_size", UniformType::_2f),
+            UniformName::new("niri_geo_to_tex_prev", UniformType::Matrix3x3),
+            UniformName::new("niri_geo_to_tex_next", UniformType::Matrix3x3),
+            UniformName::new("niri_progress", UniformType::_1f),
+            UniformName::new("niri_clamped_progress", UniformType::_1f),
+            UniformName::new("niri_corner_radius", UniformType::_4f),
+            UniformName::new("niri_clip_to_geometry", UniformType::_1f),
+        ],
+        &["niri_tex_prev", "niri_tex_next"],
+    )
+}
+
+/// Replaces the Vulkan custom resize program on the renderer, used when the config reloads.
+#[cfg(feature = "vulkan")]
+pub fn set_custom_resize_program_vulkan(renderer: &mut VulkanRenderer, src: Option<&str>) {
+    let program = match src {
+        Some(src) => match compile_vulkan_resize_program(renderer, src) {
+            Ok(program) => Some(program),
+            Err(err) => {
+                warn!("error compiling custom Vulkan resize shader: {err:?}");
+                return;
+            }
+        },
+        None => None,
+    };
+
+    if let Some(shaders) = get_vulkan_renderer(renderer) {
+        shaders.custom_resize.replace(program);
+    }
 }
 
 /// Compiles a niri shader program for the Vulkan renderer from its GLES-dialect

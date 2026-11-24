@@ -323,6 +323,23 @@ impl OffscreenRenderElement {
             .to_logical(self.scale, Transform::Normal)
     }
 
+    /// Builds a texture buffer from this element's texture, carrying the producing renderer's
+    /// context id. Useful for consumers that need the baked texture without the element wrapper
+    /// (screen transitions, screenshot UI).
+    pub fn texture_buffer(
+        &self,
+        transform: Transform,
+        opaque_regions: Vec<Rectangle<i32, Buffer>>,
+    ) -> super::texture::TextureBuffer<TtyOffscreen> {
+        super::texture::TextureBuffer::from_tty_texture(
+            self.texture.clone(),
+            self.renderer_context_id.clone(),
+            self.scale,
+            transform,
+            opaque_regions,
+        )
+    }
+
     fn damage_since(&self, commit: Option<CommitCounter>) -> DamageSet<i32, Buffer> {
         self.damage
             .damage_since(commit)

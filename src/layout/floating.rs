@@ -16,9 +16,10 @@ use super::{
     ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile, SizeFrac,
 };
 use crate::animation::{Animation, Clock};
-use crate::layout::RenderLayer;
+use crate::layout::{LayoutElementRenderElement, RenderLayer};
 use crate::niri_render_elements;
 use crate::render_helpers::RenderCtx;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::utils::transaction::TransactionBlocker;
@@ -1221,7 +1222,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
         layer: RenderLayer,
         base_visible: bool,
         push: &mut dyn FnMut(FloatingSpaceRenderElement<R>),
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let scale = Scale::from(self.scale);
         let view_rect = Rectangle::from_size(self.view_size);
 

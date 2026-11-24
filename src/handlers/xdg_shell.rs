@@ -1705,9 +1705,18 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
             state.store_unmap_snapshot(&window, output.as_ref());
         } else {
             if animate {
-                state.backend.with_primary_renderer(|renderer| {
+                let stored = state.backend.with_primary_renderer(|renderer| {
                     mapped.store_animation_snapshot(renderer);
+                    true
                 });
+                // On a Vulkan-only TTY session there is no GLES primary renderer; fall back to the
+                // TTY renderer abstraction so resize snapshots (and the animated resize shader)
+                // still work.
+                if stored.is_none() {
+                    state.backend.with_primary_tty_renderer(|renderer| {
+                        mapped.store_animation_snapshot(renderer)
+                    });
+                }
             }
 
             // The toplevel remains mapped; clear any stored unmap snapshot.

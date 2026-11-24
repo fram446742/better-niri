@@ -2461,6 +2461,22 @@ impl Tty {
         Some(f(renderer.as_gles_renderer()?))
     }
 
+    /// Runs `f` with the primary renderer behind the TTY abstraction, even when it is the Vulkan
+    /// renderer (where [`Self::with_primary_renderer`] yields nothing).
+    ///
+    /// This is used by snapshot capture on a Vulkan-only TTY session; on a GLES TTY session the
+    /// caller prefers [`Self::with_primary_renderer`] to keep the GLES path unchanged.
+    pub fn with_primary_tty_renderer<T>(
+        &mut self,
+        f: impl FnOnce(&mut TtyRenderer<'_>) -> T,
+    ) -> Option<T> {
+        let mut renderer = self
+            .gpu_manager
+            .single_renderer(&self.primary_render_node)
+            .ok()?;
+        Some(f(&mut renderer))
+    }
+
     pub fn primary_render_node(&mut self) -> Option<DrmNode> {
         // Only meaningful while the primary renderer exists.
         self.gpu_manager

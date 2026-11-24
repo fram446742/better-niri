@@ -5,16 +5,18 @@ use glam::{Mat3, Vec2};
 use niri_config::CornerRadius;
 use smithay::backend::renderer::Texture as _;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{VulkanError, VulkanFrame, VulkanRenderer};
 use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform};
 
 use super::renderer::NiriRenderer;
-use super::shader_element::{ShaderRenderElement, gles_texture_map};
+use super::shader_element::ShaderRenderElement;
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
-use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty::{TtyFrame, TtyOffscreen, TtyRenderer, TtyRendererError};
 
 #[derive(Debug)]
 pub struct ResizeRenderElement(ShaderRenderElement);
@@ -23,9 +25,9 @@ impl ResizeRenderElement {
     pub fn new(
         area: Rectangle<f64, Logical>,
         scale: Scale<f64>,
-        texture_prev: (GlesTexture, Rectangle<i32, Physical>),
+        texture_prev: (TtyOffscreen, Rectangle<i32, Physical>),
         size_prev: Size<f64, Logical>,
-        texture_next: (GlesTexture, Rectangle<i32, Physical>),
+        texture_next: (TtyOffscreen, Rectangle<i32, Physical>),
         size_next: Size<f64, Logical>,
         progress: f32,
         clamped_progress: f32,
@@ -104,10 +106,10 @@ impl ResizeRenderElement {
                     Uniform::new("niri_corner_radius", <[f32; 4]>::from(corner_radius)),
                     Uniform::new("niri_clip_to_geometry", clip_to_geometry),
                 ]),
-                gles_texture_map(HashMap::from([
+                HashMap::from([
                     (String::from("niri_tex_prev"), texture_prev),
                     (String::from("niri_tex_next"), texture_next),
-                ])),
+                ]),
                 Kind::Unspecified,
             )
             .with_location(area.loc),
@@ -190,6 +192,26 @@ impl RenderElement<GlesRenderer> for ResizeRenderElement {
     }
 }
 
+#[cfg(feature = "vulkan")]
+impl RenderElement<VulkanRenderer> for ResizeRenderElement {
+    fn draw(
+        &self,
+        frame: &mut VulkanFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), VulkanError> {
+        let _span = tracy_client::span!("ResizeRenderElement::draw_vulkan");
+        self.0.draw_vulkan(frame, dst, damage)
+    }
+
+    fn underlying_storage(&self, renderer: &mut VulkanRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.0.underlying_storage(renderer)
+    }
+}
+
 impl<'render> RenderElement<TtyRenderer<'render>> for ResizeRenderElement {
     fn draw(
         &self,
@@ -216,5 +238,144 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ResizeRenderElement {
         renderer: &mut TtyRenderer<'render>,
     ) -> Option<UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{
+        Bind, Color32F, ExportMem, Frame as _, Offscreen as _, Renderer as _, Texture as _,
+    };
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Buffer, Point, Rectangle, Scale, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::offscreen::OffscreenBuffer;
+    use crate::render_helpers::shaders::init_vulkan;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+
+    fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                test(&mut renderer);
+                return;
+            }
+        }
+    }
+
+    fn read_back(
+        renderer: &mut VulkanRenderer,
+        target: &mut smithay::backend::renderer::vulkan::VulkanTexture,
+        size: Size<i32, Buffer>,
+    ) -> Vec<u8> {
+        let format = target.format().expect("target texture has a format");
+        let fb = renderer.bind(target).expect("bind readback target");
+        let mapping = renderer
+            .copy_framebuffer(&fb, Rectangle::from_size(size), format)
+            .expect("copy framebuffer");
+        let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+        let bytes = pixels.to_vec();
+        drop(fb);
+        bytes
+    }
+
+    fn baked(
+        renderer: &mut VulkanRenderer,
+        color: [f32; 4],
+    ) -> (TtyOffscreen, Rectangle<i32, Physical>) {
+        let buffer = OffscreenBuffer::default();
+        let solid = SolidColorBuffer::new((4., 4.), color);
+        let elem = SolidColorRenderElement::from_buffer(
+            &solid,
+            Point::from((0., 0.)),
+            1.,
+            Kind::Unspecified,
+        );
+        let (baked, _sync, _data) = buffer
+            .render(renderer, Scale::from(1.), &[elem])
+            .expect("bake a solid color");
+        (
+            baked.texture().clone(),
+            Rectangle::from_size(Size::from((4, 4))),
+        )
+    }
+
+    /// The resize shader must be compiled for Vulkan and sample the previous/next snapshot
+    /// textures according to the progress uniform.
+    #[test]
+    fn vulkan_resize_draw_samples_prev_and_next() {
+        for_each_vulkan_renderer(|renderer| {
+            init_vulkan(renderer, &niri_config::Config::default());
+
+            let size = Size::<i32, Buffer>::from((4, 4));
+            let (red, red_geo) = baked(renderer, [1., 0., 0., 1.]);
+            let (green, green_geo) = baked(renderer, [0., 1., 0., 1.]);
+
+            let area = Rectangle::from_size(Size::from((4., 4.)));
+            let logical = Size::from((4., 4.));
+
+            for (progress, expected) in [(0.0_f32, [255, 0, 0, 255]), (1.0_f32, [0, 255, 0, 255])] {
+                let elem = ResizeRenderElement::new(
+                    area,
+                    Scale::from(1.),
+                    (red.clone(), red_geo),
+                    logical,
+                    (green.clone(), green_geo),
+                    logical,
+                    progress,
+                    progress,
+                    CornerRadius::default(),
+                    false,
+                    1.,
+                );
+                assert!(
+                    ResizeRenderElement::has_shader(renderer),
+                    "Vulkan resize shader must be compiled"
+                );
+
+                let mut target = renderer
+                    .create_buffer(Fourcc::Abgr8888, size)
+                    .expect("target");
+                {
+                    let mut fb = renderer.bind(&mut target).expect("bind target");
+                    let mut frame = renderer
+                        .render(&mut fb, Size::from((4, 4)), Transform::Normal)
+                        .expect("begin frame");
+                    let dst = Rectangle::from_size(Size::from((4, 4)));
+                    frame
+                        .clear(Color32F::TRANSPARENT, &[dst])
+                        .expect("clear frame");
+                    RenderElement::<VulkanRenderer>::draw(
+                        &elem,
+                        &mut frame,
+                        elem.src(),
+                        elem.geometry(Scale::from(1.)),
+                        &[dst],
+                        &[],
+                        None,
+                    )
+                    .expect("draw resize element");
+                    let _sync = frame.finish().expect("finish frame");
+                }
+
+                let pixels = read_back(renderer, &mut target, size);
+                let center = (2 * 4 + 2) * 4;
+                assert_eq!(
+                    &pixels[center..center + 4],
+                    &expected,
+                    "unexpected resize output at progress {progress}"
+                );
+            }
+        });
     }
 }
