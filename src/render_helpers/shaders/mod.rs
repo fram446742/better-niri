@@ -44,6 +44,14 @@ pub struct Shaders {
     pub black_texture: GlesTexture,
 }
 
+/// A GLES texture program, or its Vulkan counterpart.
+#[derive(Debug, Clone)]
+pub enum NiriTexProgram {
+    Gles(GlesTexProgram),
+    #[cfg(feature = "vulkan")]
+    Vulkan(VulkanPixelProgram),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramType {
     Border,
@@ -760,6 +768,8 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 pub struct VulkanShaders {
     pub border: Option<VulkanPixelProgram>,
     pub shadow: Option<VulkanPixelProgram>,
+    pub clipped_surface: Option<VulkanPixelProgram>,
+    pub decorations: RefCell<HashMap<u64, VulkanPixelProgram>>,
 }
 
 #[cfg(feature = "vulkan")]
@@ -823,25 +833,165 @@ impl VulkanShaders {
         .map_err(|err| warn!("error compiling Vulkan shadow shader: {err:?}"))
         .ok();
 
-        Self { border, shadow }
+        let clipped_surface = {
+            let src = concat!(
+                include_str!("clipped_surface.frag"),
+                include_str!("rounding_alpha.frag"),
+                "\nvec4 postprocess(vec4 color) { return color; }",
+            );
+            compile_vulkan_program(renderer, src, &clipped_surface_uniform_names(), &["tex"])
+                .map_err(|err| warn!("error compiling Vulkan clipped surface shader: {err:?}"))
+                .ok()
+        };
+
+        Self {
+            border,
+            shadow,
+            clipped_surface,
+            decorations: RefCell::new(HashMap::new()),
+        }
     }
 
     pub fn program(&self, program: ProgramType) -> Option<VulkanPixelProgram> {
         match program {
             ProgramType::Border => self.border.clone(),
             ProgramType::Shadow => self.shadow.clone(),
+            ProgramType::Decoration(key) => self.decorations.borrow().get(&key).cloned(),
             _ => None,
         }
     }
 }
 
-/// Compiles and stores the Vulkan shaders on the renderer.
-#[cfg(feature = "vulkan")]
-pub fn init_vulkan(renderer: &mut VulkanRenderer) {
-    if renderer.user_data().get::<VulkanShaders>().is_none() {
-        let shaders = VulkanShaders::compile(renderer);
-        renderer.user_data().insert_if_missing(|| shaders);
+/// The uniform set of the clipped-surface texture program (shared by both backends).
+fn clipped_surface_uniform_names() -> Vec<UniformName<'static>> {
+    let mut uniforms = vec![
+        UniformName::new("niri_scale", UniformType::_1f),
+        UniformName::new("geo_size", UniformType::_2f),
+        UniformName::new("corner_radius", UniformType::_4f),
+        UniformName::new("input_to_geo", UniformType::Matrix3x3),
+        UniformName::new("alpha", UniformType::_1f),
+        UniformName::new("tint", UniformType::_1f),
+    ];
+    for name in [
+        "lg_refraction_strength",
+        "lg_power_factor",
+        "lg_refraction_a",
+        "lg_refraction_b",
+        "lg_refraction_c",
+        "lg_refraction_d",
+        "lg_refraction_power",
+        "lg_physical_refraction",
+        "lg_glow_weight",
+        "lg_glow_bias",
+        "lg_glow_edge0",
+        "lg_glow_edge1",
+        "lg_edge_lighting",
+        "lg_fringing",
+        "lg_refraction_dilute",
+        "lg_dilute_strength",
+        "lg_dilute_fringing",
+        "lg_lens_distortion",
+        "lg_brightness",
+        "lg_contrast",
+        "lg_saturation",
+        "lg_vibrancy",
+        "lg_adaptive_dim",
+        "lg_adaptive_boost",
+        "lg_edge_thickness",
+        "lg_padding_pixels",
+    ] {
+        uniforms.push(UniformName::new(name, UniformType::_1f));
     }
+    uniforms
+}
+
+/// The shader sources referenced by the configuration, keyed by content hash.
+fn decoration_shader_sources(config: &niri_config::Config) -> Vec<(u64, Option<&str>)> {
+    let layout_parts = config
+        .outputs
+        .0
+        .iter()
+        .filter_map(|o| o.layout.as_ref())
+        .chain(
+            config
+                .workspaces
+                .iter()
+                .filter_map(|w| w.layout.as_ref().map(|l| &l.0)),
+        );
+    let layout_shaders = layout_parts
+        .flat_map(|l| l.focus_ring.iter().chain(l.border.iter()))
+        .filter_map(|r| r.shader.as_ref());
+    let shaders = config
+        .layout
+        .focus_ring
+        .shader
+        .iter()
+        .chain(config.layout.border.shader.iter())
+        .chain(layout_shaders)
+        .chain(
+            config
+                .window_rules
+                .iter()
+                .flat_map(|r| r.focus_ring.shader.iter().chain(r.border.shader.iter())),
+        );
+    shaders
+        .filter_map(|shader| Some((shader.key()?, shader.source())))
+        .collect()
+}
+
+/// Compiles and stores the Vulkan shaders on the renderer, including the
+/// configured per-window decoration shaders.
+#[cfg(feature = "vulkan")]
+pub fn init_vulkan(renderer: &mut VulkanRenderer, config: &niri_config::Config) {
+    let mut shaders = VulkanShaders::compile(renderer);
+    for (key, source) in decoration_shader_sources(config) {
+        match compile_vulkan_decoration_program(renderer, source) {
+            Ok(program) => {
+                shaders.decorations.get_mut().insert(key, program);
+            }
+            Err(err) => warn!("error compiling Vulkan decoration shader: {err:?}"),
+        }
+    }
+    renderer.user_data().insert_if_missing(|| shaders);
+}
+
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_decoration_program(
+    renderer: &mut VulkanRenderer,
+    source: Option<&str>,
+) -> anyhow::Result<VulkanPixelProgram> {
+    let mut program = if source.is_some() {
+        "#define CUSTOM_DECORATION\n".to_owned()
+    } else {
+        "#define WAX_STRENGTH rainbow_ripple.y\n#define WAX_BRIGHTNESS rainbow_ripple.z\n#define WAX_PHASE rainbow_ripple.x\n".to_owned()
+    };
+    program.push_str(include_str!("border.frag"));
+    program.push_str(include_str!("rounding_alpha.frag"));
+    program.push_str(source.unwrap_or(include_str!(
+        "../../../resources/shaders/focus-ring/rainbow-ripple.frag"
+    )));
+    compile_vulkan_program(
+        renderer,
+        &program,
+        &[
+            UniformName::new("colorspace", UniformType::_1f),
+            UniformName::new("hue_interpolation", UniformType::_1f),
+            UniformName::new("color_from", UniformType::_4f),
+            UniformName::new("color_to", UniformType::_4f),
+            UniformName::new("grad_offset", UniformType::_2f),
+            UniformName::new("grad_width", UniformType::_1f),
+            UniformName::new("grad_vec", UniformType::_2f),
+            UniformName::new("input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("geo_size", UniformType::_2f),
+            UniformName::new("outer_radius", UniformType::_4f),
+            UniformName::new("border_width", UniformType::_1f),
+            UniformName::new("rainbow_ripple", UniformType::_4f),
+            UniformName::new("ring_width", UniformType::_1f),
+            UniformName::new("emission_threshold", UniformType::_1f),
+            UniformName::new("niri_time", UniformType::_1f),
+        ],
+        &[],
+    )
 }
 
 #[cfg(feature = "vulkan")]
@@ -950,7 +1100,15 @@ fn compile_vulkan_program(
     let vulkan_src = vulkanize_fragment(&full, &decls, texture_uniforms);
     renderer
         .compile_custom_pixel_shader(&vulkan_src, &decls, texture_uniforms)
-        .map_err(|err| anyhow::anyhow!("error compiling vulkan shader: {err}"))
+        .map_err(|err| {
+            if std::env::var_os("NIRI_DUMP_SHADERS").is_some() {
+                eprintln!("vulkan shader error: {err}");
+                for (i, line) in vulkan_src.lines().enumerate() {
+                    eprintln!("{:4} {line}", i + 1);
+                }
+            }
+            anyhow::anyhow!("error compiling vulkan shader: {err}")
+        })
 }
 
 fn compile_decoration_program(
@@ -1079,7 +1237,7 @@ mod tests {
             let Ok(mut renderer) = VulkanRenderer::new(&device) else {
                 continue;
             };
-            init_vulkan(&mut renderer);
+            init_vulkan(&mut renderer, &niri_config::Config::default());
             let shaders = renderer.user_data().get::<VulkanShaders>().unwrap();
             assert!(
                 shaders.border.is_some(),
@@ -1091,8 +1249,13 @@ mod tests {
                 "shadow shader failed to compile on {}",
                 device.name()
             );
+            assert!(
+                shaders.clipped_surface.is_some(),
+                "clipped-surface shader failed to compile on {}",
+                device.name()
+            );
             eprintln!(
-                "compiled Vulkan border and shadow shaders on {}",
+                "compiled Vulkan border, shadow and clipped-surface shaders on {}",
                 device.name()
             );
             return;

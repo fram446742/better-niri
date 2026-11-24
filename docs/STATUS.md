@@ -171,15 +171,16 @@ picked up without re-auditing.
 4. **Vulkan renderer** — wired for the TTY backend (`TtyGpuManager`/`TtyRenderer`
    over GLES or Vulkan, `NIRI_RENDERER`). Borders and shadows now also render on
    Vulkan: their GLSL sources are compiled to SPIR-V through better-smithay's
-   custom pixel pipeline at renderer init, and a test compiles both on a real
-   `VulkanRenderer`. Resize animations keep their animated stretch on GLES; on
+   custom pixel pipeline at renderer init, together with the rounded-corner
+   clipping texture program and the configured decoration shaders; a test
+   compiles them on a real `VulkanRenderer`. Resize animations keep their animated stretch on GLES; on
    Vulkan the window renders normally during a resize (no red fallback, no
    stretch). Runtime validation on a real TTY passed on 2026-11-24 (Vulkan
    renderer active, border/shadow shaders compiled, 4K DP-1 output created).
    Still open: HDR output on Vulkan, and Vulkan paths for the remaining
    GLSL-only visuals (window/global/
    scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
-   rounded-corner clipping, magnified screenshot capture, screen transitions).
+   magnified screenshot capture, screen transitions).
 5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker

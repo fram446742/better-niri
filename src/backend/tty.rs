@@ -1134,10 +1134,12 @@ impl Tty {
                         &mut renderer,
                     )
                 {
-                    shaders::init_vulkan(vulkan_renderer);
+                    let config = self.config.borrow();
+                    shaders::init_vulkan(vulkan_renderer, &config);
+                    drop(config);
                     debug!(
-                        "Vulkan renderer: compiled border and shadow pixel shaders; \
-                         GLES-only effect pipelines remain disabled"
+                        "Vulkan renderer: compiled border, shadow, clipping and decoration \
+                         pixel shaders; remaining GLES-only effect pipelines are disabled"
                     );
                 }
             }

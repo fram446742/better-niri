@@ -1432,7 +1432,7 @@ impl<W: LayoutElement> Tile<W> {
             let geo = Rectangle::new(window_render_loc, window_size);
             let radius = radius.fit_to(window_size.w as f32, window_size.h as f32);
 
-            let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer).cloned();
+            let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer);
             let clip = |elem| match elem {
                 LayoutElementRenderElement::Wayland(elem) => {
                     // If we should clip to geometry, render a clipped window.
