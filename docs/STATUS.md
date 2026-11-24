@@ -345,9 +345,10 @@ picked up without re-auditing.
    On the compositor side all planned core protocol ports
    (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are wired.
    The only remaining work is the hardware pass (VRR/tearing/explicit sync/
-   multi-GPU/HDR mixed/commit-timing presentation), the manual desktop click of
-   the Noctalia widgets, and DPMS VRAM/GTT cleanup, which needs a reproduced
-   leak before any mitigation.
+   multi-GPU/HDR mixed/commit-timing presentation) and DPMS VRAM/GTT cleanup,
+   which needs a reproduced leak before any mitigation. Noctalia widget load,
+   update and click/right-click handlers were exercised both in the live shell
+   and in an isolated headless niri session (see the validation note).
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and

@@ -43,3 +43,30 @@ The source was removed and every plugin disabled afterwards; the original
 `plugins.json` was restored byte-for-byte (`diff` empty) so the user's shell is
 unchanged. A live click/update check remains part of the manual desktop pass,
 together with the hardware validation.
+
+## Isolated widget exercise (headless niri)
+
+To exercise a widget instance without touching the user's bar, a second Noctalia
+was started on an isolated headless niri session:
+
+```sh
+NIRI_BACKEND=headless XDG_RUNTIME_DIR=/tmp/noc-test/runtime niri \
+  -c /tmp/noc-test/niri-config.kdl
+XDG_CONFIG_HOME=/tmp/noc-test/config XDG_STATE_HOME=/tmp/noc-test/state \
+  NOCTALIA_CONFIG_HOME=/tmp/noc-test/config NOCTALIA_STATE_HOME=/tmp/noc-test/state \
+  WAYLAND_DISPLAY=wayland-1 noctalia -d
+noctalia msg plugin better-desktop/better-companion:status focused refresh
+noctalia msg plugin better-desktop/better-companion:status focused click
+noctalia msg plugin better-desktop/better-companion:status focused right-click
+```
+
+The bar instantiated `widget.better_companion`, the log shows
+`widget.better_companion` with its file watcher, and all three IPC events were
+dispatched (`ok: dispatched 1`) with no `[luau] ... better-desktop` errors.
+`click` runs the same handler as a pointer click (here it reports the missing
+`companionctl` gracefully), `right-click` opens better-settings, and `refresh`
+re-reads the daemon state. The isolated niri, D-Bus and Noctalia processes were
+stopped afterwards; the user's running Noctalia was restarted from its own
+session environment.
+
+The plugin README documents these events for keybinds and automation.
