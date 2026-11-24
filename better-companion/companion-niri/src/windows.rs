@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::Compositor;
 use crate::layout::{self, WorkspaceTarget};
 
+#[derive(Clone)]
 pub struct Windows {
     compositor: Compositor,
 }
@@ -67,6 +68,87 @@ impl Windows {
             Response::Handled => Ok(()),
             other => Err(format!("unexpected niri response: {other:?}")),
         }
+    }
+
+    /// Resolves `window`/`id` or the focused window against a live window list.
+    fn resolve_window<'a>(windows: &'a [Window], params: &Value) -> Result<&'a Window, String> {
+        if let Some(id) = params
+            .get("window")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_u64)
+        {
+            return windows
+                .iter()
+                .find(|window| window.id == id)
+                .ok_or_else(|| format!("window {id} is not open"));
+        }
+        windows
+            .iter()
+            .find(|window| window.is_focused)
+            .ok_or_else(|| "no focused window".to_owned())
+    }
+
+    /// `sticky` (required) for `set-sticky`.
+    fn sticky_flag(params: &Value) -> Result<bool, String> {
+        params
+            .get("sticky")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| "windows.set-sticky needs a boolean `sticky`".to_owned())
+    }
+
+    fn toggle_sticky(&self, params: &Value) -> Result<Value, String> {
+        let windows = self.windows()?;
+        let window = Self::resolve_window(&windows, params)?;
+        self.apply_action(Action::ToggleWindowSticky {
+            id: Some(window.id),
+        })?;
+        Ok(json!({
+            "action": "toggled",
+            "window": window.id,
+            "sticky": !window.is_sticky,
+            "previous": window.is_sticky,
+        }))
+    }
+
+    fn set_sticky(&self, params: &Value) -> Result<Value, String> {
+        let sticky = Self::sticky_flag(params)?;
+        let windows = self.windows()?;
+        let window = Self::resolve_window(&windows, params)?;
+        let changed = window.is_sticky != sticky;
+        if changed {
+            self.apply_action(Action::ToggleWindowSticky {
+                id: Some(window.id),
+            })?;
+        }
+        Ok(json!({
+            "action": "set",
+            "window": window.id,
+            "sticky": sticky,
+            "changed": changed,
+        }))
+    }
+
+    fn list_sticky(&self) -> Result<Value, String> {
+        let mut matched: Vec<Window> = self
+            .windows()?
+            .into_iter()
+            .filter(|window| window.is_sticky)
+            .collect();
+        matched.sort_by_key(|window| window.id);
+        let count = matched.len();
+        let windows: Vec<Value> = matched
+            .into_iter()
+            .map(|window| {
+                json!({
+                    "id": window.id,
+                    "title": window.title,
+                    "app_id": window.app_id,
+                    "workspace_id": window.workspace_id,
+                    "is_focused": window.is_focused,
+                })
+            })
+            .collect();
+        Ok(json!({ "windows": windows, "count": count }))
     }
 
     fn spawn(&self, params: &Value) -> Result<Value, String> {
@@ -257,6 +339,18 @@ impl Context for Windows {
                 "Move `window` (or the focused window) to output `output`",
             ),
             ActionInfo::new("focus-output", "Focus output `output`"),
+            ActionInfo::new(
+                "toggle-sticky",
+                "Toggle niri's native sticky flag on `window` (or the focused window)",
+            ),
+            ActionInfo::new(
+                "set-sticky",
+                "Set the native sticky flag on a window to `sticky`; no action when unchanged",
+            ),
+            ActionInfo::new(
+                "list-sticky",
+                "List windows with the native sticky flag in numeric id order",
+            ),
         ]
     }
 
@@ -274,6 +368,7 @@ impl Context for Windows {
                             "app_id": window.app_id,
                             "workspace_id": window.workspace_id,
                             "is_focused": window.is_focused,
+                            "is_sticky": window.is_sticky,
                         })
                     })
                     .collect();
@@ -305,6 +400,9 @@ impl Context for Windows {
             "move-to-workspace" => self.move_to_workspace(params, false),
             "follow-to-workspace" => self.move_to_workspace(params, true),
             "move-to-output" => self.move_to_output(params),
+            "toggle-sticky" => self.toggle_sticky(params),
+            "set-sticky" => self.set_sticky(params),
+            "list-sticky" => self.list_sticky(),
             "focus-output" => {
                 let output = params
                     .get("output")
@@ -764,6 +862,102 @@ mod tests {
             .unwrap();
         assert_eq!(value["count"], 1);
         assert_eq!(value["windows"][0]["id"], 11);
+        server.join().unwrap();
+    }
+
+    fn sticky_window_json(id: u64, app_id: &str, focused: bool, sticky: bool) -> serde_json::Value {
+        let mut window = window_json(id, app_id, focused);
+        window["is_sticky"] = json!(sticky);
+        window
+    }
+
+    #[test]
+    fn toggles_the_native_sticky_flag_and_reports_the_new_state() {
+        let dir = temp_dir("sticky-toggle");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Windows": [sticky_window_json(10, "firefox", true, false)] } }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows.call("toggle-sticky", &json!({})).unwrap();
+        assert_eq!(value["window"], 10);
+        assert_eq!(value["previous"], false);
+        assert_eq!(value["sticky"], true);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(requests[0], Request::Windows));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::ToggleWindowSticky { id: Some(10) })
+        ));
+    }
+
+    #[test]
+    fn set_sticky_skips_the_action_when_the_state_already_matches() {
+        let dir = temp_dir("sticky-idempotent");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![json!({ "Ok": { "Windows": [sticky_window_json(10, "firefox", true, true)] } })],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows
+            .call("set-sticky", &json!({ "window": 10, "sticky": true }))
+            .unwrap();
+        assert_eq!(value["changed"], false);
+        assert_eq!(value["sticky"], true);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0], Request::Windows));
+    }
+
+    #[test]
+    fn set_sticky_toggles_only_when_the_target_differs() {
+        let dir = temp_dir("sticky-set");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![
+                json!({ "Ok": { "Windows": [sticky_window_json(10, "firefox", false, false)] } }),
+                json!({ "Ok": "Handled" }),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows
+            .call("set-sticky", &json!({ "window": 10, "sticky": true }))
+            .unwrap();
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["sticky"], true);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::ToggleWindowSticky { id: Some(10) })
+        ));
+    }
+
+    #[test]
+    fn lists_sticky_windows_in_id_order() {
+        let dir = temp_dir("sticky-list");
+        let socket = dir.join("niri.sock");
+        let server = fake_sequence(
+            &socket,
+            vec![json!({ "Ok": { "Windows": [
+                sticky_window_json(12, "a", false, true),
+                sticky_window_json(10, "b", true, true),
+                sticky_window_json(11, "c", false, false),
+            ] } })],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows.call("list-sticky", &Value::Null).unwrap();
+        assert_eq!(value["count"], 2);
+        assert_eq!(value["windows"][0]["id"], 10);
+        assert_eq!(value["windows"][1]["id"], 12);
         server.join().unwrap();
     }
 }

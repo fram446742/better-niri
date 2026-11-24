@@ -1,8 +1,11 @@
 //! niri IPC bridge and event-driven parking tracker.
 //!
-//! `compositor.*` performs actions and queries. `windows.*` adds run-or-raise
-//! and placement (workspace by id/name/index, output by name). [`Tracker`]
-//! consumes the niri event stream and maintains two auto-parking lots:
+//! `compositor.*` performs actions and queries. `windows.*` adds run-or-raise,
+//! placement (workspace by id/name/index, output by name) and the native sticky
+//! flag. `stage.*` and `scratchpad.*` absorb the nsticky staged-window workflow
+//! on top of the parking store, and `nsticky.*` offers compatibility aliases for
+//! the old CLI verbs. [`Tracker`] consumes the niri event stream and maintains
+//! two auto-parking lots:
 //!
 //! - `auto:workspaces`: every workspace, keyed by its stable id.
 //! - `auto:windows`: every open window, keyed by its stable id.
@@ -30,14 +33,23 @@ use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
 use serde_json::{Value, json};
 
 mod layout;
+mod nsticky;
+mod ops;
 mod parker;
+mod scratchpad;
+mod stage;
 mod swallow;
 mod windows;
 pub use layout::{WorkspaceTarget, resolve_live_workspace};
+pub use nsticky::Nsticky;
 pub use parker::{DEFAULT_LOT, Parker};
+pub use scratchpad::{SCRATCHPAD_LOT, Scratchpad};
+pub use stage::{STAGE_LOT, Stage};
 pub use swallow::{SWALLOW_LOT, Swallow, SwallowOutcome, SwallowRule, proc_age, proc_parent};
 pub use windows::Windows;
 
+/// The niri IPC client. Cheap to clone; clones share no mutable state.
+#[derive(Clone)]
 pub struct Compositor {
     socket: Option<PathBuf>,
 }

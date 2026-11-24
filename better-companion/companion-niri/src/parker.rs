@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 
 use companion_core::{ActionInfo, Context};
 use companion_parking::Parking;
-use niri_ipc::{Action, Request, Response, Window, Workspace, WorkspaceReferenceArg};
+use niri_ipc::{Action, Workspace, WorkspaceReferenceArg};
 use serde_json::{Value, json};
 
 use crate::layout::{self, WorkspaceTarget};
-use crate::{AUTO_WINDOWS, AUTO_WORKSPACES, Compositor};
+use crate::{AUTO_WORKSPACES, Compositor, ops};
 
 pub const DEFAULT_LOT: &str = "parker";
 
@@ -39,73 +39,11 @@ impl Parker {
     }
 
     fn auto_windows(&self) -> BTreeMap<String, Value> {
-        self.parking.lot(AUTO_WINDOWS)
-    }
-
-    fn window_query(&self) -> Result<Vec<Window>, String> {
-        match self.compositor.send(Request::Windows)? {
-            Response::Windows(windows) => Ok(windows),
-            other => Err(format!("unexpected niri response: {other:?}")),
-        }
+        ops::auto_windows(&self.parking)
     }
 
     fn workspace_query(&self) -> Result<Vec<Workspace>, String> {
-        match self.compositor.send(Request::Workspaces)? {
-            Response::Workspaces(workspaces) => Ok(workspaces),
-            other => Err(format!("unexpected niri response: {other:?}")),
-        }
-    }
-
-    fn focused_window_id(&self) -> Result<u64, String> {
-        if let Some((id, _)) = self
-            .auto_windows()
-            .iter()
-            .find(|(_, value)| value.get("is_focused").and_then(Value::as_bool) == Some(true))
-        {
-            return id
-                .parse()
-                .map_err(|_| format!("invalid window id `{id}` in {AUTO_WINDOWS}"));
-        }
-
-        match self.compositor.send(Request::FocusedWindow)? {
-            Response::FocusedWindow(Some(window)) => Ok(window.id),
-            Response::FocusedWindow(None) => Err("no focused window".to_owned()),
-            other => Err(format!("unexpected niri response: {other:?}")),
-        }
-    }
-
-    fn focused_workspace_id(&self) -> Result<u64, String> {
-        let workspaces = self.parking.lot(AUTO_WORKSPACES);
-        let from_auto = workspaces
-            .values()
-            .find(|value| value.get("is_focused").and_then(Value::as_bool) == Some(true))
-            .or_else(|| {
-                workspaces
-                    .values()
-                    .find(|value| value.get("is_active").and_then(Value::as_bool) == Some(true))
-            })
-            .and_then(|value| value.get("id").and_then(Value::as_u64));
-        if let Some(id) = from_auto {
-            return Ok(id);
-        }
-
-        self.workspace_query()?
-            .into_iter()
-            .find(|ws| ws.is_focused)
-            .map(|ws| ws.id)
-            .ok_or_else(|| "no focused workspace".to_owned())
-    }
-
-    fn window_snapshot(&self, id: u64) -> Result<Value, String> {
-        if let Some(value) = self.auto_windows().get(&id.to_string()) {
-            return Ok(value.clone());
-        }
-        let window = self
-            .window_query()?
-            .into_iter()
-            .find(|window| window.id == id)
-            .ok_or_else(|| format!("window {id} is not open"))?;
-        serde_json::to_value(window).map_err(|err| format!("encode window: {err}"))
+        ops::workspace_query(&self.compositor)
     }
 
     fn workspace_snapshot(&self, id: u64) -> Result<Value, String> {
@@ -134,8 +72,7 @@ impl Parker {
             from_auto.sort_unstable();
             return Ok(from_auto);
         }
-        let mut ids: Vec<u64> = self
-            .window_query()?
+        let mut ids: Vec<u64> = ops::window_query(&self.compositor)?
             .into_iter()
             .filter(|window| window.workspace_id == Some(workspace_id))
             .map(|window| window.id)
@@ -171,20 +108,6 @@ impl Parker {
                 )
             })
     }
-
-    fn send_action(&self, action: Action) -> Result<(), String> {
-        match self.compositor.send(Request::Action(action))? {
-            Response::Handled => Ok(()),
-            other => Err(format!("unexpected niri response: {other:?}")),
-        }
-    }
-
-    fn param_id(params: &Value) -> Option<u64> {
-        params
-            .get("window")
-            .or_else(|| params.get("id"))
-            .and_then(Value::as_u64)
-    }
 }
 
 impl Context for Parker {
@@ -218,12 +141,12 @@ impl Context for Parker {
         let lot = Self::lot_name(params);
         match action {
             "park" => {
-                let id = match Self::param_id(params) {
+                let id = match ops::param_window(params) {
                     Some(id) => id,
-                    None => self.focused_window_id()?,
+                    None => ops::focused_window_id(&self.parking, &self.compositor)?,
                 };
-                let snapshot = self.window_snapshot(id)?;
-                self.send_action(Action::MinimizeWindow { id: Some(id) })?;
+                let snapshot = ops::window_snapshot(&self.parking, &self.compositor, id)?;
+                ops::send_action(&self.compositor, Action::MinimizeWindow { id: Some(id) })?;
                 self.parking.call(
                     "park",
                     &json!({ "lot": lot, "id": format!("window:{id}"), "value": snapshot }),
@@ -231,7 +154,7 @@ impl Context for Parker {
                 Ok(json!({ "lot": lot, "window": id, "parked": true }))
             }
             "restore" => {
-                let id = Self::param_id(params)
+                let id = ops::param_window(params)
                     .ok_or_else(|| "parker.restore needs a `window` id".to_owned())?;
                 // Atomically remove: a repeated or concurrent restore reports
                 // `restored: false` and sends no second unminimize.
@@ -246,13 +169,13 @@ impl Context for Parker {
                         "restored": false,
                     }));
                 };
-                self.send_action(Action::UnminimizeWindow { id: Some(id) })?;
+                ops::send_action(&self.compositor, Action::UnminimizeWindow { id: Some(id) })?;
                 Ok(json!({ "lot": lot, "window": id, "restored": true, "entry": entry }))
             }
             "park-workspace" => {
                 let workspace_id = match self.workspace_target_id(params)? {
                     Some(id) => id,
-                    None => self.focused_workspace_id()?,
+                    None => ops::focused_workspace_id(&self.parking, &self.compositor)?,
                 };
                 let snapshot = self.workspace_snapshot(workspace_id)?;
                 let window_ids = self.workspace_window_ids(workspace_id)?;
@@ -261,7 +184,7 @@ impl Context for Parker {
                 }
                 let mut minimized = Vec::with_capacity(window_ids.len());
                 for id in &window_ids {
-                    self.send_action(Action::MinimizeWindow { id: Some(*id) })?;
+                    ops::send_action(&self.compositor, Action::MinimizeWindow { id: Some(*id) })?;
                     minimized.push(*id);
                 }
                 self.parking.call(
@@ -304,7 +227,7 @@ impl Context for Parker {
                 windows.sort_unstable();
                 let mut restored = Vec::with_capacity(windows.len());
                 for id in windows {
-                    self.send_action(Action::UnminimizeWindow { id: Some(id) })?;
+                    ops::send_action(&self.compositor, Action::UnminimizeWindow { id: Some(id) })?;
                     restored.push(id);
                 }
                 let focus = params
@@ -312,9 +235,12 @@ impl Context for Parker {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if focus {
-                    self.send_action(Action::FocusWorkspace {
-                        reference: WorkspaceReferenceArg::Id(workspace_id),
-                    })?;
+                    ops::send_action(
+                        &self.compositor,
+                        Action::FocusWorkspace {
+                            reference: WorkspaceReferenceArg::Id(workspace_id),
+                        },
+                    )?;
                 }
                 Ok(json!({
                     "lot": lot,
@@ -336,6 +262,8 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
+    use companion_core::AUTO_WINDOWS;
+    use niri_ipc::Request;
     use serde_json::json;
 
     use super::*;

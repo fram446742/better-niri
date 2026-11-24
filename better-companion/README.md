@@ -19,7 +19,9 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
 | `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` | Optional Phase C ecosystem adapters (commands + event hooks) |
 | `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
-| `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore and run-or-raise/singleton |
+| `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement and native sticky |
+| `companion-niri` | `stage.*`, `scratchpad.*` | Staged windows and named scratchpads on the shared parking store |
+| `companion-niri` | `nsticky.*` | Compatibility aliases for the standalone nsticky CLI verbs |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
 | `companionctl` | — | CLI client |
 
@@ -87,6 +89,123 @@ companionctl call parker list
 Parking minimizes the window(s) and records their snapshots in the `parker`
 lot; restoring unminimizes them (and optionally focuses the workspace).
 `park-workspace` minimizes every window tracked for that workspace.
+
+## Staged windows and scratchpads (nsticky absorption)
+
+nsticky's staged-window workflow is part of the companion daemon. Its native
+primitive stays in the compositor: `niri-ipc` already exposes
+`Action::ToggleWindowSticky`, so the daemon only sends that action and never
+runs a second sticky engine. Staging and scratchpads reuse the parking store and
+the same niri bridge as `parker.*`; they do not open a second IPC connection.
+
+### Staging (`stage.*`)
+
+Staging parks a window out of the way. The implementation is deliberately the
+existing parking primitive — the window is minimized and its snapshot is stored
+in the `stage` lot — so a staged window behaves exactly like a parked one and
+there is no parallel compositor path. Activating it unminimizes it.
+
+```sh
+companionctl call stage stage '{"window":70}'       # or omit `window` for focus
+companionctl call stage list                        # numeric window-id order
+companionctl call stage activate '{"window":70}'    # aliases: unstage, restore
+companionctl call stage toggle '{"window":70}'      # stage ⇄ activate
+```
+
+`stage.list` returns `{lot, windows: [{window, snapshot}], count}` sorted by
+numeric window id, so repeated calls and scripted diffs are stable.
+`stage.activate` is idempotent: a window that is not staged reports
+`"activated": false` and sends no extra niri action. Staged windows persist in
+the `stage` lot of `$XDG_STATE_HOME/better-companion/parking.json`, so they
+survive a daemon restart.
+
+### Named scratchpads (`scratchpad.*`)
+
+Scratchpads are **named slots**, not nsticky's LIFO stack. Every slot holds at
+most one window; the same window cannot live in two slots. Hiding a slot
+minimizes its window (the shared parking primitive), showing it moves the window
+to the focused workspace, unminimizes it and focuses it.
+
+```sh
+companionctl call scratchpad assign '{"name":"term","window":70}'  # alias: add
+companionctl call scratchpad toggle '{"name":"term"}'
+companionctl call scratchpad show   '{"name":"term"}'             # alias: restore
+companionctl call scratchpad hide   '{"name":"term"}'
+companionctl call scratchpad list
+companionctl call scratchpad remove '{"name":"term"}'
+companionctl call scratchpad reconcile
+```
+
+`name` (alias `slot`) defaults to `default`; an empty or over-64-byte name is
+rejected. `toggle` with an empty slot assigns the focused window and hides it,
+then shows and hides it on later presses. Assigning a different window over an
+occupied slot is rejected unless `"replace": true` is passed; with `replace` the
+old window is unminimized first. Re-assigning a window that already lives in
+another slot moves it and reports `"moved_from"`.
+
+```sh
+# One key per scratchpad; multiple slots coexist.
+companionctl call scratchpad toggle '{"name":"term"}'
+companionctl call scratchpad toggle '{"name":"music"}'
+```
+
+`assign` returns `{action, slot, window, hidden, replaced, moved_from}`;
+`toggle`/`show`/`hide` return the slot, window, `hidden` and whether the call
+changed anything. `list` returns slots ordered by name. `show` accepts
+`"focus": false` to place and unminimize without focusing.
+
+Assignments are persisted in the `scratchpad` lot of the same
+`$XDG_STATE_HOME/better-companion/parking.json` and are readable immediately
+after a daemon restart. `scratchpad.reconcile` drops slots whose window no
+longer exists; if niri is unreachable it returns an error and leaves the store
+untouched rather than wiping it. A removed slot restores its hidden window
+before the assignment is dropped.
+
+### Native sticky windows
+
+The compositor primitive is exposed directly instead of being reimplemented:
+
+```sh
+companionctl call windows toggle-sticky '{"window":70}'   # or omit for focus
+companionctl call windows set-sticky '{"window":70,"sticky":true}'
+companionctl call windows list-sticky
+companionctl call windows find '{"app_id":"firefox"}'     # includes `is_sticky`
+```
+
+`set-sticky` queries the live window list and sends `ToggleWindowSticky` only
+when the flag must change, so repeated calls are no-ops. `toggle-sticky` reports
+the previous and new state. `list-sticky` returns sticky windows in numeric id
+order. The generic `compositor.action` escape hatch accepts
+`{"ToggleWindowSticky":{"id":70}}` too.
+
+### Compatibility (`nsticky.*`)
+
+The `nsticky` namespace maps the old CLI verbs onto the canonical actions and
+adds no state. It is safe to point existing keybindings at `companionctl call
+nsticky ...` while the standalone nsticky repository remains untouched.
+
+| nsticky command | Companion call |
+| --- | --- |
+| `nsticky sticky add <id>` | `nsticky sticky.add '{"window":<id>}'` → `windows.set-sticky` |
+| `nsticky sticky remove <id>` | `nsticky sticky.remove '{"window":<id>}'` |
+| `nsticky sticky toggle-active` | `nsticky sticky.toggle-active` → `windows.toggle-sticky` |
+| `nsticky sticky list` | `nsticky sticky.list` → `windows.list-sticky` |
+| `nsticky stage add <id>` | `nsticky stage.add '{"window":<id>}'` → `stage.stage` |
+| `nsticky stage remove <id>` | `nsticky stage.remove '{"window":<id>}'` → `stage.activate` |
+| `nsticky stage toggle-active` | `nsticky stage.toggle-active` → `stage.toggle` |
+| `nsticky stage restore` | `nsticky stage.restore '{"window":<id>}'` (no selector: pass ids) |
+| `nsticky stage list` | `nsticky stage.list` |
+| `nsticky scratchpad add` | `nsticky scratchpad.add '{"name":"default"}'` → `scratchpad.assign` |
+| `nsticky scratchpad restore` | `nsticky scratchpad.restore '{"name":"default"}'` → `scratchpad.show` |
+| `nsticky scratchpad toggle [name]` | `nsticky scratchpad.toggle '{"name":...}'` |
+| `nsticky scratchpad list` | `nsticky scratchpad.list` |
+
+`sticky.add`/`sticky.remove` force their flag, so a stale script cannot turn
+`add` into a removal. Unsupported verbs such as `stage.add-all`,
+`stage.remove-all` and `sticky.toggle-appid` are rejected with an unknown-action
+error; scripts should pass explicit window ids or use `windows.find` first. The
+scratchpad aliases keep the named-slot policy, so `scratchpad.add` is not a LIFO
+push and `scratchpad.restore` does not pop.
 
 ## Rules and run-or-raise (Phase B)
 
@@ -333,8 +452,13 @@ deterministic order.
   commands and payload; the daemon never executes commands implicitly.
 - `system.ping|status|paths`.
 - `windows.run-or-raise|singleton|find|move-to-workspace|follow-to-workspace|
-  move-to-output|focus-output`.
+  move-to-output|focus-output|toggle-sticky|set-sticky|list-sticky`.
 - `parker.park|restore|park-workspace|restore-workspace|list`.
+- `stage.stage|list|activate|unstage|restore|toggle`.
+- `scratchpad.assign|add|toggle|show|restore|hide|list|remove|reconcile`.
+- `nsticky.sticky.add|remove|toggle-active|list`,
+  `nsticky.stage.add|remove|restore|toggle-active|list`,
+  `nsticky.scratchpad.add|restore|toggle|list|remove` (compatibility aliases).
 - `swallow.enable|disable|status|list|restore|add-terminal|remove-terminal|
   add-rule|remove-rule|set-ignore|configure|reconcile|reload`.
 - `rules.set|remove|list|explain|apply|run`.
