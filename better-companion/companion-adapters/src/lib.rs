@@ -100,7 +100,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub use companion::companion_events;
-use companion_core::{ActionInfo, CallObserver, Context, load_json, save_json};
+use companion_core::{
+    ActionInfo, CallObserver, Context, Event, EventBus, ParamInfo, load_json, save_json,
+};
 use config::State;
 pub use config::{
     DEFAULT_DEDUP_MS, DEFAULT_MAX_CONCURRENT, DEFAULT_TIMEOUT_MS, EVENT_KINDS, FailurePolicy,
@@ -153,6 +155,20 @@ pub const EVENT_TABLE: &[(&str, &str)] = &[
 ];
 
 const NAMESPACES: [&str; 4] = ["session", "monitor", "audio", "wallpaper"];
+
+/// Adapter namespaces accepted by the config file's `adapters` section.
+pub const ADAPTER_NAMESPACES: [&str; 4] = NAMESPACES;
+
+const ADAPTER_STATE_KEYS: &[&str] = &[
+    "enabled",
+    "commands",
+    "hooks",
+    "subscriptions",
+    "timeout_ms",
+    "dedup_ms",
+    "max_concurrent",
+    "failure_policy",
+];
 
 #[derive(Debug, Clone, Default)]
 struct Stats {
@@ -221,6 +237,57 @@ impl AdapterCore {
     fn save(&self, state: &State) -> Result<(), String> {
         save_json(&self.path, state)
             .map_err(|err| format!("cannot save {} adapter: {err}", self.namespace))
+    }
+
+    /// Merges a config-file patch over the current state without writing it.
+    fn merged_state(&self, patch: &Value) -> Result<State, String> {
+        let object = patch
+            .as_object()
+            .ok_or_else(|| format!("adapter `{}` config must be an object", self.namespace))?;
+        if let Some(key) = object
+            .keys()
+            .find(|key| !ADAPTER_STATE_KEYS.contains(&key.as_str()))
+        {
+            return Err(format!(
+                "adapter `{}` has unknown config field `{key}`",
+                self.namespace
+            ));
+        }
+        let mut merged = serde_json::to_value(&*self.lock_state()?)
+            .map_err(|err| format!("cannot read adapter state: {err}"))?;
+        let Some(merged_object) = merged.as_object_mut() else {
+            return Err("adapter state is not an object".to_owned());
+        };
+        for (key, value) in object {
+            merged_object.insert(key.clone(), value.clone());
+        }
+        let state: State = serde_json::from_value(merged)
+            .map_err(|err| format!("invalid `{}` adapter config: {err}", self.namespace))?;
+        if !(1..=64).contains(&state.max_concurrent) {
+            return Err(format!(
+                "adapter `{}` max_concurrent must be between 1 and 64",
+                self.namespace
+            ));
+        }
+        if object.contains_key("timeout_ms") && state.timeout_ms == 0 {
+            return Err(format!(
+                "adapter `{}` timeout_ms must be greater than zero",
+                self.namespace
+            ));
+        }
+        Ok(state)
+    }
+
+    fn validate_config(&self, patch: &Value) -> Result<(), String> {
+        self.merged_state(patch).map(|_| ())
+    }
+
+    fn apply_config(&self, patch: &Value) -> Result<(), String> {
+        let state = self.merged_state(patch)?;
+        self.gate.set_limit(state.max_concurrent);
+        self.save(&state)?;
+        *self.lock_state()? = state;
+        Ok(())
     }
 
     fn status(&self) -> Result<Value, String> {
@@ -1019,6 +1086,7 @@ struct HubInner {
     adapters: BTreeMap<&'static str, Arc<AdapterCore>>,
     mapper: Mutex<NiriEventMapper>,
     sender: Mutex<Option<SyncSender<AdapterEvent>>>,
+    bus: Mutex<Option<EventBus>>,
     running: AtomicBool,
     dropped: AtomicU64,
 }
@@ -1037,6 +1105,7 @@ impl Adapters {
                 adapters,
                 mapper: Mutex::new(NiriEventMapper::new()),
                 sender: Mutex::new(None),
+                bus: Mutex::new(None),
                 running: AtomicBool::new(false),
                 dropped: AtomicU64::new(0),
             }),
@@ -1091,8 +1160,24 @@ impl Adapters {
         });
     }
 
+    /// Publishes normalized events and adapter deliveries on `bus`.
+    ///
+    /// This is optional; without a bus the adapter engine behaves exactly as
+    /// before. The bus is non-blocking, so a slow external subscriber never
+    /// delays the niri tracker or an adapter command.
+    pub fn set_event_bus(&self, bus: EventBus) {
+        if let Ok(mut slot) = self.inner.bus.lock() {
+            *slot = Some(bus);
+        }
+    }
+
     /// Queues an event for the worker, or runs it now when no worker exists.
     pub fn submit(&self, event: AdapterEvent) {
+        if let Ok(bus) = self.inner.bus.lock()
+            && let Some(bus) = bus.as_ref()
+        {
+            bus.publish(Event::new(event.kind.clone(), event.payload.clone()));
+        }
         let sender = self.inner.sender.lock().ok().and_then(|slot| slot.clone());
         match sender {
             Some(sender) => {
@@ -1129,6 +1214,26 @@ impl Adapters {
             mapper.reset();
         }
     }
+
+    /// Validates one `adapters.<name>` config-file section.
+    pub fn validate_config(&self, namespace: &str, patch: &Value) -> Result<(), String> {
+        let core = self
+            .inner
+            .adapters
+            .get(namespace)
+            .ok_or_else(|| format!("unknown adapter `{namespace}`"))?;
+        core.validate_config(patch)
+    }
+
+    /// Merges one `adapters.<name>` config-file section into the live adapter.
+    pub fn apply_config(&self, namespace: &str, patch: &Value) -> Result<(), String> {
+        let core = self
+            .inner
+            .adapters
+            .get(namespace)
+            .ok_or_else(|| format!("unknown adapter `{namespace}`"))?;
+        core.apply_config(patch)
+    }
 }
 
 impl HubInner {
@@ -1144,10 +1249,16 @@ impl HubInner {
                 }
             }
         }
-        json!({
+        let report = json!({
             "event": event.kind,
             "adapters": report,
-        })
+        });
+        if let Ok(bus) = self.bus.lock()
+            && let Some(bus) = bus.as_ref()
+        {
+            bus.publish(Event::new("adapter-delivery", report.clone()));
+        }
+        report
     }
 }
 
@@ -1182,33 +1293,82 @@ fn adapter_actions() -> Vec<ActionInfo> {
             "Enable this adapter (required for automatic dispatch)",
         ),
         ActionInfo::new("disable", "Disable this adapter"),
-        ActionInfo::new("set", "Store command `name` = `command`"),
-        ActionInfo::new("remove", "Remove command `name`"),
+        ActionInfo::new("set", "Store command `name` = `command`")
+            .with_params([
+                ParamInfo::string("name", true, "command name"),
+                ParamInfo::string("command", true, "shell command template"),
+            ])
+            .with_permissions(&["shell"]),
+        ActionInfo::new("remove", "Remove command `name`").with_params([ParamInfo::string(
+            "name",
+            true,
+            "command name",
+        )]),
         ActionInfo::new("list", "List configured commands"),
-        ActionInfo::new("dispatch", "Run command `name` explicitly"),
-        ActionInfo::new("set-hook", "Store legacy event → command for this adapter"),
-        ActionInfo::new("remove-hook", "Remove a legacy event hook"),
-        ActionInfo::new("hooks", "List legacy event → command hooks"),
+        ActionInfo::new("dispatch", "Run command `name` explicitly")
+            .with_params([ParamInfo::string("name", true, "command name")])
+            .with_permissions(&["shell"]),
+        ActionInfo::new("set-hook", "Store legacy event → command for this adapter")
+            .with_params([
+                ParamInfo::string("event", true, "event name"),
+                ParamInfo::string("command", true, "shell command template"),
+            ])
+            .with_permissions(&["shell"]),
+        ActionInfo::new("remove-hook", "Remove a legacy event hook").with_params([
+            ParamInfo::string("event", true, "event name"),
+            ParamInfo::string("command", false, "command to remove; all when absent"),
+        ]),
+        ActionInfo::new("hooks", "List legacy event → command hooks")
+            .with_params([ParamInfo::string("event", false, "filter by event")]),
         ActionInfo::new(
             "subscribe",
             "Add an event `subscription` with a command template",
-        ),
-        ActionInfo::new("unsubscribe", "Remove subscriptions for `event`"),
-        ActionInfo::new("subscriptions", "List event subscriptions"),
+        )
+        .with_params([
+            ParamInfo::string("event", true, "event name"),
+            ParamInfo::string("command", true, "shell command template"),
+            ParamInfo::string("label", false, "label for this subscription"),
+            ParamInfo::integer("timeout_ms", false, "hard timeout in ms"),
+            ParamInfo::integer("dedup_ms", false, "deduplication window in ms"),
+            ParamInfo::string("failure_policy", false, "ignore, log or disable-after-N"),
+        ])
+        .with_permissions(&["shell"]),
+        ActionInfo::new("unsubscribe", "Remove subscriptions for `event`")
+            .with_params([ParamInfo::string("event", true, "event name")]),
+        ActionInfo::new("subscriptions", "List event subscriptions")
+            .with_params([ParamInfo::string("event", false, "filter by event")]),
         ActionInfo::new(
             "configure",
             "Update `timeout_ms`, `dedup_ms`, `max_concurrent` or `failure_policy`",
-        ),
+        )
+        .with_params([
+            ParamInfo::integer("timeout_ms", false, "default hard timeout in ms"),
+            ParamInfo::integer("dedup_ms", false, "default deduplication window"),
+            ParamInfo::integer("max_concurrent", false, "simultaneous processes (1-64)"),
+            ParamInfo::string("failure_policy", false, "ignore, log or disable-after-N"),
+        ]),
         ActionInfo::new(
             "explain",
             "Show matching templates for `event` without running",
-        ),
-        ActionInfo::new("test", "Run or dry-run `event` subscriptions explicitly"),
+        )
+        .with_params([
+            ParamInfo::string("event", true, "event name"),
+            ParamInfo::object("payload", false, "event payload for template expansion"),
+        ]),
+        ActionInfo::new("test", "Run or dry-run `event` subscriptions explicitly")
+            .with_params([
+                ParamInfo::string("event", false, "event name"),
+                ParamInfo::string("command", false, "explicit command template to test"),
+                ParamInfo::object("payload", false, "event payload"),
+                ParamInfo::boolean("dry_run", false, "expand without executing"),
+            ])
+            .with_permissions(&["shell"]),
         ActionInfo::new("preset", "Show documented commands for this adapter"),
         ActionInfo::new(
             "apply-preset",
             "Store documented commands (does not enable by default)",
-        ),
+        )
+        .with_params([ParamInfo::boolean("enable", false, "enable after applying")]),
     ]
 }
 
@@ -1244,16 +1404,57 @@ impl Context for AdaptersContext {
             ActionInfo::new(
                 "explain",
                 "Explain subscriptions for `event` (optional `adapter`)",
+            )
+            .with_params([
+                ParamInfo::string("event", true, "event name"),
+                ParamInfo::string("adapter", false, "limit to one adapter"),
+                ParamInfo::object("payload", false, "event payload"),
+            ]),
+            ActionInfo::new("dispatch", "Run `adapter` command `name` explicitly")
+                .with_params([
+                    ParamInfo::string("adapter", true, "adapter namespace"),
+                    ParamInfo::string("name", true, "command name"),
+                ])
+                .with_permissions(&["shell"]),
+            ActionInfo::new("test", "Run or dry-run `adapter` for `event` or `command`")
+                .with_params([
+                    ParamInfo::string("adapter", true, "adapter namespace"),
+                    ParamInfo::string("event", false, "event name"),
+                    ParamInfo::string("command", false, "explicit command"),
+                    ParamInfo::object("payload", false, "event payload"),
+                    ParamInfo::boolean("dry_run", false, "expand without executing"),
+                ])
+                .with_permissions(&["shell"]),
+            ActionInfo::new("enable", "Enable `adapter`, or every adapter when absent")
+                .with_params([ParamInfo::string("adapter", false, "limit to one adapter")]),
+            ActionInfo::new("disable", "Disable `adapter`, or every adapter when absent")
+                .with_params([ParamInfo::string("adapter", false, "limit to one adapter")]),
+            ActionInfo::new("subscribe", "Add a subscription to `adapter`")
+                .with_params([
+                    ParamInfo::string("adapter", true, "adapter namespace"),
+                    ParamInfo::string("event", true, "event name"),
+                    ParamInfo::string("command", true, "shell command template"),
+                ])
+                .with_permissions(&["shell"]),
+            ActionInfo::new("unsubscribe", "Remove subscriptions from `adapter`").with_params([
+                ParamInfo::string("adapter", true, "adapter namespace"),
+                ParamInfo::string("event", true, "event name"),
+            ]),
+            ActionInfo::new("configure", "Update `adapter` execution limits").with_params([
+                ParamInfo::string("adapter", true, "adapter namespace"),
+                ParamInfo::integer("timeout_ms", false, "default timeout"),
+                ParamInfo::integer("dedup_ms", false, "default dedup window"),
+                ParamInfo::integer("max_concurrent", false, "simultaneous processes (1-64)"),
+                ParamInfo::string("failure_policy", false, "ignore, log or disable-after-N"),
+            ]),
+            ActionInfo::new("preset", "Show documented commands for `adapter`")
+                .with_params([ParamInfo::string("adapter", true, "adapter namespace")]),
+            ActionInfo::new("apply-preset", "Store documented commands for `adapter`").with_params(
+                [
+                    ParamInfo::string("adapter", true, "adapter namespace"),
+                    ParamInfo::boolean("enable", false, "enable after applying"),
+                ],
             ),
-            ActionInfo::new("dispatch", "Run `adapter` command `name` explicitly"),
-            ActionInfo::new("test", "Run or dry-run `adapter` for `event` or `command`"),
-            ActionInfo::new("enable", "Enable `adapter`, or every adapter when absent"),
-            ActionInfo::new("disable", "Disable `adapter`, or every adapter when absent"),
-            ActionInfo::new("subscribe", "Add a subscription to `adapter`"),
-            ActionInfo::new("unsubscribe", "Remove subscriptions from `adapter`"),
-            ActionInfo::new("configure", "Update `adapter` execution limits"),
-            ActionInfo::new("preset", "Show documented commands for `adapter`"),
-            ActionInfo::new("apply-preset", "Store documented commands for `adapter`"),
         ]
     }
 
@@ -2185,6 +2386,7 @@ mod tests {
             namespace: "parker".into(),
             action: "park".into(),
             params: json!({ "window": 9 }),
+            id: None,
         });
         assert!(matches!(response, Response::Value { .. }));
         assert_eq!(lines(&recorder), ["park:9"]);
@@ -2239,5 +2441,29 @@ mod tests {
             },
             focus_timestamp: None,
         }
+    }
+
+    #[test]
+    fn event_bus_receives_mapped_and_companion_events() {
+        let (adapters, _dir) = harness("event-bus");
+        let bus = companion_core::EventBus::new();
+        let park = bus.subscribe(["park".to_owned()], 8);
+        let focused = bus.subscribe(["window-focused".to_owned()], 8);
+        let deliveries = bus.subscribe(["adapter-delivery".to_owned()], 8);
+        adapters.set_event_bus(bus.clone());
+
+        adapters.submit(AdapterEvent::new("park", json!({ "window": 4 })));
+        adapters.niri_event(&Event::WindowFocusChanged { id: Some(9) });
+
+        let park = park.recv().unwrap();
+        assert_eq!(park.event, "park");
+        assert_eq!(park.payload["window"], 4);
+        let focused = focused.recv().unwrap();
+        assert_eq!(focused.event, "window-focused");
+        let delivery = deliveries.recv().unwrap();
+        assert_eq!(delivery.event, "adapter-delivery");
+        assert_eq!(delivery.payload["event"], "park");
+        let delivery = deliveries.recv().unwrap();
+        assert_eq!(delivery.payload["event"], "window-focused");
     }
 }

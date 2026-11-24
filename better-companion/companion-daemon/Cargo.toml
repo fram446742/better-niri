@@ -10,10 +10,12 @@ name = "better-companion"
 path = "src/main.rs"
 
 [dependencies]
+companion-config.workspace = true
 companion-core.workspace = true
 companion-parking.workspace = true
 companion-automation.workspace = true
 companion-hooks.workspace = true
+companion-history.workspace = true
 companion-system.workspace = true
 companion-niri.workspace = true
 companion-rules.workspace = true

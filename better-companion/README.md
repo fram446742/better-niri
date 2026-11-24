@@ -12,17 +12,19 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 
 | Crate | Namespace | Responsibility |
 | --- | --- | --- |
-| `companion-core` | — | JSON-line protocol, action registry, state/socket paths |
+| `companion-core` | — | JSON-line protocol, action registry, event bus, state/socket/config paths |
 | `companion-parking` | `parking.*` | Named lots of parked items (nsticky/staged workflow) |
 | `companion-automation` | `automation.*` | Named action sequences executed through the registry |
+| `companion-history` | `history.*` | Bounded persisted log of recent rule/automation runs |
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
+| `companion-config` | `config.*` | Optional user config file, validation and hot reload |
 | `companion-system` | `system.*` | Ping, status and paths |
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
 | `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`, `adapters.*` | Optional ecosystem adapters: event subscriptions, command templates, timeouts, dedup and failure policy |
 | `companion-idle` | `idle.*` | Activity clock, idle/suspend policy, inhibitors, logind and DPMS actions |
 | `companion-rotate` | `rotate.*` | Orientation source, hysteresis and niri output transform/position |
 | `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
-| `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement and native sticky |
+| `companion-niri` | `compositor.*`, `parker.*`, `windows.*`, `marks.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement, native sticky and persistent window marks |
 | `companion-niri` | `stage.*`, `scratchpad.*` | Staged windows and named scratchpads on the shared parking store |
 | `companion-niri` | `nsticky.*` | Compatibility aliases for the standalone nsticky CLI verbs |
 | `companion-daemon` | — | `better-companion` Unix-socket server |
@@ -35,24 +37,60 @@ One JSON request per line, one JSON response per line:
 ```json
 {"kind":"list"}
 {"kind":"describe"}
-{"kind":"call","namespace":"parking","action":"park","params":{"id":"win-1","value":{"title":"editor"}}}
+{"kind":"call","namespace":"parking","action":"park","params":{"id":"win-1","value":{"title":"editor"}},"id":7}
 {"kind":"status"}
+{"kind":"subscribe","events":["park","restore"]}
 ```
 
-Responses are tagged the same way: `contexts`, `value`, `status`, `description`
-or `error`. `describe` reports the protocol name (`better-companion`), its
-version and every action with:
+Protocol version 2 adds three backward-compatible additions; every new field
+is optional, so version-1 requests and responses keep working:
+
+- `call.id` (optional `u64`) is echoed as `id` on the response. `list`,
+  `status` and `describe` still accept their old shape.
+- `error.code` is a stable machine-readable string (`unknown_namespace`,
+  `unknown_action`, `invalid_request`, `request_too_large`, `unknown_topic`,
+  `stream_required`, `slow_subscriber`, `recursive_run`, `action_failed`).
+  `message` is unchanged.
+- `subscribe` turns one connection into an event stream (see below).
+
+Responses are tagged the same way: `contexts`, `value`, `status`, `description`,
+`subscribed`, `event` or `error`. `describe` reports the protocol name
+(`better-companion`), its numeric version and every action with:
 
 - `owner`: the namespace that owns it;
 - `params`: argument names, JSON kinds, required flags and descriptions;
 - `permissions`: `niri`, `shell` or empty, so clients can gate automation;
-- `available`: false when the context cannot work in this build or host.
+- `available`: false when the context cannot work in this build or host
+  (for example `windows.*`/`marks.*` when `$NIRI_SOCKET` is missing).
 
 Companions use `compositor.capabilities` to read the compositor's feature
 report (`sticky`, `virtual_outputs`, `shaders`, `hdr`, `vulkan`, ...), which is
 the same data as `niri msg capabilities --json`.
 The default socket is `$XDG_RUNTIME_DIR/better-companion.sock` (mode `0600`).
 State is persisted under `$XDG_STATE_HOME/better-companion/`.
+
+### Event subscriptions
+
+`{"kind":"subscribe","events":["park","window-focused"]}` replies with
+`{"kind":"subscribed",...}` and then streams `{"kind":"event",...}` lines:
+
+```json
+{"kind":"event","event":"park","payload":{"window":70,"phase":"park"},"seq":41,"timestamp_ms":1764000000000}
+```
+
+An empty `events` array or `"*"` subscribes to every topic. Topics are the same
+names as the adapter event table: `workspace-activated|added|removed|moved`,
+`output-added|removed`, `window-opened|closed|focused|moved`, `park`, `restore`,
+`stage`, `unstage`, `scratchpad-toggle|show|hide`, `idle-transition`,
+`idle-active`, `rotation-applied` and `adapter-delivery` (one event per adapter
+delivery report).
+
+Subscriptions are per connection and never block the daemon: every subscriber
+has a bounded queue, and a client that falls behind is disconnected with a
+final `slow_subscriber` error rather than stalling the tracker or other
+clients. A subscribed connection is read-only; there is no in-band
+`unsubscribe` — close the connection, which ends the stream and removes the
+subscriber. `companionctl subscribe park restore` is a small reference client.
 
 ## Usage
 
@@ -68,9 +106,24 @@ companionctl call system ping
 companionctl call parking park '{"id":"win-1","value":{"title":"editor"}}'
 companionctl call automation set '{"name":"focus","steps":[{"namespace":"system","action":"ping"}]}'
 companionctl call automation run '{"name":"focus"}'
+companionctl --dry-run call automation run '{"name":"focus"}'  # show steps, run nothing
 NIRI_SOCKET=... companionctl call compositor version
 companionctl call compositor action '{"action":{"FocusColumnRight":{}}}'
+
+companionctl explain rules '{"window":10}'      # rules.explain
+companionctl explain windows '{"app_id":"firefox"}'  # windows.find
+companionctl explain adapters '{"event":"workspace-activated"}'
+companionctl history 20
+companionctl config show
+companionctl config validate
+companionctl config reload
+companionctl subscribe park restore
 ```
+
+`--id N` echoes a request id on the response; `--dry-run` adds
+`"dry_run": true` to `call`/`explain` params. `automation.run` and `rules.run`
+honour it by returning their expanded steps without dispatching or recording a
+history entry; idle/rotate/failing-adapter paths already understand it.
 
 `compositor.*` connects to the running niri IPC socket (`$NIRI_SOCKET`, or
 `--socket` on the daemon if it was started with a different environment).
@@ -426,6 +479,7 @@ Every populated field in `match` is ANDed; strings are case-insensitive.
 | `app_id_regex` / `title_regex` | regular expression |
 | `app_id_not` / `title_not` | negated substring |
 | `app_id_not_regex` | negated regular expression |
+| `mark` / `mark_regex` / `mark_not` | window mark from `marks.*` |
 | `workspace` | stable workspace id |
 | `workspace_name` / `workspace_name_regex` | name from `auto:workspaces` |
 | `workspace_idx` | workspace index on its monitor (`idx`) |
@@ -515,6 +569,111 @@ companionctl call windows find '{"output":"HDMI-1"}'
 `parker.park-workspace`/`parker.restore-workspace` accept
 `workspace_name`/`workspace_idx` too, so scripts do not have to look up ids
 first.
+
+## Window marks (`marks.*`)
+
+Marks are short unique names attached to window ids, persisted in
+`$XDG_STATE_HOME/better-companion/marks.json`. They are selectors for
+`windows.find`/`run-or-raise`, are reported by `windows.find`/`list-sticky`,
+and are a rule condition.
+
+```sh
+companionctl call marks set '{"window":70,"mark":"browser"}'   # or omit window for focus
+companionctl call marks get '{"mark":"browser"}'
+companionctl call marks list
+companionctl call marks remove '{"window":70}'
+companionctl call marks reconcile       # drop marks whose window is gone
+companionctl call windows find '{"mark":"browser"}'
+companionctl call windows run-or-raise '{"mark":"browser","spawn":["firefox"]}'
+```
+
+Re-using a mark moves it to the new window and reports `moved_from`. Marks are
+not niri state: `reconcile` (and rule evaluation) tolerate a mark for a window
+that no longer exists by simply not matching it. Rules match `mark` (exact),
+`mark_regex` and `mark_not`.
+
+## Workspace-triggered rules
+
+Rules can be triggered by workspace events instead of window state. Add
+`"trigger": "workspace-activated"` (or `workspace-added`, `workspace-removed`,
+`workspace-moved`) and use workspace fields in `match`; window-only matchers
+are rejected for workspace rules.
+
+```sh
+companionctl call rules set '{
+  "name":"dev-layout",
+  "trigger":"workspace-activated",
+  "match":{"workspace_name":"dev","workspace_output":"eDP-1"},
+  "steps":[{"namespace":"windows","action":"focus-output","params":{"output":"eDP-1"}}]
+}'
+companionctl call rules explain '{"event":"workspace-activated"}'
+companionctl call rules run '{"event":"workspace-activated"}'
+# For a removed workspace, pass its last known state explicitly.
+companionctl call rules explain '{
+  "event":"workspace-removed",
+  "workspace_state":{"id":9,"name":"gone","idx":9,"output":"HDMI-1"}
+}'
+```
+
+Without `workspace_state`, evaluation covers the current `auto:workspaces`
+snapshot. Matches are ordered by numeric workspace id, then rule name, so
+explain/run output is deterministic. `rules.run`/`--dry-run` never mixes window
+rules into a workspace event (and vice versa).
+
+## Automation history (`history.*`)
+
+`automation.run` and `rules.run` append a record to a bounded (256-entry)
+persisted log: timestamp, source, sequence/rule label, expanded steps and
+`{ok, value}` or `{ok:false,error}`. Dry runs are not recorded.
+`$XDG_STATE_HOME/better-companion/history.json` keeps the log across restarts.
+
+```sh
+companionctl history 20
+companionctl call history list '{"limit":5}'
+companionctl call history clear
+```
+
+`history.list` is newest-first and reports `count`, `total` and `capacity`;
+`limit` is capped at 1000.
+
+## Config file and hot reload (`config.*`)
+
+The daemon reads an optional declarative layer at
+`$XDG_CONFIG_HOME/better-companion/config.json` (override with `--config PATH`).
+It is read-only for the daemon and never overwritten; without it every action
+works exactly as before. Sections merge listed entries into live contexts:
+
+```json
+{
+  "rules": {
+    "browser": {
+      "match": { "app_id": "firefox", "mark_not": "scratch" },
+      "steps": [{ "namespace": "parker", "action": "park" }]
+    }
+  },
+  "hooks": { "workspace-activated": ["notify-send switched"] },
+  "automation": {
+    "focus": [{ "namespace": "windows", "action": "focus-output", "params": { "output": "eDP-1" } }]
+  },
+  "adapters": { "audio": { "enabled": false, "dedup_ms": 250 } }
+}
+```
+
+The file is validated at startup (an invalid file stops the daemon with the
+error list) and on demand:
+
+```sh
+companionctl config show
+companionctl config validate
+companionctl config validate '{"config":{"rules":{}}}'
+companionctl config reload
+```
+
+`show` reports the path, existence, parsed content and section counts;
+`validate` returns `{valid, errors, sections}` without applying anything;
+`reload` validates first, then merges rules, hooks, automation sequences and
+adapter defaults into the same live contexts. Nothing is written back to the
+config file, and unlisted stored entries are kept.
 
 ## Terminal swallowing
 
@@ -737,7 +896,10 @@ deterministic order.
   commands and payload; the daemon never executes commands implicitly.
 - `system.ping|status|paths`.
 - `windows.run-or-raise|singleton|find|move-to-workspace|follow-to-workspace|
-  move-to-output|focus-output|toggle-sticky|set-sticky|list-sticky`.
+  move-to-output|focus-output|toggle-sticky|set-sticky|list-sticky`; `find`
+  accepts `mark` and reports each window's current mark.
+- `marks.set|remove|get|list|reconcile`: persistent unique window marks.
+- `history.list|clear`: bounded record of completed rule/automation runs.
 - `parker.park|restore|park-workspace|restore-workspace|list`.
 - `stage.stage|list|activate|unstage|restore|toggle`.
 - `scratchpad.assign|add|toggle|show|restore|hide|list|remove|reconcile`.
@@ -746,7 +908,9 @@ deterministic order.
   `nsticky.scratchpad.add|restore|toggle|list|remove` (compatibility aliases).
 - `swallow.enable|disable|status|list|restore|add-terminal|remove-terminal|
   add-rule|remove-rule|set-ignore|configure|reconcile|reload`.
-- `rules.set|remove|list|explain|apply|run`.
+- `rules.set|remove|list|explain|apply|run`: window rules and
+  workspace-event rules (`trigger`, `event`/`workspace_state` for explain/run).
+- `config.show|validate|reload`: optional config file without writing it.
 - `idle.status|explain|tick|configure|enable|disable|inhibit|uninhibit|reset`.
 - `rotate.status|explain|tick|configure|enable|disable|lock|unlock|set|reset`.
 - `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`, `adapters.*`: optional

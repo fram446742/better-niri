@@ -2,7 +2,9 @@
 //!
 //! `compositor.*` performs actions and queries. `windows.*` adds run-or-raise,
 //! placement (workspace by id/name/index, output by name) and the native sticky
-//! flag. `stage.*` and `scratchpad.*` absorb the nsticky staged-window workflow
+//! flag. `marks.*` persists one unique mark per window id, exposes it in
+//! `windows.find`/`list-sticky`, and accepts marks as selectors.
+//! `stage.*` and `scratchpad.*` absorb the nsticky staged-window workflow
 //! on top of the parking store, and `nsticky.*` offers compatibility aliases for
 //! the old CLI verbs. [`Tracker`] consumes the niri event stream and maintains
 //! two auto-parking lots:
@@ -33,6 +35,7 @@ use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace};
 use serde_json::{Value, json};
 
 mod layout;
+mod marks;
 mod nsticky;
 mod ops;
 mod parker;
@@ -41,6 +44,7 @@ mod stage;
 mod swallow;
 mod windows;
 pub use layout::{WorkspaceTarget, resolve_live_workspace};
+pub use marks::Marks;
 pub use nsticky::Nsticky;
 pub use parker::{DEFAULT_LOT, Parker};
 pub use scratchpad::{SCRATCHPAD_LOT, Scratchpad};
@@ -70,6 +74,18 @@ impl Compositor {
     pub fn at(path: impl Into<PathBuf>) -> Self {
         Self {
             socket: Some(path.into()),
+        }
+    }
+
+    /// Whether a niri IPC socket is currently reachable/configured.
+    ///
+    /// Action metadata uses this to mark compositor-dependent actions
+    /// unavailable when the daemon was started outside a niri session. The
+    /// check is cheap (no connection is opened).
+    pub fn is_available(&self) -> bool {
+        match &self.socket {
+            Some(path) => path.exists(),
+            None => socket_from_env().is_some_and(|path| path.exists()),
         }
     }
 

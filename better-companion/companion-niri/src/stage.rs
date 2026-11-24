@@ -9,7 +9,7 @@
 //! daemon restart keeps the same staged windows. Ordering is by numeric window
 //! id, never by insertion or niri's listing order.
 
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use companion_parking::Parking;
 use serde_json::{Value, json};
 
@@ -132,11 +132,17 @@ impl Context for Stage {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
-        vec![
+        let mut actions = vec![
             ActionInfo::new(
                 "stage",
                 "Stage `window` (or the focused window) by parking it; alias `add`",
-            ),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "list",
                 "List staged windows in numeric window-id order with their snapshots",
@@ -144,12 +150,26 @@ impl Context for Stage {
             ActionInfo::new(
                 "activate",
                 "Bring a staged `window` back; alias `unstage`/`restore`",
-            ),
+            )
+            .with_params([ParamInfo::integer("window", true, "staged window id")])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "toggle",
                 "Activate `window` when it is staged, otherwise stage it",
-            ),
-        ]
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
+        ];
+        if !self.compositor.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {

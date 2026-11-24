@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use companion_core::{ActionInfo, Context, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, load_json, save_json};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -39,6 +39,31 @@ impl Hooks {
     fn save(&self, state: &State) -> Result<(), String> {
         save_json(&self.path, state).map_err(|err| format!("cannot save hooks state: {err}"))
     }
+
+    /// Replaces the command list for each configured event.
+    pub fn apply_config(&self, hooks: &BTreeMap<String, Vec<String>>) -> Result<usize, String> {
+        for (event, commands) in hooks {
+            if event.trim().is_empty() {
+                return Err("hook event must not be empty".to_owned());
+            }
+            if commands.iter().any(|command| command.trim().is_empty()) {
+                return Err(format!("hook `{event}` contains an empty command"));
+            }
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "hooks state lock poisoned".to_owned())?;
+        for (event, commands) in hooks {
+            if commands.is_empty() {
+                state.hooks.remove(event);
+            } else {
+                state.hooks.insert(event.clone(), commands.clone());
+            }
+        }
+        self.save(&state)?;
+        Ok(hooks.len())
+    }
 }
 
 impl Context for Hooks {
@@ -48,13 +73,24 @@ impl Context for Hooks {
 
     fn actions(&self) -> Vec<ActionInfo> {
         vec![
-            ActionInfo::new("add", "Register `command` for `event`"),
-            ActionInfo::new("remove", "Remove `command` from `event`"),
-            ActionInfo::new("list", "List hooks, optionally for one `event`"),
+            ActionInfo::new("add", "Register `command` for `event`").with_params([
+                ParamInfo::string("event", true, "event name"),
+                ParamInfo::string("command", true, "shell command (resolved, not executed)"),
+            ]),
+            ActionInfo::new("remove", "Remove `command` from `event`").with_params([
+                ParamInfo::string("event", true, "event name"),
+                ParamInfo::string("command", true, "command to remove"),
+            ]),
+            ActionInfo::new("list", "List hooks, optionally for one `event`")
+                .with_params([ParamInfo::string("event", false, "filter by event name")]),
             ActionInfo::new(
                 "fire",
                 "Return matching commands for `event` (does not execute)",
-            ),
+            )
+            .with_params([
+                ParamInfo::string("event", true, "event name"),
+                ParamInfo::object("payload", false, "event payload to echo back"),
+            ]),
         ]
     }
 

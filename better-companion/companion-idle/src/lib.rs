@@ -59,7 +59,7 @@ mod inhibit;
 mod policy;
 mod probe;
 
-use companion_core::{ActionInfo, Context, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, load_json, save_json};
 pub use executor::{HostExecutor, IdleExecutor};
 pub use inhibit::{
     AudioInhibitor, FullscreenInhibitor, InhibitState, Inhibitor, covering_output, state_json,
@@ -595,18 +595,39 @@ impl Context for Idle {
             ActionInfo::new(
                 "explain",
                 "Explain due steps without executing; optional `idle_secs`",
-            ),
-            ActionInfo::new("tick", "Execute due steps once (enabled, not dry-run)"),
+            )
+            .with_params([ParamInfo::integer(
+                "idle_secs",
+                false,
+                "hypothetical idle duration in seconds",
+            )]),
+            ActionInfo::new("tick", "Execute due steps once (enabled, not dry-run)")
+                .with_params([ParamInfo::boolean(
+                    "dry_run",
+                    false,
+                    "report due steps without executing",
+                )])
+                .with_permissions(&["shell", "niri"]),
             ActionInfo::new(
                 "configure",
                 "Update policy fields or replace `timeouts` (idempotent)",
-            ),
+            )
+            .with_params([
+                ParamInfo::object("policy", false, "nested policy object"),
+                ParamInfo::boolean("enabled", false, "enable the policy (flat form)"),
+                ParamInfo::array("timeouts", false, "replace timeout list (flat form)"),
+                ParamInfo::boolean("dry_run", false, "force a dry-run policy"),
+            ]),
             ActionInfo::new("enable", "Enable the idle policy"),
             ActionInfo::new("disable", "Disable the idle policy"),
             ActionInfo::new(
                 "inhibit",
                 "Block timeouts (`reason`, optional `duration_secs`)",
-            ),
+            )
+            .with_params([
+                ParamInfo::string("reason", false, "human-readable inhibitor reason"),
+                ParamInfo::integer("duration_secs", false, "expire after this many seconds"),
+            ]),
             ActionInfo::new("uninhibit", "Clear the user-requested inhibitor"),
             ActionInfo::new(
                 "reset",

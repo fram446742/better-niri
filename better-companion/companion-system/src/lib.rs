@@ -26,10 +26,12 @@ impl Context for System {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
+        // These actions take no parameters; an empty `params` list is the
+        // machine-readable equivalent of "no arguments".
         vec![
             ActionInfo::new("ping", "Returns `pong`"),
             ActionInfo::new("status", "Daemon version, pid, uptime and paths"),
-            ActionInfo::new("paths", "Socket and state directory paths"),
+            ActionInfo::new("paths", "Socket, state and config directory paths"),
         ]
     }
 
@@ -46,6 +48,7 @@ impl Context for System {
             "paths" => Ok(json!({
                 "socket": self.socket.display().to_string(),
                 "state_dir": companion_core::state_dir().display().to_string(),
+                "config": companion_core::config_path().display().to_string(),
             })),
             other => Err(format!("unknown action `system.{other}`")),
         }
