@@ -1,0 +1,6 @@
+{
+  "dry_run": false,
+  "backend": "command",
+  "image": "/home/user/Pictures/night.png",
+  "template": "swaybg -i {image}"
+}

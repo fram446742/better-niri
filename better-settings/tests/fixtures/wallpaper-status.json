@@ -1,0 +1,21 @@
+{
+  "active": "night",
+  "scenes": {
+    "day": {
+      "default": "/home/user/Pictures/day.png",
+      "wallpapers": {}
+    },
+    "night": {
+      "default": "/home/user/Pictures/night.png",
+      "wallpapers": {
+        "1": "/home/user/Pictures/night-1.png"
+      }
+    }
+  },
+  "template": "swaybg -i {image}",
+  "backend": {
+    "requested": "auto",
+    "native_available": true,
+    "native_error": null
+  }
+}

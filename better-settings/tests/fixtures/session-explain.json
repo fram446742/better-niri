@@ -1,0 +1,31 @@
+{
+  "context": "work",
+  "dry_run": true,
+  "explain": true,
+  "wait_ms": 2000,
+  "aborted": false,
+  "ok": true,
+  "partial": false,
+  "applied": [
+    {
+      "phase": "output",
+      "target": "DP-1",
+      "action": "set scale"
+    },
+    {
+      "phase": "workspace",
+      "target": "web",
+      "action": "focus workspace"
+    }
+  ],
+  "skipped": [],
+  "unmatched": [],
+  "extra": [],
+  "profiles": [],
+  "hooks": {
+    "pre": [],
+    "activate": [],
+    "post": [],
+    "deactivate": []
+  }
+}

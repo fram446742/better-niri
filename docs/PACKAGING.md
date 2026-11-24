@@ -49,7 +49,7 @@ Values below come from the current manifests. Re-run
 | Wayland / libinput / libdrm / libgbm / libEGL | current Arch packages | See `packaging/arch/PKGBUILD` `depends` for the packaged set. |
 | Vulkan loader + ICD | `vulkan-icd-loader` and a GPU driver | The pinned package builds the Vulkan renderer. Runtime use is opt-in. |
 | D-Bus | session bus | Required by `niri`'s `dbus`/`systemd` features and `better-portal`. |
-| systemd | user manager | Needed for `niri.service`, `niri-session`, `better-portal.service` and companion idle integration. |
+| systemd | user manager | Needed for `niri.service`, `niri-session`, the optional `better-portal.service` and `better-companion.service` units and companion idle integration. |
 | dinit | optional | Only the `full` profile enables niri's `dinit` feature. `resources/dinit/` is not installed by the packages yet. |
 
 ## Installation profiles
@@ -107,7 +107,7 @@ installing a subset never rebuilds niri or another Rust crate.
 | --- | --- | --- | --- |
 | `niri-better` | `niri`, `niri-session` | compositor, session/desktop files, `niri.portal`, `niri-portals.conf`, systemd units, completions, config, docs | niri's GL/Wayland/PipeWire/Vulkan libraries; optional portals, terminal/launcher, GPU drivers |
 | `better-portal` | `better-portal`, `better-portal-picker` | `better.portal`, systemd user unit, D-Bus activation file, example `portals.conf` | `dbus`, `systemd`; optional `xdg-desktop-portal{,-gtk}` |
-| `better-companion` | `better-companion`, `companionctl` | automation/parking daemon and control CLI | `gcc-libs`, `glibc`; optional `systemd`, `libpulse`, `libnotify` |
+| `better-companion` | `better-companion`, `companionctl` | automation/parking daemon, control CLI and optional systemd user unit | `gcc-libs`, `glibc`; optional `systemd`, `libpulse`, `libnotify` |
 | `better-monitor` | `better-monitor` | output profile save/apply/rollback | `gcc-libs`, `glibc` |
 | `better-session` | `better-session` | named workspace/window/output contexts | `gcc-libs`, `glibc` |
 | `better-shot` | `better-shot` | screenshot capture, built-in annotations | `gcc-libs`, `glibc`; optional `satty`, `wl-clipboard` |
@@ -403,10 +403,13 @@ target. `better-desktop` ships no binaries.
   `niri-better` picks up `resources/man/*.1` automatically when they appear.
 - `better-settings` has a desktop entry installed by its package
   (`/usr/share/applications/better-settings.desktop`); it opens the GTK4 UI.
-- `better-companion`, `better-wallpaper watch`, `better-audio watch` and
-  `better-sidepanels` have no upstream systemd units; the meta package
+- `better-companion` ships an optional user unit
+  (`/usr/lib/systemd/user/better-companion.service`); enable it after niri has
+  imported `NIRI_SOCKET` (`systemctl --user enable --now better-companion`).
+  `better-wallpaper watch`, `better-audio watch` and `better-sidepanels` stay
+  process-per-output/GUI apps and have no upstream units; the meta package
   documentation shows `spawn-at-startup` lines and leaves enablement to the
-  user.
+  user. `niri-better` and `better-portal` install their units as before.
 - Debian/Fedora/Nix packaging of the companion workspaces is not provided.
 - The packages are not published: AUR publishing, repository signing and
   hardware validation remain release tasks.

@@ -1,0 +1,10 @@
+{
+  "kind": "status",
+  "version": "better-companion 0.1.0",
+  "pid": 4242,
+  "uptime_secs": 312,
+  "socket": "/run/user/1000/better-companion.sock",
+  "contexts": [
+    "parking"
+  ]
+}

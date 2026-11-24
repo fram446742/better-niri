@@ -1,0 +1,34 @@
+{
+  "context": "work",
+  "dry_run": false,
+  "explain": false,
+  "wait_ms": 2000,
+  "aborted": false,
+  "ok": true,
+  "partial": false,
+  "applied": [
+    {
+      "phase": "output",
+      "target": "DP-1",
+      "action": "set scale"
+    }
+  ],
+  "skipped": [],
+  "unmatched": [],
+  "extra": [],
+  "profiles": [
+    {
+      "kind": "monitor",
+      "status": "applied",
+      "detail": "desk"
+    }
+  ],
+  "hooks": {
+    "pre": [],
+    "activate": [
+      "notify-send work"
+    ],
+    "post": [],
+    "deactivate": []
+  }
+}

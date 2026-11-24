@@ -71,6 +71,24 @@ fn usage() -> &'static str {
        validate                     Structural and catalog round-trip check\n\
        export                       Print the JSON model\n\
        import <file|->              Apply a JSON model (`-` reads stdin)\n\n\
+     Companion app integrations (read-only unless --apply is given):\n\
+       integrations                 Which companion CLIs are installed and their versions\n\
+       displays list|show|preview   better-monitor profiles and dry-run plans\n\
+       displays apply|restore [--apply]\n\
+                                    Preview, then apply or restore with --apply\n\
+       displays confirm|cancel --apply\n\
+                                    Resolve a pending safe apply\n\
+       sessions list|show|explain|activate [--apply]\n\
+                                    better-session contexts and restores\n\
+       wallpaper status|scenes|use|apply [--apply]\n\
+                                    better-wallpaper scenes and applies\n\
+       audio status|sinks|rules|default|apply|restore [--apply]\n\
+                                    better-audio state, routing and restore\n\
+       sidepanels status|validate|path|open [--config PATH]\n\
+                                    Read, validate or open the JSON config\n\
+       companion describe|status|list|run [--apply]\n\
+                                    companionctl registry, status and dry-run calls\n\n\
+     Mutating commands print a preview and refuse to run without --apply.\n\
      Every command accepts --dry-run; mutations also include a unified diff in\n\
      their JSON output. Config defaults to $BETTER_SETTINGS_CONFIG, then\n\
      $NIRI_CONFIG, then $XDG_CONFIG_HOME/niri/config.kdl, then\n\
@@ -615,6 +633,17 @@ fn command(globals: &Globals, text: &str, args: &[String]) -> Result<(String, u8
 
 /// Runs one CLI invocation without touching process globals.
 pub fn run(args: Vec<String>) -> CliOutput {
+    // Companion integrations do not read niri's config, so dispatch them
+    // before config resolution. Their own flags (for example sidepanels
+    // `--config`) must not be consumed by the niri config parser.
+    if let Some(section) = args.first()
+        && crate::integrations::is_section(section)
+    {
+        return match crate::integrations::dispatch(&crate::integrations::SystemRunner, &args) {
+            Ok(stdout) => CliOutput::ok(format!("{stdout}\n")),
+            Err(err) => CliOutput::error(err),
+        };
+    }
     let globals = match parse_globals(args) {
         Ok(globals) => globals,
         Err(err) => return CliOutput::error(err),
@@ -671,6 +700,13 @@ mod tests {
             "validate",
             "export",
             "import",
+            "integrations",
+            "displays",
+            "sessions",
+            "wallpaper",
+            "audio",
+            "sidepanels",
+            "companion",
         ] {
             assert!(output.stdout.contains(command), "missing {command}");
         }

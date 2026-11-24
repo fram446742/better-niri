@@ -266,6 +266,7 @@ EOF
             cat <<'EOF'
 usr/bin/better-companion
 usr/bin/companionctl
+usr/lib/systemd/user/better-companion.service
 usr/share/doc/better-companion/README.md
 usr/share/licenses/better-companion/LICENSE
 EOF
@@ -660,6 +661,7 @@ artifacts=(
     better-portal/packaging/better-portal.service
     better-portal/packaging/org.freedesktop.impl.portal.desktop.better.service
     better-portal/packaging/portals.conf
+    better-companion/packaging/better-companion.service
     docs/PACKAGING.md
 )
 for artifact in "${artifacts[@]}"; do
@@ -669,6 +671,41 @@ for artifact in "${artifacts[@]}"; do
         fail "missing artifact $artifact"
     fi
 done
+
+printf '==> user units\n'
+companion_unit=better-companion/packaging/better-companion.service
+if [ -f "$companion_unit" ]; then
+    if grep -qx 'ExecStart=/usr/bin/better-companion' "$companion_unit"; then
+        pass "better-companion unit runs /usr/bin/better-companion"
+    else
+        fail "better-companion unit has the wrong ExecStart"
+    fi
+    if grep -qx 'Restart=on-failure' "$companion_unit"; then
+        pass "better-companion unit restarts on failure"
+    else
+        fail "better-companion unit is missing Restart=on-failure"
+    fi
+    if grep -qx 'WantedBy=graphical-session.target' "$companion_unit"; then
+        pass "better-companion unit joins graphical-session.target"
+    else
+        fail "better-companion unit has no graphical-session.target install"
+    fi
+    if grep -qE '^(PrivateNetwork|PrivateTmp|ProtectHome|ProtectSystem)=' "$companion_unit"; then
+        fail "better-companion unit hardens paths/network needed by niri IPC"
+    else
+        pass "better-companion unit keeps niri IPC reachable"
+    fi
+    for recipe in "${recipes[@]}"; do
+        if sed -n '/^package_better-companion()/,/^}/p' "$recipe/PKGBUILD" |
+            grep -q "'systemd:"; then
+            pass "$recipe: better-companion optdepends mention systemd"
+        else
+            fail "$recipe: better-companion is missing its systemd optdepend"
+        fi
+    done
+else
+    fail "missing $companion_unit"
+fi
 
 printf '==> scripts\n'
 for file in packaging/scripts/*.sh; do

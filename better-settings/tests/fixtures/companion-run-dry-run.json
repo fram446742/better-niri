@@ -1,0 +1,8 @@
+{
+  "kind": "value",
+  "value": {
+    "dry_run": true,
+    "action": "park",
+    "would": "park the focused window"
+  }
+}

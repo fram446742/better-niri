@@ -1,0 +1,17 @@
+{
+  "kind": "contexts",
+  "contexts": {
+    "parking": [
+      {
+        "name": "park",
+        "description": "Park the focused window",
+        "owner": "parking",
+        "params": [],
+        "permissions": [
+          "niri"
+        ],
+        "available": true
+      }
+    ]
+  }
+}

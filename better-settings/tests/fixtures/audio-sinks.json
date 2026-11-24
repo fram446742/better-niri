@@ -1,0 +1,16 @@
+{
+  "backend": "native",
+  "default": "alsa_output.speakers",
+  "sinks": [
+    {
+      "id": 41,
+      "name": "alsa_output.speakers",
+      "description": "Built-in Speakers"
+    },
+    {
+      "id": 42,
+      "name": "alsa_output.headphones",
+      "description": "Headphones"
+    }
+  ]
+}

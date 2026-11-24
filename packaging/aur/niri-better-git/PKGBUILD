@@ -264,7 +264,7 @@ package_better-companion() {
   pkgdesc="Automation and parking daemon for Better Niri"
   depends=(gcc-libs glibc)
   optdepends=(
-    'systemd: loginctl, busctl and systemctl for idle and lock actions'
+    'systemd: loginctl, busctl and systemctl for idle and lock actions, plus the optional user unit'
     'libpulse: pactl probe for idle detection'
     'libnotify: notify-send in user hooks'
   )
@@ -274,6 +274,9 @@ package_better-companion() {
 
   install -Dm755 "${target}/better-companion" "${pkgdir}/usr/bin/better-companion"
   install -Dm755 "${target}/companionctl" "${pkgdir}/usr/bin/companionctl"
+  # Optional user unit; enable it after niri has imported NIRI_SOCKET.
+  install -Dm644 better-companion/packaging/better-companion.service \
+    "${pkgdir}/usr/lib/systemd/user/better-companion.service"
   _install_doc better-companion better-companion/README.md
   _install_license better-companion
 }

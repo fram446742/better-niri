@@ -1,0 +1,9 @@
+[
+  {
+    "app": "firefox",
+    "sink": "alsa_output.speakers",
+    "priority": 10,
+    "volume": 0.8,
+    "mute": false
+  }
+]

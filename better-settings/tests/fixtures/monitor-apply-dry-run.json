@@ -1,0 +1,37 @@
+{
+  "command": "apply",
+  "ok": true,
+  "data": {
+    "profile": "desk",
+    "status": "planned",
+    "dry_run": true,
+    "resolved": {
+      "DP-1": "DP-1",
+      "eDP-1": "eDP-1"
+    },
+    "actions": [
+      {
+        "output": "eDP-1",
+        "phase": "scale",
+        "action": {
+          "Scale": {
+            "Specific": 1.5
+          }
+        }
+      },
+      {
+        "output": "DP-1",
+        "phase": "on",
+        "action": "On"
+      }
+    ],
+    "applied": [],
+    "errors": [],
+    "warnings": [],
+    "config_only": [],
+    "previous_saved": false,
+    "failed_action": null,
+    "rollback_actions": [],
+    "rollback_errors": []
+  }
+}
