@@ -10,22 +10,22 @@ CLIP=${HDR_CLIP:-/tmp/hdr10-test.mp4}
 DURATION=${HDR_SECONDS:-20}
 command -v mpv >/dev/null || { echo "mpv missing"; exit 1; }
 if [ ! -s "$CLIP" ]; then
-  command -v ffmpeg >/dev/null || { echo "ffmpeg missing and $CLIP not present"; exit 1; }
-  FILTER="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le"
-  COMMON=(-hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=$DURATION" -vf "$FILTER")
-  TAGS=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc)
-  echo "generating HDR10 test clip at $CLIP"
-  # x265 10-bit is the ideal HDR10 carrier; fall back to VP9 10-bit with HDR
-  # colour tags (this ffmpeg build rejects 10-bit x264/x265/SVT-AV1).
-  if ffmpeg "${COMMON[@]}" -c:v libx265 -pix_fmt yuv420p10le "${TAGS[@]}" \
-      -x265-params "hdr-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc" "$CLIP"; then
-    echo "encoded with libx265 (HDR10)"
-  elif ffmpeg "${COMMON[@]}" -c:v libvpx-vp9 -pix_fmt yuv420p10le "${TAGS[@]}" -b:v 0 -crf 24 "$CLIP"; then
-    echo "encoded with libvpx-vp9 (10-bit + HDR colour tags)"
-  else
-    echo "no working 10-bit encoder in this ffmpeg build (tried libx265, libvpx-vp9)" >&2
-    exit 1
-  fi
+  cat >&2 <<'MSG'
+No HDR clip found (and this ffmpeg build cannot synthesize one:
+zscale has "no path between colorspaces" for smpte2084, and libx265/x264/
+SVT-AV1 reject 10-bit here; only VP9 10-bit encodes, but not PQ-converted).
+
+Provide a real HDR10 sample, then rerun:
+  HDR_CLIP=/path/to/hdr10-sample.mp4 ./scripts/pending-checks/hdr.sh
+Any public HDR10 demo clip works (mp4/mkv, color_transfer=smpte2084).
+You can download one manually, e.g. from a trusted HDR demo/test-pattern site.
+MSG
+  command -v ffprobe >/dev/null && { echo "ffprobe not run: no clip"; }
+  exit 1
+fi
+if command -v ffprobe >/dev/null; then
+  TRANSFER=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer -of default=nw=1:nk=1 "$CLIP" 2>/dev/null || true)
+  echo "clip colour transfer: ${TRANSFER:-unknown} (expect smpte2084 for HDR10)"
 fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
 exec mpv --fs --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
