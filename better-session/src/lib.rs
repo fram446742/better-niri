@@ -1,13 +1,15 @@
 //! `better-session`: save and restore named niri contexts.
 //!
 //! A context records workspaces, windows, output configuration (mode, scale,
-//! transform, position, VRR, on/off) and optional pre/post restore hooks.
-//! Restore applies outputs first, then workspaces, then windows, and polls
-//! niri for windows that appear late instead of sleeping for a fixed time.
+//! transform, position, VRR, on/off), optional hooks and optional profiles for
+//! the other Better Desktop apps. Restore applies outputs first, then
+//! workspaces, then windows, and polls niri for windows that appear late
+//! instead of sleeping for a fixed time.
 //!
 //! Contexts live in a versioned JSON store under
 //! `$XDG_STATE_HOME/better-session/contexts.json`. The older
 //! `sessions.json` snapshot format is still read and migrated in memory.
+//! Bounded snapshots live under `$XDG_STATE_HOME/better-session/history/`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -23,6 +25,22 @@ use niri_ipc::{
 use serde::{Deserialize, Serialize, de};
 use serde_json::Value;
 
+pub mod history;
+pub mod launch;
+pub mod profiles;
+pub mod templates;
+
+pub use history::{
+    DEFAULT_HISTORY_KEEP, HISTORY_VERSION, HistoryEntry, HistoryListing, HistoryStore,
+    HistorySummary, history_dir,
+};
+pub use launch::{LaunchEnv, LaunchSource, ResolvedLaunch};
+pub use profiles::{
+    AudioProfile, CompanionProfile, MonitorApply, MonitorProfile, ProfileApplyOptions, ProfileEnv,
+    ProfileHooks, ProfileStatus, Profiles, WallpaperProfile,
+};
+pub use templates::Template;
+
 /// Version of the on-disk context schema.
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -31,6 +49,12 @@ pub const DEFAULT_WAIT_MS: u64 = 2_000;
 
 /// Default poll interval while waiting for late windows.
 pub const DEFAULT_POLL_MS: u64 = 50;
+
+/// Default number of reconnect attempts when a niri request fails.
+pub const DEFAULT_RETRIES: u32 = 3;
+
+/// Backoff base between niri reconnect attempts.
+const RETRY_BASE_MS: u64 = 10;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceSnapshot {
@@ -78,7 +102,12 @@ pub struct OutputSnapshot {
     pub transform: Option<Transform>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<(i32, i32)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "adaptive_sync",
+        alias = "variable_refresh_rate",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub vrr: Option<bool>,
 }
 
@@ -106,20 +135,29 @@ impl OutputSnapshot {
     }
 }
 
-/// User hooks run around a restore.
+/// User hooks run around a restore or deactivation.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Hooks {
     /// Commands run before any output/workspace/window change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre: Vec<String>,
-    /// Commands run after the restore finishes.
+    /// Commands run after the context and its optional profiles are active.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activate: Vec<String>,
+    /// Commands run after the restore finishes (after `activate`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub post: Vec<String>,
+    /// Commands run by `better-session deactivate`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deactivate: Vec<String>,
 }
 
 impl Hooks {
     fn is_empty(&self) -> bool {
-        self.pre.is_empty() && self.post.is_empty()
+        self.pre.is_empty()
+            && self.activate.is_empty()
+            && self.post.is_empty()
+            && self.deactivate.is_empty()
     }
 }
 
@@ -140,6 +178,11 @@ pub struct Context {
     pub outputs: BTreeMap<String, OutputSnapshot>,
     #[serde(default, skip_serializing_if = "Hooks::is_empty")]
     pub hooks: Hooks,
+    #[serde(default, skip_serializing_if = "Profiles::is_empty")]
+    pub profiles: Profiles,
+    /// Built-in template this context was shaped from, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 /// Backwards-compatible name for the window/workspace snapshot.
@@ -243,14 +286,9 @@ impl Store {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(tmp, path)
+        write_atomic(path, &bytes)
     }
 
     pub fn get(&self, name: &str) -> Option<&Context> {
@@ -291,7 +329,44 @@ fn now_secs() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-fn workspace_sort_key(workspace: &WorkspaceSnapshot) -> (String, u8, String, u64) {
+pub(crate) fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis())
+}
+
+/// Writes `bytes` to `path` through a sibling temporary file and rename.
+///
+/// The temporary name includes the process id and a monotonic counter so
+/// concurrent writers cannot steal each other's temporary file.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.json");
+    let tmp = path.with_file_name(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
+    let result = (|| {
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+pub(crate) fn workspace_sort_key(workspace: &WorkspaceSnapshot) -> (String, u8, String, u64) {
     (
         workspace.output.clone().unwrap_or_default(),
         workspace.idx,
@@ -300,7 +375,7 @@ fn workspace_sort_key(workspace: &WorkspaceSnapshot) -> (String, u8, String, u64
     )
 }
 
-fn window_sort_key(window: &WindowSnapshot) -> (String, u8, String, String, String) {
+pub(crate) fn window_sort_key(window: &WindowSnapshot) -> (String, u8, String, String, String) {
     (
         window.workspace_output.clone().unwrap_or_default(),
         window.workspace_idx,
@@ -363,6 +438,7 @@ pub fn capture(
             .map(|(name, output)| (name.clone(), OutputSnapshot::from_output(output)))
             .collect(),
         hooks,
+        ..Context::default()
     }
 }
 
@@ -389,6 +465,10 @@ fn same_window(saved: &WindowSnapshot, current: &Window) -> bool {
         return true;
     }
     current.title.as_deref().unwrap_or_default() == saved.title
+}
+
+fn same_app(saved: &WindowSnapshot, current: &Window) -> bool {
+    !saved.app_id.is_empty() && current.app_id.as_deref() == Some(saved.app_id.as_str())
 }
 
 fn workspace_reference(saved: &WindowSnapshot) -> WorkspaceReferenceArg {
@@ -421,10 +501,21 @@ fn find_match<'a>(
     workspaces: &[Workspace],
     used: &BTreeSet<u64>,
 ) -> Option<&'a Window> {
+    let available = |window: &&Window| !used.contains(&window.id);
     let mut candidates: Vec<&Window> = current
         .iter()
-        .filter(|window| !used.contains(&window.id) && same_window(saved, window))
+        .filter(available)
+        .filter(|window| same_window(saved, window))
         .collect();
+    if candidates.is_empty() {
+        // Titles change while an app runs; fall back to the app id so a restore
+        // does not launch a duplicate before moving the existing window.
+        candidates = current
+            .iter()
+            .filter(available)
+            .filter(|window| same_app(saved, window))
+            .collect();
+    }
     candidates.sort_by_key(|window| {
         let on_saved_workspace = workspace_matches(saved, window, workspaces) as u8;
         let focused = window.is_focused as u8;
@@ -464,6 +555,27 @@ pub struct Step {
     pub target: String,
     pub action: String,
     pub request: Request,
+    /// Re-checked immediately before the request when user changes are
+    /// preserved. `None` means the step is safe regardless of current state.
+    pub guard: Option<Guard>,
+}
+
+/// State guard used to detect user changes made after planning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guard {
+    /// Skip when the output is no longer connected.
+    OutputAlive(String),
+    /// Skip when the window no longer exists.
+    WindowAlive(u64),
+    /// Skip when the window disappeared or already reached `reference`.
+    MoveWindow {
+        id: u64,
+        reference: WorkspaceReferenceArg,
+    },
+    /// Skip when the window disappeared or already has `floating`.
+    Floating { id: u64, floating: bool },
+    /// Skip when the window disappeared or is already focused.
+    FocusWindow(u64),
 }
 
 /// A target whose saved state already matches (or cannot be handled).
@@ -482,6 +594,14 @@ pub struct Unmatched {
     pub reason: String,
 }
 
+/// A live window that no saved window claimed.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ExtraWindow {
+    pub id: u64,
+    pub app_id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Default)]
 pub struct WindowPlan {
     /// Spawn requests, executed before waiting for late windows.
@@ -490,6 +610,8 @@ pub struct WindowPlan {
     pub steps: Vec<Step>,
     pub skipped: Vec<Skipped>,
     pub unmatched: Vec<Unmatched>,
+    /// Live windows left alone because no saved window claimed them.
+    pub extra: Vec<ExtraWindow>,
 }
 
 #[derive(Debug, Default)]
@@ -521,6 +643,7 @@ fn output_step(name: &str, action: OutputAction) -> Step {
             output: name.to_owned(),
             action,
         },
+        guard: Some(Guard::OutputAlive(name.to_owned())),
     }
 }
 
@@ -688,6 +811,7 @@ pub fn plan_workspaces(context: &Context, current: &[Workspace]) -> (Vec<Step>, 
             target: target.clone(),
             action: format!("focus workspace {target}"),
             request: Request::Action(Action::FocusWorkspace { reference }),
+            guard: None,
         });
     };
 
@@ -742,34 +866,65 @@ pub fn plan_workspaces(context: &Context, current: &[Workspace]) -> (Vec<Step>, 
 }
 
 /// Plans window spawns and moves against the current niri state.
+///
+/// Only an explicit `command_map` is used to resolve launches. Use
+/// [`plan_windows_with`] to also resolve `.desktop` files, Flatpaks and
+/// executables.
 pub fn plan_windows(
     context: &Context,
     current_workspaces: &[Workspace],
     current_windows: &[Window],
     allow_spawn: bool,
 ) -> WindowPlan {
+    plan_windows_with(
+        context,
+        current_workspaces,
+        current_windows,
+        allow_spawn,
+        &LaunchEnv::default(),
+    )
+}
+
+/// Plans window spawns and moves, resolving missing apps with `launch_env`.
+///
+/// A given app id is spawned at most once per plan even when several saved
+/// windows share it; the extra windows are awaited by the late-window poll.
+pub fn plan_windows_with(
+    context: &Context,
+    current_workspaces: &[Workspace],
+    current_windows: &[Window],
+    allow_spawn: bool,
+    launch_env: &LaunchEnv,
+) -> WindowPlan {
     let mut plan = WindowPlan::default();
     let mut used = BTreeSet::new();
     let mut focused_window: Option<(u64, String)> = None;
+    let mut spawned = BTreeSet::new();
 
     for saved in &context.windows {
         let Some(current) = find_match(saved, current_windows, current_workspaces, &used) else {
             if allow_spawn {
-                if let Some(command) = context.command_map.get(&saved.app_id) {
-                    plan.spawns.push(Step {
-                        phase: Phase::Window,
-                        target: saved.app_id.clone(),
-                        action: format!("spawn {}", saved.app_id),
-                        request: Request::Action(Action::SpawnSh {
-                            command: command.clone(),
-                        }),
-                    });
-                } else {
-                    plan.unmatched.push(Unmatched {
+                if spawned.contains(&saved.app_id) {
+                    continue;
+                }
+                match launch_env.resolve(&saved.app_id, &context.command_map) {
+                    Some(launch) => {
+                        spawned.insert(saved.app_id.clone());
+                        plan.spawns.push(Step {
+                            phase: Phase::Window,
+                            target: saved.app_id.clone(),
+                            action: format!("spawn {}", saved.app_id),
+                            request: Request::Action(Action::SpawnSh {
+                                command: launch.command,
+                            }),
+                            guard: None,
+                        });
+                    }
+                    None => plan.unmatched.push(Unmatched {
                         phase: Phase::Window,
                         target: saved.app_id.clone(),
                         reason: "no live window and no launch command".to_owned(),
-                    });
+                    }),
                 }
             } else {
                 plan.unmatched.push(Unmatched {
@@ -784,14 +939,19 @@ pub fn plan_windows(
 
         let mut changed = false;
         if !workspace_matches(saved, current, current_workspaces) {
+            let reference = workspace_reference(saved);
             plan.steps.push(Step {
                 phase: Phase::Window,
                 target: saved.app_id.clone(),
                 action: format!("move window {} to workspace", current.id),
                 request: Request::Action(Action::MoveWindowToWorkspace {
                     window_id: Some(current.id),
-                    reference: workspace_reference(saved),
+                    reference: reference.clone(),
                     focus: false,
+                }),
+                guard: Some(Guard::MoveWindow {
+                    id: current.id,
+                    reference,
                 }),
             });
             changed = true;
@@ -809,6 +969,10 @@ pub fn plan_windows(
                     Action::MoveWindowToTiling {
                         id: Some(current.id),
                     }
+                }),
+                guard: Some(Guard::Floating {
+                    id: current.id,
+                    floating: saved.is_floating,
                 }),
             });
             changed = true;
@@ -841,6 +1005,17 @@ pub fn plan_windows(
                 target,
                 action: format!("focus window {id}"),
                 request: Request::Action(Action::FocusWindow { id }),
+                guard: Some(Guard::FocusWindow(id)),
+            });
+        }
+    }
+
+    for window in current_windows {
+        if !used.contains(&window.id) {
+            plan.extra.push(ExtraWindow {
+                id: window.id,
+                app_id: window.app_id.clone().unwrap_or_default(),
+                title: window.title.clone().unwrap_or_default(),
             });
         }
     }
@@ -855,6 +1030,23 @@ pub fn plan_context(
     current_windows: &[Window],
     current_outputs: &Outputs,
 ) -> ContextPlan {
+    plan_context_with(
+        context,
+        current_workspaces,
+        current_windows,
+        current_outputs,
+        &LaunchEnv::default(),
+    )
+}
+
+/// Plans every phase, resolving missing apps with `launch_env`.
+pub fn plan_context_with(
+    context: &Context,
+    current_workspaces: &[Workspace],
+    current_windows: &[Window],
+    current_outputs: &Outputs,
+    launch_env: &LaunchEnv,
+) -> ContextPlan {
     let mut plan = ContextPlan::default();
 
     let (steps, skipped) = plan_outputs(context, current_outputs);
@@ -865,7 +1057,13 @@ pub fn plan_context(
     plan.steps.extend(steps);
     plan.skipped.extend(skipped);
 
-    let windows = plan_windows(context, current_workspaces, current_windows, true);
+    let windows = plan_windows_with(
+        context,
+        current_workspaces,
+        current_windows,
+        true,
+        launch_env,
+    );
     plan.steps.extend(windows.spawns);
     plan.steps.extend(windows.steps);
     plan.skipped.extend(windows.skipped);
@@ -955,25 +1153,56 @@ pub fn plan(
 }
 
 pub fn send(socket: &Path, request: Request) -> Result<Response, String> {
+    send_with_retry(socket, request, 0)
+}
+
+fn is_transient(error: &str) -> bool {
+    error.contains("cannot connect to niri IPC") || error.contains("niri IPC error")
+}
+
+/// Sends one request, reconnecting with exponential backoff up to `retries`.
+pub fn send_with_retry(socket: &Path, request: Request, retries: u32) -> Result<Response, String> {
     use niri_ipc::socket::Socket;
-    let mut socket =
-        Socket::connect_to(socket).map_err(|err| format!("cannot connect to niri IPC: {err}"))?;
-    let reply = socket
-        .send(request)
-        .map_err(|err| format!("niri IPC error: {err}"))?;
-    reply.map_err(|err| format!("niri returned an error: {err}"))
+    let mut attempt = 0;
+    loop {
+        let result = Socket::connect_to(socket)
+            .map_err(|err| format!("cannot connect to niri IPC: {err}"))
+            .and_then(|mut socket| {
+                socket
+                    .send(request.clone())
+                    .map_err(|err| format!("niri IPC error: {err}"))
+            })
+            .and_then(|reply| reply.map_err(|err| format!("niri returned an error: {err}")));
+        match result {
+            Ok(response) => return Ok(response),
+            Err(error) if attempt < retries && is_transient(&error) => {
+                let delay = RETRY_BASE_MS.saturating_mul(1u64 << attempt.min(5));
+                std::thread::sleep(Duration::from_millis(delay));
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 pub fn query(socket: &Path) -> Result<(Vec<Workspace>, Vec<Window>, Outputs), String> {
-    let outputs = match send(socket, Request::Outputs)? {
+    query_with_retry(socket, 0)
+}
+
+/// Queries outputs, workspaces and windows, retrying transient reconnects.
+pub fn query_with_retry(
+    socket: &Path,
+    retries: u32,
+) -> Result<(Vec<Workspace>, Vec<Window>, Outputs), String> {
+    let outputs = match send_with_retry(socket, Request::Outputs, retries)? {
         Response::Outputs(outputs) => outputs.into_iter().collect(),
         other => return Err(format!("unexpected niri response: {other:?}")),
     };
-    let workspaces = match send(socket, Request::Workspaces)? {
+    let workspaces = match send_with_retry(socket, Request::Workspaces, retries)? {
         Response::Workspaces(workspaces) => workspaces,
         other => return Err(format!("unexpected niri response: {other:?}")),
     };
-    let windows = match send(socket, Request::Windows)? {
+    let windows = match send_with_retry(socket, Request::Windows, retries)? {
         Response::Windows(windows) => windows,
         other => return Err(format!("unexpected niri response: {other:?}")),
     };
@@ -989,24 +1218,129 @@ pub struct Applied {
     pub request: Value,
 }
 
+/// Result of executing a plan with user-change guards.
+#[derive(Debug, Default)]
+pub struct ExecutionReport {
+    pub applied: Vec<Applied>,
+    pub skipped: Vec<Skipped>,
+}
+
 /// Sends planned steps, or only records them when `dry_run` is set.
 pub fn execute_steps(socket: &Path, steps: &[Step], dry_run: bool) -> Result<Vec<Applied>, String> {
-    let mut applied = Vec::with_capacity(steps.len());
+    Ok(execute_steps_guarded(socket, steps, dry_run, 0, false)?.applied)
+}
+
+/// Sends planned steps and re-checks guards immediately before each request.
+///
+/// When `preserve_user_changes` is set, a window that disappeared or already
+/// reached the planned state is skipped instead of being moved back. The check
+/// is best-effort: only changes observable through niri IPC are detected.
+pub fn execute_steps_guarded(
+    socket: &Path,
+    steps: &[Step],
+    dry_run: bool,
+    retries: u32,
+    preserve_user_changes: bool,
+) -> Result<ExecutionReport, String> {
+    let mut report = ExecutionReport {
+        applied: Vec::with_capacity(steps.len()),
+        skipped: Vec::new(),
+    };
     for step in steps {
+        if !dry_run
+            && preserve_user_changes
+            && let Some(guard) = &step.guard
+            && let Some(reason) = guard_skip(socket, guard, retries)?
+        {
+            report.skipped.push(Skipped {
+                phase: step.phase,
+                target: step.target.clone(),
+                reason,
+            });
+            continue;
+        }
         if !dry_run {
-            match send(socket, step.request.clone())? {
+            match send_with_retry(socket, step.request.clone(), retries)? {
                 Response::Handled | Response::OutputConfigChanged(_) => (),
                 other => return Err(format!("unexpected niri response: {other:?}")),
             }
         }
-        applied.push(Applied {
+        report.applied.push(Applied {
             phase: step.phase,
             target: step.target.clone(),
             action: step.action.clone(),
             request: serde_json::to_value(&step.request).unwrap_or(Value::Null),
         });
     }
-    Ok(applied)
+    Ok(report)
+}
+
+fn guard_skip(socket: &Path, guard: &Guard, retries: u32) -> Result<Option<String>, String> {
+    match guard {
+        Guard::OutputAlive(name) => {
+            let outputs = match send_with_retry(socket, Request::Outputs, retries)? {
+                Response::Outputs(outputs) => outputs,
+                other => return Err(format!("unexpected niri response: {other:?}")),
+            };
+            Ok((!outputs.contains_key(name)).then(|| "output disconnected before step".to_owned()))
+        }
+        Guard::WindowAlive(id) => {
+            let windows = current_windows(socket, retries)?;
+            Ok((!windows.iter().any(|window| window.id == *id))
+                .then(|| "window disappeared before step".to_owned()))
+        }
+        Guard::MoveWindow { id, reference } => {
+            let windows = current_windows(socket, retries)?;
+            let Some(window) = windows.iter().find(|window| window.id == *id) else {
+                return Ok(Some("window disappeared before step".to_owned()));
+            };
+            let workspaces = current_workspaces(socket, retries)?;
+            let on_target = window.workspace_id.is_some_and(|workspace_id| {
+                workspaces.iter().any(|workspace| {
+                    workspace.id == workspace_id
+                        && match reference {
+                            WorkspaceReferenceArg::Id(id) => workspace.id == *id,
+                            WorkspaceReferenceArg::Index(idx) => workspace.idx == *idx,
+                            WorkspaceReferenceArg::Name(name) => {
+                                workspace.name.as_deref() == Some(name.as_str())
+                            }
+                        }
+                })
+            });
+            Ok(on_target.then(|| "already on the saved workspace (changed by user)".to_owned()))
+        }
+        Guard::Floating { id, floating } => {
+            let windows = current_windows(socket, retries)?;
+            let Some(window) = windows.iter().find(|window| window.id == *id) else {
+                return Ok(Some("window disappeared before step".to_owned()));
+            };
+            Ok((window.is_floating == *floating)
+                .then(|| "floating state already changed by user".to_owned()))
+        }
+        Guard::FocusWindow(id) => {
+            let windows = current_windows(socket, retries)?;
+            let Some(window) = windows.iter().find(|window| window.id == *id) else {
+                return Ok(Some("window disappeared before step".to_owned()));
+            };
+            Ok(window
+                .is_focused
+                .then(|| "window already focused (changed by user)".to_owned()))
+        }
+    }
+}
+
+fn current_windows(socket: &Path, retries: u32) -> Result<Vec<Window>, String> {
+    match send_with_retry(socket, Request::Windows, retries)? {
+        Response::Windows(windows) => Ok(windows),
+        other => Err(format!("unexpected niri response: {other:?}")),
+    }
+}
+
+fn current_workspaces(socket: &Path, retries: u32) -> Result<Vec<Workspace>, String> {
+    match send_with_retry(socket, Request::Workspaces, retries)? {
+        Response::Workspaces(workspaces) => Ok(workspaces),
+        other => Err(format!("unexpected niri response: {other:?}")),
+    }
 }
 
 /// Legacy action executor.
@@ -1022,6 +1356,7 @@ pub fn execute(
             target: label.clone(),
             action: label.clone(),
             request: Request::Action(action.clone()),
+            guard: None,
         })
         .collect();
     let applied = execute_steps(socket, &steps, dry_run)?;
@@ -1030,11 +1365,28 @@ pub fn execute(
 
 /// Runs one hook command with the context environment.
 pub fn run_hook(command: &str, context: &str, phase: &str) -> Result<(), String> {
-    let status = Command::new("sh")
+    run_hook_with(command, context, phase, None, &BTreeMap::new())
+}
+
+/// Runs one hook with an optional profile name and extra environment.
+pub fn run_hook_with(
+    command: &str,
+    context: &str,
+    phase: &str,
+    profile: Option<&str>,
+    extra: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut child = Command::new("sh");
+    child
         .arg("-c")
         .arg(command)
         .env("BETTER_SESSION_CONTEXT", context)
         .env("BETTER_SESSION_PHASE", phase)
+        .envs(extra);
+    if let Some(profile) = profile {
+        child.env("BETTER_SESSION_PROFILE", profile);
+    }
+    let status = child
         .status()
         .map_err(|err| format!("cannot run {phase} hook `{command}`: {err}"))?;
     if status.success() {
@@ -1045,7 +1397,7 @@ pub fn run_hook(command: &str, context: &str, phase: &str) -> Result<(), String>
 }
 
 /// Result of running one hook phase.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HookStatus {
     /// `ok`, `failed`, `skipped` or `none`.
     pub status: String,
@@ -1055,7 +1407,7 @@ pub struct HookStatus {
 }
 
 impl HookStatus {
-    fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self {
             status: "none".to_owned(),
             commands: Vec::new(),
@@ -1063,7 +1415,7 @@ impl HookStatus {
         }
     }
 
-    fn skipped(commands: &[String], reason: &str) -> Self {
+    pub(crate) fn skipped(commands: &[String], reason: &str) -> Self {
         Self {
             status: "skipped".to_owned(),
             commands: commands.to_vec(),
@@ -1071,7 +1423,7 @@ impl HookStatus {
         }
     }
 
-    fn failed(commands: &[String], error: String) -> Self {
+    pub(crate) fn failed(commands: &[String], error: String) -> Self {
         Self {
             status: "failed".to_owned(),
             commands: commands.to_vec(),
@@ -1079,7 +1431,7 @@ impl HookStatus {
         }
     }
 
-    fn ok(commands: &[String]) -> Self {
+    pub(crate) fn ok(commands: &[String]) -> Self {
         Self {
             status: "ok".to_owned(),
             commands: commands.to_vec(),
@@ -1089,11 +1441,22 @@ impl HookStatus {
 }
 
 fn run_hooks(context: &str, phase: &str, commands: &[String]) -> HookStatus {
+    run_hooks_env(context, phase, commands, None, &BTreeMap::new())
+}
+
+/// Runs every command in a phase, stopping at the first failure.
+pub fn run_hooks_env(
+    context: &str,
+    phase: &str,
+    commands: &[String],
+    profile: Option<&str>,
+    extra: &BTreeMap<String, String>,
+) -> HookStatus {
     if commands.is_empty() {
         return HookStatus::none();
     }
     for command in commands {
-        if let Err(error) = run_hook(command, context, phase) {
+        if let Err(error) = run_hook_with(command, context, phase, profile, extra) {
             return HookStatus::failed(commands, error);
         }
     }
@@ -1103,7 +1466,17 @@ fn run_hooks(context: &str, phase: &str, commands: &[String]) -> HookStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct HookReport {
     pub pre: HookStatus,
+    #[serde(default, skip_serializing_if = "HookStatus::is_none")]
+    pub activate: HookStatus,
     pub post: HookStatus,
+    #[serde(default, skip_serializing_if = "HookStatus::is_none")]
+    pub deactivate: HookStatus,
+}
+
+impl HookStatus {
+    fn is_none(&self) -> bool {
+        self.status == "none"
+    }
 }
 
 /// Restore options.
@@ -1119,6 +1492,14 @@ pub struct RestoreOptions {
     pub wait_ms: u64,
     /// Poll interval while waiting.
     pub poll_ms: u64,
+    /// Reconnect attempts for a failing niri socket (per request).
+    pub retries: u32,
+    /// Re-check each step against live state to keep user changes.
+    pub preserve_user_changes: bool,
+    /// Launch resolution for missing apps.
+    pub launch_env: LaunchEnv,
+    /// Locations of optional app profiles and commands.
+    pub profile_env: ProfileEnv,
 }
 
 impl Default for RestoreOptions {
@@ -1129,6 +1510,10 @@ impl Default for RestoreOptions {
             force: false,
             wait_ms: DEFAULT_WAIT_MS,
             poll_ms: DEFAULT_POLL_MS,
+            retries: DEFAULT_RETRIES,
+            preserve_user_changes: true,
+            launch_env: LaunchEnv::default(),
+            profile_env: ProfileEnv::detect(),
         }
     }
 }
@@ -1141,10 +1526,17 @@ pub struct RestoreReport {
     pub explain: bool,
     pub wait_ms: u64,
     pub aborted: bool,
+    /// Core restore succeeded; optional profiles may still be degraded.
     pub ok: bool,
+    /// At least one optional profile was `missing` or `failed`.
+    pub partial: bool,
     pub applied: Vec<Applied>,
     pub skipped: Vec<Skipped>,
     pub unmatched: Vec<Unmatched>,
+    /// Live windows left untouched because no saved window claimed them.
+    pub extra: Vec<ExtraWindow>,
+    /// Optional app profile outcomes, in monitor/audio/wallpaper/companion order.
+    pub profiles: Vec<ProfileStatus>,
     pub hooks: HookReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -1159,15 +1551,29 @@ impl RestoreReport {
             wait_ms: options.wait_ms,
             aborted: false,
             ok: true,
+            partial: false,
             applied: Vec::new(),
             skipped: Vec::new(),
             unmatched: Vec::new(),
+            extra: Vec::new(),
+            profiles: Vec::new(),
             hooks: HookReport {
                 pre: HookStatus::none(),
+                activate: HookStatus::none(),
                 post: HookStatus::none(),
+                deactivate: HookStatus::none(),
             },
             error: None,
         }
+    }
+
+    fn note_profiles(&mut self, statuses: Vec<ProfileStatus>) {
+        if statuses.iter().any(|status| {
+            status.status == profiles::STATUS_FAILED || status.status == profiles::STATUS_MISSING
+        }) {
+            self.partial = true;
+        }
+        self.profiles.extend(statuses);
     }
 }
 
@@ -1191,8 +1597,11 @@ fn all_windows_matched(context: &Context, current_windows: &[Window]) -> bool {
 
 /// Restores a context against a live niri socket.
 ///
-/// Outputs are applied first, then workspaces, then windows. Spawned or late
-/// windows are awaited by polling `Request::Windows` up to `wait_ms`.
+/// Outputs are applied first, then the optional monitor profile, workspaces,
+/// windows and finally audio/wallpaper/companion profiles and the `activate`
+/// hook. Spawned or late windows are awaited by polling `Request::Windows` up
+/// to `wait_ms`. Missing or failing optional apps set `partial` but never abort
+/// the core restore.
 pub fn restore_context(
     socket: &Path,
     name: &str,
@@ -1201,15 +1610,35 @@ pub fn restore_context(
 ) -> Result<RestoreOutcome, String> {
     let dry_run = options.dry_run || options.explain;
     let mut report = RestoreReport::new(name, options);
+    let profile_options = ProfileApplyOptions {
+        dry_run,
+        preserve_user_changes: options.preserve_user_changes,
+        retries: options.retries,
+    };
 
     if dry_run {
         report.hooks.pre = HookStatus::skipped(&context.hooks.pre, "dry-run");
+        report.hooks.activate = HookStatus::skipped(&context.hooks.activate, "dry-run");
         report.hooks.post = HookStatus::skipped(&context.hooks.post, "dry-run");
-        let (workspaces, windows, outputs) = query(socket)?;
-        let plan = plan_context(context, &workspaces, &windows, &outputs);
+        report.hooks.deactivate = HookStatus::none();
+        let (workspaces, windows, outputs) = query_with_retry(socket, options.retries)?;
+        let plan = plan_context_with(
+            context,
+            &workspaces,
+            &windows,
+            &outputs,
+            &options.launch_env,
+        );
         report.applied = execute_steps(socket, &plan.steps, true)?;
         report.skipped = plan.skipped;
         report.unmatched = plan.unmatched;
+        report.note_profiles(profiles::apply_profiles(
+            socket,
+            name,
+            context,
+            &profile_options,
+            &options.profile_env,
+        ));
         return Ok(RestoreOutcome {
             report,
             failure: None,
@@ -1239,33 +1668,73 @@ pub fn restore_context(
         hook_failure = Some(format!("{message} (continuing due to --force)"));
     }
 
-    let (mut workspaces, mut windows, outputs) = query(socket)?;
+    let (mut workspaces, mut windows, outputs) = query_with_retry(socket, options.retries)?;
 
     // 2. Outputs.
     let (steps, skipped) = plan_outputs(context, &outputs);
-    report.applied.extend(execute_steps(socket, &steps, false)?);
+    let outcome = execute_steps_guarded(
+        socket,
+        &steps,
+        false,
+        options.retries,
+        options.preserve_user_changes,
+    )?;
+    report.applied.extend(outcome.applied);
+    report.skipped.extend(outcome.skipped);
     report.skipped.extend(skipped);
 
-    // 3. Workspaces.
+    // 3. Optional monitor profile, before workspaces so geometry is final.
+    if let Some(monitor) = &context.profiles.monitor {
+        report.note_profiles(vec![profiles::apply_monitor_profile(
+            socket,
+            name,
+            monitor,
+            &profile_options,
+            &options.profile_env,
+        )]);
+        let (latest_workspaces, latest_windows, latest_outputs) =
+            query_with_retry(socket, options.retries)?;
+        workspaces = latest_workspaces;
+        windows = latest_windows;
+        let _ = latest_outputs;
+    }
+
+    // 4. Workspaces.
     let (steps, skipped) = plan_workspaces(context, &workspaces);
-    report.applied.extend(execute_steps(socket, &steps, false)?);
+    let outcome = execute_steps_guarded(
+        socket,
+        &steps,
+        false,
+        options.retries,
+        options.preserve_user_changes,
+    )?;
+    report.applied.extend(outcome.applied);
+    report.skipped.extend(outcome.skipped);
     report.skipped.extend(skipped);
 
-    // 4. Spawn missing apps, then wait for late windows by polling.
-    let initial = plan_windows(context, &workspaces, &windows, true);
-    report
-        .applied
-        .extend(execute_steps(socket, &initial.spawns, false)?);
+    // 5. Spawn missing apps, then wait for late windows by polling.
+    let initial = plan_windows_with(context, &workspaces, &windows, true, &options.launch_env);
+    report.applied.extend(
+        execute_steps_guarded(
+            socket,
+            &initial.spawns,
+            false,
+            options.retries,
+            options.preserve_user_changes,
+        )?
+        .applied,
+    );
 
     let missing_before = !all_windows_matched(context, &windows);
     let should_wait = options.wait_ms > 0 && missing_before;
     if !initial.spawns.is_empty() || should_wait {
-        let (mut latest_workspaces, mut latest_windows, _) = query(socket)?;
+        let (mut latest_workspaces, mut latest_windows, _) =
+            query_with_retry(socket, options.retries)?;
         if should_wait {
             let deadline = Instant::now() + Duration::from_millis(options.wait_ms);
             while !all_windows_matched(context, &latest_windows) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(options.poll_ms.max(1)));
-                let (next_workspaces, next_windows, _) = query(socket)?;
+                let (next_workspaces, next_windows, _) = query_with_retry(socket, options.retries)?;
                 latest_workspaces = next_workspaces;
                 latest_windows = next_windows;
             }
@@ -1274,15 +1743,43 @@ pub fn restore_context(
         windows = latest_windows;
     }
 
-    // 5. Windows.
-    let final_plan = plan_windows(context, &workspaces, &windows, false);
-    report
-        .applied
-        .extend(execute_steps(socket, &final_plan.steps, false)?);
+    // 6. Windows.
+    let final_plan = plan_windows_with(context, &workspaces, &windows, false, &options.launch_env);
+    let outcome = execute_steps_guarded(
+        socket,
+        &final_plan.steps,
+        false,
+        options.retries,
+        options.preserve_user_changes,
+    )?;
+    report.applied.extend(outcome.applied);
+    report.skipped.extend(outcome.skipped);
     report.skipped.extend(final_plan.skipped);
     report.unmatched.extend(final_plan.unmatched);
+    report.extra = final_plan.extra;
 
-    // 6. Post hooks. Failures are reported but do not roll anything back.
+    // 7. Audio, wallpaper and companion profiles. Monitor already ran.
+    report.note_profiles(profiles::apply_other_profiles(
+        socket,
+        name,
+        context,
+        &profile_options,
+        &options.profile_env,
+    ));
+
+    // 8. Activate hooks. Failures are reported but do not roll anything back.
+    report.hooks.activate = run_hooks(name, "activate", &context.hooks.activate);
+    if report.hooks.activate.status == "failed" {
+        let message = report
+            .hooks
+            .activate
+            .error
+            .clone()
+            .unwrap_or_else(|| "activate hook failed".to_owned());
+        hook_failure.get_or_insert(message);
+    }
+
+    // 9. Post hooks.
     report.hooks.post = run_hooks(name, "post", &context.hooks.post);
     if report.hooks.post.status == "failed" {
         let message = report
@@ -1305,9 +1802,188 @@ pub fn restore_context(
     })
 }
 
+/// JSON deactivation report.
+#[derive(Debug, Serialize)]
+pub struct DeactivateReport {
+    pub context: String,
+    pub dry_run: bool,
+    pub ok: bool,
+    pub profiles: Vec<ProfileStatus>,
+    pub hooks: HookReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Runs deactivation hooks for a context and its profiles.
+///
+/// No niri state is changed. Profile deactivation is hook-only: the optional
+/// apps expose no portable "deactivate" protocol.
+pub fn deactivate_context(
+    name: &str,
+    context: &Context,
+    dry_run: bool,
+    profile_env: &ProfileEnv,
+) -> DeactivateReport {
+    let mut report = DeactivateReport {
+        context: name.to_owned(),
+        dry_run,
+        ok: true,
+        profiles: Vec::new(),
+        hooks: HookReport {
+            pre: HookStatus::none(),
+            activate: HookStatus::none(),
+            post: HookStatus::none(),
+            deactivate: HookStatus::none(),
+        },
+        error: None,
+    };
+    if dry_run {
+        report.hooks.deactivate = HookStatus::skipped(&context.hooks.deactivate, "dry-run");
+        report.profiles = profiles::deactivate_profiles(name, context, true, profile_env);
+        return report;
+    }
+
+    report.profiles = profiles::deactivate_profiles(name, context, false, profile_env);
+    report.hooks.deactivate = run_hooks(name, "deactivate", &context.hooks.deactivate);
+    let hook_failed = report.hooks.deactivate.status == "failed";
+    let profile_failed = report
+        .profiles
+        .iter()
+        .any(|status| status.status == profiles::STATUS_FAILED);
+    if hook_failed || profile_failed {
+        report.ok = false;
+        report.error = report.hooks.deactivate.error.clone().or_else(|| {
+            report
+                .profiles
+                .iter()
+                .find(|status| status.status == profiles::STATUS_FAILED)
+                .and_then(|status| status.error.clone())
+        });
+    }
+    report
+}
+
+/// Import merge strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportMode {
+    /// Keep existing contexts; imported contexts win on name collisions.
+    Merge,
+    /// Replace the whole store.
+    Replace,
+}
+
+/// Counts from an import.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ImportReport {
+    pub added: Vec<String>,
+    pub updated: Vec<String>,
+    pub removed: Vec<String>,
+    pub replaced: bool,
+}
+
+/// Exports the whole store as a JSON value.
+pub fn export_store(store: &Store) -> Value {
+    serde_json::to_value(store).unwrap_or(Value::Null)
+}
+
+/// Exports one context in a self-describing envelope.
+pub fn export_context(name: &str, context: &Context) -> Value {
+    serde_json::json!({
+        "version": SCHEMA_VERSION,
+        "name": name,
+        "context": context,
+    })
+}
+
+fn checked_version(value: &Value) -> Result<u32, String> {
+    let version = value.get("version").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if version > SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported better-session schema version {version} (this build supports {SCHEMA_VERSION})"
+        ));
+    }
+    Ok(version)
+}
+
+/// Parses an import document into named contexts.
+///
+/// Accepted shapes: a full store (`{"version","contexts"}`), a single-context
+/// envelope (`{"version","name","context"}`), or a plain context when
+/// `fallback_name` is provided.
+pub fn parse_import(
+    value: &Value,
+    fallback_name: Option<&str>,
+) -> Result<BTreeMap<String, Context>, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "import must be a JSON object".to_owned())?;
+    checked_version(value)?;
+    if object.contains_key("contexts") || object.contains_key("sessions") {
+        let store: Store = serde_json::from_value(value.clone())
+            .map_err(|err| format!("invalid context store: {err}"))?;
+        return Ok(store.contexts);
+    }
+    if let Some(context) = object.get("context") {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .or(fallback_name)
+            .ok_or_else(|| "single-context import needs a name".to_owned())?
+            .to_owned();
+        let context: Context = serde_json::from_value(context.clone())
+            .map_err(|err| format!("invalid context `{name}`: {err}"))?;
+        return Ok(BTreeMap::from([(name, context)]));
+    }
+    let name = fallback_name
+        .ok_or_else(|| "plain context import needs --name".to_owned())?
+        .to_owned();
+    let context: Context = serde_json::from_value(value.clone())
+        .map_err(|err| format!("invalid context `{name}`: {err}"))?;
+    Ok(BTreeMap::from([(name, context)]))
+}
+
+/// Merges or replaces contexts in `store` from an import document.
+pub fn import_into(
+    store: &mut Store,
+    value: &Value,
+    mode: ImportMode,
+    fallback_name: Option<&str>,
+) -> Result<ImportReport, String> {
+    let imported = parse_import(value, fallback_name)?;
+    let mut report = ImportReport {
+        replaced: mode == ImportMode::Replace,
+        ..ImportReport::default()
+    };
+    match mode {
+        ImportMode::Merge => {
+            for (name, context) in imported {
+                if store.contexts.contains_key(&name) {
+                    report.updated.push(name.clone());
+                } else {
+                    report.added.push(name.clone());
+                }
+                store.contexts.insert(name, context);
+            }
+        }
+        ImportMode::Replace => {
+            for name in store.contexts.keys() {
+                if !imported.contains_key(name) {
+                    report.removed.push(name.clone());
+                }
+            }
+            store.contexts = imported;
+        }
+    }
+    report.added.sort();
+    report.updated.sort();
+    report.removed.sort();
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1457,20 +2133,43 @@ mod tests {
         }
     }
 
-    fn start_fake(name: &str, mut state: FakeState) -> FakeNiri {
+    fn start_fake(name: &str, state: FakeState) -> FakeNiri {
+        start_fake_after(name, Duration::ZERO, state)
+    }
+
+    /// Starts a fake niri socket after a delay, to exercise reconnect retries.
+    fn start_fake_after(name: &str, delay: Duration, mut state: FakeState) -> FakeNiri {
         if state.next_workspace_id == 0 {
             state.next_workspace_id = 100;
         }
         let dir = temp_dir(name);
         let path = dir.join("niri.sock");
-        let listener = UnixListener::bind(&path).unwrap();
-        listener.set_nonblocking(true).unwrap();
+        let early_listener = if delay.is_zero() {
+            Some(UnixListener::bind(&path).unwrap())
+        } else {
+            None
+        };
         let state = Arc::new(std::sync::Mutex::new(state));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::spawn({
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
+            let path = path.clone();
             move || {
+                let listener = match early_listener {
+                    Some(listener) => listener,
+                    None => {
+                        std::thread::sleep(delay);
+                        if stop.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        match UnixListener::bind(&path) {
+                            Ok(listener) => listener,
+                            Err(_) => return,
+                        }
+                    }
+                };
+                listener.set_nonblocking(true).unwrap();
                 while !stop.load(Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((stream, _)) => handle_fake(stream, &state),
@@ -2051,6 +2750,7 @@ mod tests {
             hooks: Hooks {
                 pre: vec!["true".to_owned()],
                 post: vec!["exit 3".to_owned()],
+                ..Hooks::default()
             },
             ..Context::default()
         };
@@ -2094,6 +2794,659 @@ mod tests {
         assert_eq!(old.command_map["editor"], "alacritty");
         assert!(old.outputs.is_empty());
         assert!(old.hooks.pre.is_empty());
+    }
+
+    fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
+    fn test_profile_env(bin: Option<&Path>, state: &Path) -> ProfileEnv {
+        let mut path_dirs = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        if let Some(bin) = bin {
+            path_dirs.insert(0, bin.to_path_buf());
+        }
+        ProfileEnv {
+            path_dirs: Some(path_dirs),
+            monitor_state: state.join("profiles.json"),
+            audio_config_dir: state.join("better-audio"),
+            companion_socket: None,
+        }
+    }
+
+    fn empty_options(profile_env: ProfileEnv) -> RestoreOptions {
+        RestoreOptions {
+            wait_ms: 0,
+            launch_env: LaunchEnv::default(),
+            profile_env,
+            ..RestoreOptions::default()
+        }
+    }
+
+    #[test]
+    fn plan_resolves_desktop_files_and_deduplicates_spawns() {
+        let root = temp_dir("plan-desktop");
+        std::fs::create_dir_all(root.join("applications")).unwrap();
+        std::fs::write(
+            root.join("applications/firefox.desktop"),
+            "[Desktop Entry]\nExec=firefox --new-window %U\n",
+        )
+        .unwrap();
+        let launch_env = LaunchEnv::with_dirs(vec![root], vec![]);
+        let context = capture(
+            &[workspace(1, 1, Some("work"))],
+            &[
+                window(10, "firefox", 1, false),
+                window(11, "firefox", 1, false),
+            ],
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            Hooks::default(),
+        );
+        let plan = plan_windows_with(&context, &[], &[], true, &launch_env);
+        assert_eq!(plan.spawns.len(), 1, "one launch per app id");
+        match &plan.spawns[0].request {
+            Request::Action(Action::SpawnSh { command }) => {
+                assert_eq!(command, "firefox --new-window")
+            }
+            other => panic!("unexpected spawn request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn changed_titles_match_by_app_id_before_spawning_a_duplicate() {
+        let saved_workspaces = vec![workspace(1, 1, Some("work"))];
+        let saved_windows = vec![window(10, "firefox", 1, false)];
+        let mut commands = BTreeMap::new();
+        commands.insert("firefox".to_owned(), "firefox".to_owned());
+        let context = capture(
+            &saved_workspaces,
+            &saved_windows,
+            &BTreeMap::new(),
+            commands,
+            Hooks::default(),
+        );
+        let current_workspaces = vec![workspace(1, 1, Some("work"))];
+        let mut live = window_state(20, "firefox", 1, false, true);
+        live.title = Some("Mail - new message".to_owned());
+        let plan = plan_windows_with(
+            &context,
+            &current_workspaces,
+            &[live],
+            true,
+            &LaunchEnv::default(),
+        );
+        assert!(plan.spawns.is_empty(), "must not spawn a duplicate");
+        assert!(plan.steps.is_empty());
+    }
+
+    #[test]
+    fn plan_uses_flatpak_when_installed_and_has_no_native_binary() {
+        let launch_env = LaunchEnv {
+            data_dirs: vec![],
+            path_dirs: vec![],
+            flatpak_apps: Some(BTreeSet::from(["org.example.Game".to_owned()])),
+        };
+        let context = capture(
+            &[],
+            &[window(10, "org.example.Game", 1, false)],
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            Hooks::default(),
+        );
+        let plan = plan_windows_with(&context, &[], &[], true, &launch_env);
+        match &plan.spawns[0].request {
+            Request::Action(Action::SpawnSh { command }) => {
+                assert_eq!(command, "flatpak run org.example.Game")
+            }
+            other => panic!("unexpected spawn request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extra_windows_are_reported_and_left_alone() {
+        let context = capture(
+            &[workspace(1, 1, Some("work"))],
+            &[window(10, "firefox", 1, false)],
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            Hooks::default(),
+        );
+        let current_workspaces = vec![workspace(1, 1, Some("work"))];
+        let current_windows = vec![
+            window_state(20, "firefox", 1, false, true),
+            window_state(21, "firefox", 1, false, false),
+        ];
+        let plan = plan_windows_with(
+            &context,
+            &current_workspaces,
+            &current_windows,
+            false,
+            &LaunchEnv::default(),
+        );
+        assert_eq!(plan.extra.len(), 1);
+        assert_eq!(plan.extra[0].id, 21);
+    }
+
+    #[test]
+    fn monitor_profile_is_applied_over_niri_ipc() {
+        let dir = temp_dir("monitor-ipc");
+        std::fs::write(
+            dir.join("profiles.json"),
+            serde_json::to_vec_pretty(&json!({
+                "version": 2,
+                "profiles": {
+                    "wide": {
+                        "version": 2,
+                        "outputs": {
+                            "eDP-1": { "off": false, "scale": 2.0 }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let fake = start_fake(
+            "monitor-ipc-server",
+            FakeState {
+                outputs: outputs([output("eDP-1", 1.0, false)]),
+                ..FakeState::default()
+            },
+        );
+        let context = Context {
+            profiles: Profiles {
+                monitor: Some(MonitorProfile {
+                    profile: "wide".to_owned(),
+                    apply: MonitorApply::Auto,
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let outcome = restore_context(
+            &fake.path,
+            "work",
+            &context,
+            &empty_options(test_profile_env(None, &dir)),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.profiles.len(), 1);
+        assert_eq!(outcome.report.profiles[0].status, "applied");
+        assert!(!outcome.report.partial);
+        assert_eq!(
+            fake.state.lock().unwrap().outputs["eDP-1"]
+                .logical
+                .unwrap()
+                .scale,
+            2.0
+        );
+    }
+
+    #[test]
+    fn monitor_falls_back_to_the_command_when_the_profile_is_missing() {
+        let dir = temp_dir("monitor-command");
+        let bin = dir.join("bin");
+        let recorder = dir.join("recorder");
+        write_script(
+            &bin,
+            "better-monitor",
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
+                recorder.display()
+            ),
+        );
+        let fake = start_fake("monitor-command-server", FakeState::default());
+        let context = Context {
+            profiles: Profiles {
+                monitor: Some(MonitorProfile {
+                    profile: "wide".to_owned(),
+                    apply: MonitorApply::Auto,
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let outcome = restore_context(
+            &fake.path,
+            "work",
+            &context,
+            &empty_options(test_profile_env(Some(&bin), &dir)),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.profiles[0].status, "applied");
+        let recorded = std::fs::read_to_string(&recorder).unwrap();
+        assert!(recorded.contains("apply wide"), "{recorded}");
+    }
+
+    #[test]
+    fn audio_wallpaper_and_companion_use_their_commands() {
+        let dir = temp_dir("other-profiles");
+        let bin = dir.join("bin");
+        let recorder = dir.join("recorder");
+        let audio_config = dir.join("audio.json");
+        std::fs::write(&audio_config, "{}").unwrap();
+        write_script(
+            &bin,
+            "better-audio",
+            &format!(
+                "#!/bin/sh\nprintf 'audio %s\\n' \"$*\" >> {}\n",
+                recorder.display()
+            ),
+        );
+        write_script(
+            &bin,
+            "better-wallpaper",
+            &format!(
+                "#!/bin/sh\nprintf 'wallpaper %s\\n' \"$*\" >> {}\n",
+                recorder.display()
+            ),
+        );
+        write_script(
+            &bin,
+            "companionctl",
+            &format!(
+                "#!/bin/sh\nprintf 'companion %s marks=%s\\n' \"$*\" \"$BETTER_SESSION_COMPANION_MARKS\" >> {}\n",
+                recorder.display()
+            ),
+        );
+        let fake = start_fake("other-profiles-server", FakeState::default());
+        let context = Context {
+            profiles: Profiles {
+                audio: Some(AudioProfile {
+                    profile: "work".to_owned(),
+                    config: Some(audio_config),
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                wallpaper: Some(WallpaperProfile {
+                    scene: "night".to_owned(),
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                companion: Some(CompanionProfile {
+                    rules: Vec::new(),
+                    marks: BTreeMap::from([("project".to_owned(), "work".to_owned())]),
+                    calls: vec!["rules.run".to_owned()],
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let outcome = restore_context(
+            &fake.path,
+            "work",
+            &context,
+            &empty_options(test_profile_env(Some(&bin), &dir)),
+        )
+        .unwrap();
+        let statuses: Vec<_> = outcome
+            .report
+            .profiles
+            .iter()
+            .map(|status| (status.profile.as_str(), status.status.as_str()))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                ("audio", "applied"),
+                ("wallpaper", "applied"),
+                ("companion", "applied")
+            ]
+        );
+        assert!(!outcome.report.partial);
+        let recorded = std::fs::read_to_string(&recorder).unwrap();
+        assert!(recorded.contains("audio --config"), "{recorded}");
+        assert!(recorded.contains("wallpaper --socket"), "{recorded}");
+        assert!(recorded.contains("scene use night"), "{recorded}");
+        assert!(recorded.contains("wallpaper --socket"), "{recorded}");
+        assert!(recorded.contains("companion call rules run"), "{recorded}");
+        assert!(
+            recorded.contains("marks={\"project\":\"work\"}"),
+            "{recorded}"
+        );
+    }
+
+    #[test]
+    fn optional_profile_failures_mark_partial_but_do_not_abort() {
+        let dir = temp_dir("partial");
+        let fake = start_fake("partial-server", FakeState::default());
+        let context = Context {
+            profiles: Profiles {
+                monitor: Some(MonitorProfile {
+                    profile: "missing".to_owned(),
+                    apply: MonitorApply::Auto,
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                audio: Some(AudioProfile {
+                    profile: "broken".to_owned(),
+                    config: None,
+                    command: Some("exit 4".to_owned()),
+                    hooks: ProfileHooks::default(),
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let outcome = restore_context(
+            &fake.path,
+            "work",
+            &context,
+            &empty_options(test_profile_env(None, &dir)),
+        )
+        .unwrap();
+        assert!(outcome.report.ok);
+        assert!(outcome.report.partial);
+        assert!(!outcome.report.aborted);
+        assert_eq!(outcome.report.profiles[0].status, "missing");
+        assert_eq!(outcome.report.profiles[1].status, "failed");
+        assert!(outcome.failure.is_none());
+    }
+
+    #[test]
+    fn dry_run_skips_profile_commands_and_hooks() {
+        let dir = temp_dir("profile-dry");
+        let recorder = dir.join("recorder");
+        let fake = start_fake("profile-dry-server", FakeState::default());
+        let context = Context {
+            profiles: Profiles {
+                audio: Some(AudioProfile {
+                    profile: "work".to_owned(),
+                    config: None,
+                    command: Some(format!("printf 'ran' >> {}", recorder.display())),
+                    hooks: ProfileHooks {
+                        activate: vec!["exit 9".to_owned()],
+                        ..ProfileHooks::default()
+                    },
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let mut options = empty_options(test_profile_env(None, &dir));
+        options.dry_run = true;
+        let outcome = restore_context(&fake.path, "work", &context, &options).unwrap();
+        assert_eq!(outcome.report.profiles[0].status, "skipped");
+        assert_eq!(
+            outcome.report.profiles[0].activate.as_ref().unwrap().status,
+            "skipped"
+        );
+        assert!(!recorder.exists());
+        assert_eq!(outcome.report.hooks.activate.status, "skipped");
+    }
+
+    #[test]
+    fn activate_and_deactivate_hooks_run_in_order_with_phase_env() {
+        let dir = temp_dir("hook-phases");
+        let file = dir.join("phases");
+        let path = file.display().to_string();
+        let context = Context {
+            hooks: Hooks {
+                activate: vec![format!(
+                    "printf 'activate:%s\\n' \"$BETTER_SESSION_PHASE\" >> {path}"
+                )],
+                deactivate: vec![format!(
+                    "printf 'deactivate:%s\\n' \"$BETTER_SESSION_PHASE\" >> {path}"
+                )],
+                ..Hooks::default()
+            },
+            profiles: Profiles {
+                audio: Some(AudioProfile {
+                    profile: "work".to_owned(),
+                    config: None,
+                    command: Some("true".to_owned()),
+                    hooks: ProfileHooks {
+                        activate: vec![format!(
+                            "printf 'profile:%s:%s\\n' \"$BETTER_SESSION_PROFILE\" \"$BETTER_SESSION_PHASE\" >> {path}"
+                        )],
+                        deactivate: vec![format!(
+                            "printf 'profile:%s:%s\\n' \"$BETTER_SESSION_PROFILE\" \"$BETTER_SESSION_PHASE\" >> {path}"
+                        )],
+                    },
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let fake = start_fake("hook-phases-server", FakeState::default());
+        let options = empty_options(test_profile_env(None, &dir));
+        let outcome = restore_context(&fake.path, "work", &context, &options).unwrap();
+        assert!(outcome.failure.is_none());
+        assert_eq!(outcome.report.hooks.activate.status, "ok");
+        assert_eq!(
+            outcome.report.profiles[0].activate.as_ref().unwrap().status,
+            "ok"
+        );
+
+        let report = deactivate_context("work", &context, false, &options.profile_env);
+        assert!(report.ok, "{report:?}");
+        assert_eq!(report.hooks.deactivate.status, "ok");
+        assert_eq!(report.profiles[0].deactivate.as_ref().unwrap().status, "ok");
+
+        let lines: Vec<String> = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "profile:audio:activate",
+                "activate:activate",
+                "profile:audio:deactivate",
+                "deactivate:deactivate"
+            ]
+        );
+
+        let dry = deactivate_context("work", &context, true, &options.profile_env);
+        assert!(dry.dry_run);
+        assert_eq!(dry.hooks.deactivate.status, "skipped");
+        assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 4);
+    }
+
+    #[test]
+    fn guards_skip_steps_that_user_changes_already_satisfied() {
+        let fake = start_fake(
+            "guards",
+            FakeState {
+                workspaces: vec![workspace_state(1, 1, Some("work"), "eDP-1", true, true)],
+                windows: vec![window_state(20, "firefox", 1, false, true)],
+                outputs: outputs([output("eDP-1", 1.0, false)]),
+                ..FakeState::default()
+            },
+        );
+        let steps = vec![
+            Step {
+                phase: Phase::Window,
+                target: "firefox".to_owned(),
+                action: "focus".to_owned(),
+                request: Request::Action(Action::FocusWindow { id: 20 }),
+                guard: Some(Guard::FocusWindow(20)),
+            },
+            Step {
+                phase: Phase::Window,
+                target: "firefox".to_owned(),
+                action: "tile".to_owned(),
+                request: Request::Action(Action::MoveWindowToTiling { id: Some(20) }),
+                guard: Some(Guard::Floating {
+                    id: 20,
+                    floating: false,
+                }),
+            },
+            Step {
+                phase: Phase::Window,
+                target: "firefox".to_owned(),
+                action: "move".to_owned(),
+                request: Request::Action(Action::MoveWindowToWorkspace {
+                    window_id: Some(20),
+                    reference: WorkspaceReferenceArg::Name("work".to_owned()),
+                    focus: false,
+                }),
+                guard: Some(Guard::MoveWindow {
+                    id: 20,
+                    reference: WorkspaceReferenceArg::Name("work".to_owned()),
+                }),
+            },
+            Step {
+                phase: Phase::Window,
+                target: "gone".to_owned(),
+                action: "focus".to_owned(),
+                request: Request::Action(Action::FocusWindow { id: 99 }),
+                guard: Some(Guard::WindowAlive(99)),
+            },
+            Step {
+                phase: Phase::Output,
+                target: "DP-9".to_owned(),
+                action: "set scale".to_owned(),
+                request: Request::Output {
+                    output: "DP-9".to_owned(),
+                    action: OutputAction::Off,
+                },
+                guard: Some(Guard::OutputAlive("DP-9".to_owned())),
+            },
+        ];
+        let outcome = execute_steps_guarded(&fake.path, &steps, false, 0, true).unwrap();
+        assert!(outcome.applied.is_empty());
+        assert_eq!(outcome.skipped.len(), 5);
+        assert!(
+            outcome
+                .skipped
+                .iter()
+                .all(|skipped| !skipped.reason.is_empty())
+        );
+
+        let outcome = execute_steps_guarded(&fake.path, &steps, false, 0, false).unwrap();
+        assert_eq!(outcome.applied.len(), 5);
+        assert!(outcome.skipped.is_empty());
+    }
+
+    #[test]
+    fn restore_reconnects_to_a_late_niri_socket() {
+        let fake = start_fake_after(
+            "retry-socket",
+            Duration::from_millis(40),
+            FakeState::default(),
+        );
+        let context = Context::default();
+        let mut options = empty_options(test_profile_env(None, Path::new("/nonexistent")));
+        options.retries = 8;
+        let outcome = restore_context(&fake.path, "work", &context, &options).unwrap();
+        assert!(outcome.report.ok);
+
+        options.retries = 0;
+        let missing = Path::new("/nonexistent/better-session.sock");
+        assert!(restore_context(missing, "work", &context, &options).is_err());
+    }
+
+    #[test]
+    fn companion_rules_run_all_when_no_calls_are_selected() {
+        let dir = temp_dir("companion-rules");
+        let bin = dir.join("bin");
+        let recorder = dir.join("recorder");
+        write_script(
+            &bin,
+            "companionctl",
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
+                recorder.display()
+            ),
+        );
+        let fake = start_fake("companion-rules-server", FakeState::default());
+        let context = Context {
+            profiles: Profiles {
+                companion: Some(CompanionProfile {
+                    rules: vec!["work".to_owned()],
+                    marks: BTreeMap::new(),
+                    calls: Vec::new(),
+                    command: None,
+                    hooks: ProfileHooks::default(),
+                }),
+                ..Profiles::default()
+            },
+            ..Context::default()
+        };
+        let mut env = test_profile_env(Some(&bin), &dir);
+        env.companion_socket = Some(dir.join("companion.sock"));
+        let outcome = restore_context(&fake.path, "work", &context, &empty_options(env)).unwrap();
+        assert_eq!(outcome.report.profiles[0].status, "applied");
+        let recorded = std::fs::read_to_string(&recorder).unwrap();
+        assert!(recorded.contains("--socket"), "{recorded}");
+        assert!(recorded.contains("call rules run"), "{recorded}");
+    }
+
+    #[test]
+    fn import_export_round_trip_merge_replace_and_validation() {
+        let mut source = Store::default();
+        source.insert("work", sample_context());
+        source.insert("home", Context::default());
+        let exported = export_store(&source);
+
+        let mut target = Store::default();
+        target.insert("work", Context::default());
+        target.insert("old", Context::default());
+        let report = import_into(&mut target, &exported, ImportMode::Merge, None).unwrap();
+        assert_eq!(report.added, ["home"]);
+        assert_eq!(report.updated, ["work"]);
+        assert_eq!(target.get("work"), source.get("work"));
+
+        let single = export_context("desk", &sample_context());
+        let report = import_into(&mut target, &single, ImportMode::Merge, None).unwrap();
+        assert_eq!(report.added, ["desk"]);
+
+        let report = import_into(&mut target, &single, ImportMode::Replace, None).unwrap();
+        assert!(report.replaced);
+        assert_eq!(report.removed, ["home", "old", "work"]);
+        assert_eq!(target.contexts.len(), 1);
+        assert!(target.get("desk").is_some());
+
+        let plain = serde_json::to_value(sample_context()).unwrap();
+        assert!(import_into(&mut target, &plain, ImportMode::Merge, None).is_err());
+        import_into(&mut target, &plain, ImportMode::Merge, Some("plain")).unwrap();
+        assert!(target.get("plain").is_some());
+
+        let newer = json!({ "version": SCHEMA_VERSION + 1, "contexts": {} });
+        let error = import_into(&mut target, &newer, ImportMode::Merge, None).unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+    }
+
+    #[test]
+    fn version_one_contexts_without_new_fields_still_load() {
+        let path = temp_path("v1-new-fields");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "contexts": {
+                    "legacy": {
+                        "created_at": 1,
+                        "windows": [],
+                        "workspaces": [],
+                        "outputs": {},
+                        "hooks": { "pre": ["true"], "post": ["true"] }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let store = Store::load(&path).unwrap();
+        let context = store.get("legacy").unwrap();
+        assert!(context.profiles.is_empty());
+        assert!(context.template.is_none());
+        assert!(context.hooks.activate.is_empty());
+        assert!(context.hooks.deactivate.is_empty());
     }
 
     #[test]

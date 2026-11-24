@@ -1,0 +1,55 @@
+{
+  "command_map": {
+    "{{mail_app}}": "{{mail_cmd}}",
+    "{{meeting_app}}": "{{meeting_cmd}}",
+    "{{docs_app}}": "{{docs_cmd}}"
+  },
+  "workspaces": [
+    {
+      "id": 1,
+      "name": "mail",
+      "idx": 1,
+      "is_active": true,
+      "is_focused": true
+    },
+    {
+      "id": 2,
+      "name": "meet",
+      "idx": 2
+    },
+    {
+      "id": 3,
+      "name": "docs",
+      "idx": 3
+    }
+  ],
+  "windows": [
+    {
+      "app_id": "{{mail_app}}",
+      "title": "",
+      "workspace_id": 1,
+      "workspace_name": "mail",
+      "workspace_idx": 1,
+      "is_floating": false,
+      "is_focused": true
+    },
+    {
+      "app_id": "{{meeting_app}}",
+      "title": "",
+      "workspace_id": 2,
+      "workspace_name": "meet",
+      "workspace_idx": 2,
+      "is_floating": true,
+      "is_focused": false
+    },
+    {
+      "app_id": "{{docs_app}}",
+      "title": "",
+      "workspace_id": 3,
+      "workspace_name": "docs",
+      "workspace_idx": 3,
+      "is_floating": false,
+      "is_focused": false
+    }
+  ]
+}
