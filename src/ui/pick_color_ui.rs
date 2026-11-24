@@ -6,11 +6,12 @@ use pango::FontDescription;
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::output::Output;
 use smithay::utils::{Logical, Physical, Point, Size, Transform};
 
+use crate::backend::tty::TtyOffscreen;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::to_physical_precise_round;
 
@@ -65,7 +66,7 @@ pub struct Magnifier {
     output: Output,
     location: Point<f64, Logical>,
     zoom: f64,
-    buffer: TextureBuffer<GlesTexture>,
+    buffer: TextureBuffer<TtyOffscreen>,
 }
 
 impl PickColorUi {
@@ -152,7 +153,7 @@ impl PickColorUi {
     /// Updates the magnifier from a newly captured region.
     ///
     /// Returns whether the magnifier changed and needs a redraw.
-    pub fn set_region(&mut self, renderer: &mut GlesRenderer, new: Region) -> bool {
+    pub fn set_region<R: NiriRenderer>(&mut self, renderer: &mut R, new: Region) -> bool {
         let Self::Open {
             region,
             magnifier,
@@ -220,8 +221,7 @@ impl PickColorUi {
                     None,
                     None,
                     Kind::Unspecified,
-                )
-                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+                ),
             ));
         }
     }
@@ -272,11 +272,11 @@ fn magnifier_half(scale: f64, zoom: f64) -> i32 {
 /// hex value in the lower part of the lens.
 ///
 /// Returns the buffer and the physical position of the magnifier center within it.
-fn render_magnifier(
-    renderer: &mut GlesRenderer,
+fn render_magnifier<R: NiriRenderer>(
+    renderer: &mut R,
     data: &Region,
     zoom: f64,
-) -> anyhow::Result<(TextureBuffer<GlesTexture>, Point<i32, Physical>)> {
+) -> anyhow::Result<(TextureBuffer<TtyOffscreen>, Point<i32, Physical>)> {
     let _span = tracy_client::span!("pick_color_ui::render_magnifier");
 
     let scale = data.scale;
@@ -400,7 +400,10 @@ fn render_magnifier(
 
     // The lens is centered on the picked pixel.
     let center = c.round() as i32;
-    Ok((buffer, Point::from((center, center))))
+    Ok((
+        buffer.map_texture(R::wrap_texture),
+        Point::from((center, center)),
+    ))
 }
 
 fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
@@ -411,4 +414,81 @@ fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
     cr.arc(x + r, y + r, r, PI, PI + FRAC_PI_2);
     cr.close_path();
+}
+
+/// Real-renderer test for the magnifier bake and colour sampling on Vulkan. It skips silently on
+/// machines without a usable Vulkan device.
+#[cfg(all(test, feature = "vulkan"))]
+mod tests {
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::output::{Output, PhysicalProperties, Subpixel};
+    use smithay::utils::{Physical, Point, Size};
+
+    use super::*;
+
+    #[test]
+    fn vulkan_pick_color_magnifier_and_sampling() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+
+            let output = Output::new(
+                "pick-color-test".to_owned(),
+                PhysicalProperties {
+                    size: Size::from((64, 64)),
+                    subpixel: Subpixel::Unknown,
+                    make: String::new(),
+                    model: String::new(),
+                    serial_number: String::new(),
+                },
+            );
+
+            let side = 3;
+            let mut pixels = Vec::new();
+            for _ in 0..side * side {
+                pixels.extend_from_slice(&[10, 20, 30, 255]);
+            }
+            let region = Region {
+                output: output.clone(),
+                scale: 1.,
+                pos: Point::from((1., 1.)),
+                output_size: Size::<i32, Physical>::from((64, 64)),
+                origin: Point::from((0, 0)),
+                side,
+                pixels,
+            };
+
+            // Bakes the magnifier through `render_magnifier()` on Vulkan and checks that the
+            // result is a Vulkan offscreen texture, not a silently skipped GLES-only path.
+            let (buffer, _center) =
+                render_magnifier(&mut renderer, &region, DEFAULT_ZOOM).expect("bake magnifier");
+            assert!(
+                matches!(buffer.texture(), TtyOffscreen::Vulkan(_)),
+                "magnifier texture is not a Vulkan offscreen texture"
+            );
+
+            let mut ui = PickColorUi::new();
+            ui.open();
+            assert!(ui.set_region(&mut renderer, region));
+
+            let picked = ui
+                .color_at(&output, Point::from((1., 1.)))
+                .expect("color under the pointer");
+            assert_eq!(
+                picked.rgb,
+                [10. / 255., 20. / 255., 30. / 255.],
+                "unexpected picked color"
+            );
+            return;
+        }
+    }
 }
