@@ -1,9 +1,13 @@
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use better_audio::backends::{self, BackendConfig, BackendKind, Selection};
-use better_audio::{Rule, Store, apply_once, config_path, execute_restore, plan_restore};
+use better_audio::{
+    ChangeGate, DeviceSnapshot, FocusContext, HotplugWatcher, Rule, Store, apply_once_with_context,
+    config_path, execute, execute_profile, execute_restore, explain_stream, plan_profile,
+    plan_profile_restore, plan_restore, plan_signature, plan_with_context,
+};
 use serde_json::json;
 
 fn usage() -> &'static str {
@@ -15,21 +19,32 @@ fn usage() -> &'static str {
        --wpctl PATH               wpctl executable (default $BETTER_AUDIO_WPCTL or `wpctl`)\n\
        --pw-dump PATH             pw-dump executable (default $BETTER_AUDIO_PW_DUMP)\n\
        --pw-cli PATH              pw-cli executable (default $BETTER_AUDIO_PW_CLI)\n\
+       --focus-command CMD        Command printing focused-window JSON\n\
+                                  (default $BETTER_AUDIO_FOCUS_COMMAND)\n\
        --dry-run                  Print planned changes without applying them\n\n\
      Commands:\n\
        sinks                      List playback sinks\n\
+       sources                    List capture sources (input devices)\n\
        streams                    List playback streams (app + current sink)\n\
+       links                      List PipeWire links (diagnostics)\n\
        rules                      List rules\n\
        rules add <app> <sink> [--priority N] [--volume 0..1] [--mute on|off]\n\
        rules remove <index>       Remove the rule at that index\n\
        default <sink|none>        Set (or clear) the default sink\n\
+       profile list               List named profiles\n\
+       profile show <name>        Print one profile\n\
+       profile apply <name>       Apply a sink/source/volume/mute profile\n\
+       profile restore            Restore defaults from before the profile\n\
        apply [--dry-run]          Route matching streams once\n\
        restore [--dry-run]        Move remembered streams back to their original sink\n\
        watch [--interval-ms N]    Keep routing new streams (default 2000 ms)\n\
+       diagnose                   Backend, devices, links and why rules matched\n\
        status                     Show the active backend, why, and current state\n\n\
      App patterns are case-insensitive substrings or globs (`*`, `?`);\n\
-     sink references are exact names or unique substrings.\n\
-     Rules may set a linear per-stream volume (1.0 == 100%) and mute state."
+     sink/source references are exact names or unique substrings.\n\
+     Rules may set a linear per-stream volume (1.0 == 100%) and mute state.\n\
+     Optional `binary`, `title` and `workspace` rule fields match the focused\n\
+     window context (from --focus-command); every matching stream is routed."
 }
 
 struct Options {
@@ -41,6 +56,7 @@ struct Options {
     volume: Option<f32>,
     mute: Option<bool>,
     interval: Duration,
+    focus_command: Option<String>,
     args: Vec<String>,
 }
 
@@ -64,6 +80,9 @@ fn parse_options() -> Result<Options, String> {
         volume: None,
         mute: None,
         interval: Duration::from_millis(2000),
+        focus_command: std::env::var("BETTER_AUDIO_FOCUS_COMMAND")
+            .ok()
+            .filter(|command| !command.trim().is_empty()),
         args: Vec::new(),
     };
 
@@ -88,6 +107,7 @@ fn parse_options() -> Result<Options, String> {
             "--wpctl" => options.backend_config.wpctl = value("--wpctl")?,
             "--pw-dump" => options.backend_config.pw_dump = value("--pw-dump")?,
             "--pw-cli" => options.backend_config.pw_cli = value("--pw-cli")?,
+            "--focus-command" => options.focus_command = Some(value("--focus-command")?),
             "--priority" => {
                 options.priority = value("--priority")?
                     .parse()
@@ -137,6 +157,21 @@ fn select(options: &Options) -> Result<Selection, String> {
     backends::select(options.backend, &options.backend_config)
 }
 
+/// Reads the focused window/workspace JSON from the configured command.
+fn focus_context(options: &Options) -> Option<FocusContext> {
+    let command = options.focus_command.as_deref()?;
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|err| eprintln!("better-audio: focus command failed: {err}"))
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    FocusContext::from_json(String::from_utf8_lossy(&output.stdout).trim())
+}
+
 fn run() -> Result<(), String> {
     let options = parse_options()?;
     let Some(command) = options.args.first().cloned() else {
@@ -161,6 +196,32 @@ fn run() -> Result<(), String> {
                 .unwrap()
             );
         }
+        "sources" => {
+            let selection = select(&options)?;
+            let sources = selection.backend.sources()?;
+            let default = selection.backend.default_source()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "backend": selection.status.active.as_str(),
+                    "default": default,
+                    "sources": sources,
+                }))
+                .unwrap()
+            );
+        }
+        "links" => {
+            let selection = select(&options)?;
+            let links = selection.backend.links()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "backend": selection.status.active.as_str(),
+                    "links": links,
+                }))
+                .unwrap()
+            );
+        }
         "streams" => {
             let selection = select(&options)?;
             let sinks = selection.backend.sinks()?;
@@ -177,6 +238,7 @@ fn run() -> Result<(), String> {
                     json!({
                         "id": stream.id,
                         "app": stream.app,
+                        "binary": stream.binary,
                         "media_name": stream.media_name,
                         "sink": sink,
                         "volume": stream.volume,
@@ -212,6 +274,7 @@ fn run() -> Result<(), String> {
                     priority: options.priority,
                     volume: options.volume,
                     mute: options.mute,
+                    ..Rule::default()
                 };
                 store.rules.push(rule.clone());
                 store
@@ -252,9 +315,188 @@ fn run() -> Result<(), String> {
                 .map_err(|err| format!("cannot save state: {err}"))?;
             println!("{}", json!({ "default_sink": store.default_sink }));
         }
+        "default-source" => {
+            let source = options
+                .args
+                .get(1)
+                .ok_or_else(|| "default-source needs a source or `none`".to_owned())?;
+            let selection = select(&options)?;
+            if source == "none" {
+                store.default_source = None;
+            } else {
+                let sources = selection.backend.sources()?;
+                let resolved = better_audio::resolve_source(&sources, source)
+                    .ok_or_else(|| format!("source `{source}` does not resolve"))?;
+                let name = resolved.name.clone();
+                if !options.dry_run {
+                    selection.backend.set_default_source(&name)?;
+                }
+                store.default_source = Some(name);
+            }
+            if !options.dry_run {
+                store
+                    .save(&options.config)
+                    .map_err(|err| format!("cannot save state: {err}"))?;
+            }
+            println!("{}", json!({ "default_source": store.default_source }));
+        }
+        "profile" => {
+            let sub = options
+                .args
+                .get(1)
+                .map(String::as_str)
+                .ok_or_else(|| "profile needs list/show/apply/restore".to_owned())?;
+            match sub {
+                "list" => {
+                    println!("{}", serde_json::to_string_pretty(&store.profiles).unwrap());
+                }
+                "show" => {
+                    let name = options
+                        .args
+                        .get(2)
+                        .ok_or_else(|| "profile show needs a name".to_owned())?;
+                    let profile = store
+                        .profiles
+                        .get(name)
+                        .ok_or_else(|| format!("unknown profile `{name}`"))?;
+                    println!("{}", serde_json::to_string_pretty(profile).unwrap());
+                }
+                "apply" => {
+                    let name = options
+                        .args
+                        .get(2)
+                        .ok_or_else(|| "profile apply needs a name".to_owned())?
+                        .clone();
+                    let selection = select(&options)?;
+                    let sinks = selection.backend.sinks()?;
+                    let sources = selection.backend.sources()?;
+                    let streams = selection.backend.streams()?;
+                    let current_sink = selection.backend.default_sink()?;
+                    let current_source = selection.backend.default_source()?;
+                    let plan = plan_profile(
+                        &store,
+                        &name,
+                        &sinks,
+                        &sources,
+                        &streams,
+                        current_sink.as_deref(),
+                        current_source.as_deref(),
+                    )?;
+                    let executed =
+                        execute_profile(selection.backend.as_ref(), &plan, options.dry_run)?;
+                    if !options.dry_run {
+                        if let Some(remember) = plan.remember.clone() {
+                            store.profile_restore = Some(remember);
+                        }
+                        store.active_profile = Some(name.clone());
+                        store
+                            .save(&options.config)
+                            .map_err(|err| format!("cannot save state: {err}"))?;
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "backend": selection.status.active.as_str(),
+                            "dry_run": options.dry_run,
+                            "profile": name,
+                            "executed": executed,
+                            "unresolved": plan.unresolved,
+                        }))
+                        .unwrap()
+                    );
+                }
+                "restore" => {
+                    let selection = select(&options)?;
+                    let sinks = selection.backend.sinks()?;
+                    let sources = selection.backend.sources()?;
+                    let current_sink = selection.backend.default_sink()?;
+                    let current_source = selection.backend.default_source()?;
+                    let plan = plan_profile_restore(
+                        &store,
+                        &sinks,
+                        &sources,
+                        current_sink.as_deref(),
+                        current_source.as_deref(),
+                    );
+                    let executed =
+                        execute_profile(selection.backend.as_ref(), &plan, options.dry_run)?;
+                    if !options.dry_run {
+                        store.profile_restore = None;
+                        store.active_profile = None;
+                        store
+                            .save(&options.config)
+                            .map_err(|err| format!("cannot save state: {err}"))?;
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "backend": selection.status.active.as_str(),
+                            "dry_run": options.dry_run,
+                            "restored": plan.name,
+                            "executed": executed,
+                            "unresolved": plan.unresolved,
+                        }))
+                        .unwrap()
+                    );
+                }
+                other => return Err(format!("unknown profile command `{other}`")),
+            }
+        }
+        "diagnose" => {
+            let selection = select(&options)?;
+            let sinks = selection.backend.sinks()?;
+            let sources = selection.backend.sources()?;
+            let streams = selection.backend.streams()?;
+            let links = selection.backend.links()?;
+            let focus = focus_context(&options);
+            let explanations: Vec<_> = streams
+                .iter()
+                .map(|stream| explain_stream(&store, stream, focus.as_ref()))
+                .collect();
+            let attempted: Vec<_> = selection
+                .status
+                .attempts
+                .iter()
+                .map(|attempt| json!({ "backend": attempt.kind.as_str(), "error": attempt.error }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "backend": {
+                        "active": selection.status.active.as_str(),
+                        "description": selection.status.active_description,
+                        "degraded": selection.status.degraded,
+                        "reason": selection.status.explanation(),
+                        "attempts": attempted,
+                    },
+                    "devices": {
+                        "sinks": sinks,
+                        "sources": sources,
+                        "default_sink": selection.backend.default_sink()?,
+                        "default_source": selection.backend.default_source()?,
+                    },
+                    "links": links,
+                    "focus": focus.as_ref().map(|focus| json!({
+                        "app": focus.app,
+                        "title": focus.title,
+                        "workspace": focus.workspace,
+                    })),
+                    "rules": store.rules,
+                    "streams": explanations,
+                    "profiles": store.profiles,
+                }))
+                .unwrap()
+            );
+        }
         "apply" => {
             let selection = select(&options)?;
-            let (plan, executed) = apply_once(selection.backend.as_ref(), &store, options.dry_run)?;
+            let focus = focus_context(&options);
+            let (plan, executed) = apply_once_with_context(
+                selection.backend.as_ref(),
+                &store,
+                focus.as_ref(),
+                options.dry_run,
+            )?;
             let remembered = plan.remember.len();
             if !options.dry_run && remembered > 0 {
                 store.remember(plan.remember.clone());
@@ -270,6 +512,11 @@ fn run() -> Result<(), String> {
                     "executed": executed,
                     "unresolved": plan.unresolved,
                     "remembered": remembered,
+                    "focus": focus.as_ref().map(|focus| json!({
+                        "app": focus.app,
+                        "title": focus.title,
+                        "workspace": focus.workspace,
+                    })),
                 }))
                 .unwrap()
             );
@@ -305,22 +552,70 @@ fn run() -> Result<(), String> {
                 selection.status.explanation(),
                 selection.status.active_description
             );
+            let mut hotplug = HotplugWatcher::new();
+            let mut gate = ChangeGate::new();
             loop {
-                match apply_once(selection.backend.as_ref(), &store, options.dry_run) {
-                    Ok((plan, executed)) => {
-                        if !options.dry_run && !plan.remember.is_empty() {
-                            store.remember(plan.remember);
-                            if let Err(err) = store.save(&options.config) {
-                                eprintln!("better-audio: cannot save state: {err}");
-                            }
+                let focus = focus_context(&options);
+                match DeviceSnapshot::read(selection.backend.as_ref()) {
+                    Ok(devices) => {
+                        if hotplug.observe(devices.clone()) {
+                            eprintln!(
+                                "better-audio: devices changed ({} sinks, {} sources)",
+                                devices.sinks.len(),
+                                devices.sources.len()
+                            );
                         }
-                        for line in executed {
-                            println!("{line}");
+                        match selection.backend.streams() {
+                            Ok(streams) => {
+                                let mut plan = plan_with_context(
+                                    &store,
+                                    &devices.sinks,
+                                    &streams,
+                                    devices.default_sink.as_deref(),
+                                    focus.as_ref(),
+                                );
+                                plan.default_source = better_audio::plan_default_source(
+                                    &store,
+                                    &devices.sources,
+                                    devices.default_source.as_deref(),
+                                );
+                                let has_work = !plan.moves.is_empty()
+                                    || !plan.profiles.is_empty()
+                                    || plan.default.is_some()
+                                    || plan.default_source.is_some();
+                                if !has_work {
+                                    gate.reset();
+                                } else if gate.allow(plan_signature(&plan)) {
+                                    match execute(
+                                        selection.backend.as_ref(),
+                                        &plan,
+                                        options.dry_run,
+                                    ) {
+                                        Ok(executed) => {
+                                            if !options.dry_run && !plan.remember.is_empty() {
+                                                store.remember(plan.remember);
+                                                if let Err(err) = store.save(&options.config) {
+                                                    eprintln!(
+                                                        "better-audio: cannot save state: {err}"
+                                                    );
+                                                }
+                                            }
+                                            for line in executed {
+                                                println!("{line}");
+                                            }
+                                        }
+                                        Err(err) => eprintln!("better-audio: {err}"),
+                                    }
+                                }
+                                for line in &plan.unresolved {
+                                    eprintln!("better-audio: unresolved {line}");
+                                }
+                            }
+                            Err(err) => eprintln!("better-audio: {err}"),
                         }
                     }
                     Err(err) => eprintln!("better-audio: {err}"),
                 }
-                println!("---");
                 std::thread::sleep(options.interval);
             }
         }

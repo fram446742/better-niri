@@ -5,7 +5,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use super::{AudioBackend, BackendKind};
-use crate::{Sink, Stream};
+use crate::{Sink, Source, Stream};
 
 #[derive(Debug, Clone)]
 pub struct PactlBackend {
@@ -67,6 +67,10 @@ impl AudioBackend for PactlBackend {
         parse_streams(&self.run(&["-f", "json", "list", "sink-inputs"])?)
     }
 
+    fn sources(&self) -> Result<Vec<Source>, String> {
+        parse_sources(&self.run(&["-f", "json", "list", "sources"])?)
+    }
+
     fn default_sink(&self) -> Result<Option<String>, String> {
         match self.run(&["get-default-sink"]) {
             Ok(name) => {
@@ -76,6 +80,20 @@ impl AudioBackend for PactlBackend {
             // Older pactl builds lack `get-default-sink`.
             Err(_) => Ok(None),
         }
+    }
+
+    fn default_source(&self) -> Result<Option<String>, String> {
+        match self.run(&["get-default-source"]) {
+            Ok(name) => {
+                let name = name.trim().to_owned();
+                Ok((!name.is_empty()).then_some(name))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn set_default_source(&self, source: &str) -> Result<(), String> {
+        self.run(&["set-default-source", source]).map(|_| ())
     }
 
     fn move_stream(&self, stream_id: u32, sink: &str) -> Result<(), String> {
@@ -136,6 +154,34 @@ pub fn parse_sinks(json: &str) -> Result<Vec<Sink>, String> {
     Ok(sinks)
 }
 
+pub fn parse_sources(json: &str) -> Result<Vec<Source>, String> {
+    let value: Value =
+        serde_json::from_str(json).map_err(|err| format!("invalid sources JSON: {err}"))?;
+    let array = value
+        .as_array()
+        .ok_or_else(|| "sources JSON is not an array".to_owned())?;
+    let mut sources = Vec::new();
+    for entry in array {
+        let Some(id) = entry.get("index").and_then(Value::as_u64) else {
+            continue;
+        };
+        sources.push(Source {
+            id: id as u32,
+            name: entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            description: entry
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        });
+    }
+    Ok(sources)
+}
+
 pub fn parse_streams(json: &str) -> Result<Vec<Stream>, String> {
     let value: Value =
         serde_json::from_str(json).map_err(|err| format!("invalid streams JSON: {err}"))?;
@@ -177,10 +223,15 @@ pub fn parse_streams(json: &str) -> Result<Vec<Stream>, String> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        let binary = properties
+            .get("application.process.binary")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         streams.push(Stream {
             id: id as u32,
             sink_id,
             app,
+            binary,
             media_name,
             volume: parse_volume(entry),
             mute: entry.get("mute").and_then(Value::as_bool),
@@ -228,6 +279,7 @@ mod tests {
 
         let streams = parse_streams(STREAMS).unwrap();
         assert_eq!(streams[0].app, "Spotify");
+        assert_eq!(streams[0].binary.as_deref(), Some("spotify"));
         assert_eq!(streams[0].media_name, "Song");
         assert_eq!(streams[0].sink_id, Some(2));
         assert_eq!(streams[0].volume, Some(0.125));
@@ -261,5 +313,19 @@ mod tests {
         assert!(error.contains("not an array"), "{error}");
         let error = parse_streams("[] trailing").unwrap_err();
         assert!(error.contains("invalid streams JSON"), "{error}");
+    }
+
+    #[test]
+    fn parses_sources_and_ignores_entries_without_an_index() {
+        let sources = parse_sources(
+            r#"[{"index":7,"name":"alsa_input.usb-mic","description":"Mic"},
+                {"name":"broken"}]"#,
+        )
+        .unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, 7);
+        assert_eq!(sources[0].name, "alsa_input.usb-mic");
+        assert_eq!(sources[0].description, "Mic");
+        assert!(parse_sources("{}").unwrap_err().contains("not an array"));
     }
 }

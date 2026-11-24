@@ -4,16 +4,19 @@ use std::process::ExitCode;
 use better_wallpaper::backend::{Backend, Selection, select};
 use better_wallpaper::native::{self, Mode};
 use better_wallpaper::{
-    Scene, Store, apply_once, command_template, state_path, watch, workspace_plan,
+    Scene, Store, apply_once, command_template, session_name, state_path, watch, workspace_plan,
 };
 
 fn usage() -> &'static str {
     "better-wallpaper [--socket PATH] [--backend=auto|native|command] <command>\n\n\
      Commands:\n\
        scene set <scene> <workspace|default> <image>\n\
-       scene use <scene>\n\
+       scene use <scene>             Make a scene the global active one\n\
+       scene session <session> <scene>  Bind a scene to a session name\n\
        scene list\n\
        scene show <scene>\n\
+       scene export <scene> [path]   Print (or write) scene JSON\n\
+       scene import <path> [name]    Import scene JSON\n\
        scene delete <scene>\n\
        apply [--dry-run]             Apply to every output now (native keeps running)\n\
        watch [--dry-run]             Follow niri and reapply on focus changes\n\
@@ -23,7 +26,9 @@ fn usage() -> &'static str {
        native   built-in wlr-layer-shell background renderer (no external program)\n\
        command  external command template per output, from $BETTER_WALLPAPER_COMMAND\n\
                 (default `swaybg -i {image}`) with {image}, {workspace} and {output}\n\n\
-     $BETTER_WALLPAPER_BACKEND sets the default backend; --socket defaults to $NIRI_SOCKET."
+     $BETTER_WALLPAPER_BACKEND sets the default backend; --socket defaults to $NIRI_SOCKET.\n\
+     --session overrides $BETTER_WALLPAPER_SESSION / $BETTER_SESSION_CONTEXT for\n\
+     per-session scene selection."
 }
 
 fn main() -> ExitCode {
@@ -40,6 +45,7 @@ fn run_cli() -> Result<(), String> {
     let mut socket = std::env::var_os("NIRI_SOCKET").map(PathBuf::from);
     let mut dry_run = false;
     let mut backend = None;
+    let mut session = session_name();
     let mut args = Vec::new();
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -49,6 +55,12 @@ fn run_cli() -> Result<(), String> {
                     iter.next()
                         .ok_or_else(|| "--socket needs a path".to_owned())?,
                 ))
+            }
+            "--session" => {
+                session = Some(
+                    iter.next()
+                        .ok_or_else(|| "--session needs a name".to_owned())?,
+                );
             }
             "--backend" => {
                 let value = iter
@@ -124,6 +136,48 @@ fn run_cli() -> Result<(), String> {
                         .map_err(|err| format!("cannot save state: {err}"))?;
                     println!("{}", serde_json::json!({ "active": name }));
                 }
+                "session" => {
+                    let session = args
+                        .get(2)
+                        .ok_or_else(|| "scene session needs a session name".to_owned())?;
+                    let scene = args
+                        .get(3)
+                        .ok_or_else(|| "scene session needs a scene name".to_owned())?;
+                    store.use_scene_for_session(session, scene)?;
+                    store
+                        .save(&state)
+                        .map_err(|err| format!("cannot save state: {err}"))?;
+                    println!(
+                        "{}",
+                        serde_json::json!({ "session": session, "scene": scene })
+                    );
+                }
+                "export" => {
+                    let name = args
+                        .get(2)
+                        .ok_or_else(|| "scene export needs a scene name".to_owned())?;
+                    let text = store.export_scene(name)?;
+                    match args.get(3) {
+                        Some(path) => {
+                            std::fs::write(path, format!("{text}\n"))
+                                .map_err(|err| format!("cannot write {path}: {err}"))?;
+                            println!("{}", serde_json::json!({ "exported": name, "path": path }));
+                        }
+                        None => println!("{text}"),
+                    }
+                }
+                "import" => {
+                    let path = args
+                        .get(2)
+                        .ok_or_else(|| "scene import needs a path".to_owned())?;
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|err| format!("cannot read {path}: {err}"))?;
+                    let name = store.import_scene(&text, args.get(3).map(String::as_str))?;
+                    store
+                        .save(&state)
+                        .map_err(|err| format!("cannot save state: {err}"))?;
+                    println!("{}", serde_json::json!({ "imported": name }));
+                }
                 "list" => {
                     let names: Vec<_> = store.scenes.keys().cloned().collect();
                     println!("{}", serde_json::to_string_pretty(&names).unwrap());
@@ -157,13 +211,14 @@ fn run_cli() -> Result<(), String> {
         }
         "apply" => {
             let requested = requested_backend(backend)?;
-            let scene = active_scene(&store)?;
+            let scene = active_scene(&store, session.as_deref())?;
             let socket = socket()?;
             if dry_run {
                 if requested == Backend::Command {
                     // Keep the original single-workspace dry-run output for the
                     // command backend.
-                    let image = apply_once(&socket, &store, true)?;
+                    let image =
+                        apply_once(&socket, &session_store(&store, session.as_deref()), true)?;
                     print_json(&serde_json::json!({
                         "dry_run": true,
                         "backend": requested.as_str(),
@@ -171,13 +226,19 @@ fn run_cli() -> Result<(), String> {
                         "template": command_template(),
                     }));
                 } else {
-                    print_plan(requested, &socket, &store, true, "apply")?;
+                    print_plan(
+                        requested,
+                        &socket,
+                        &session_store(&store, session.as_deref()),
+                        true,
+                        "apply",
+                    )?;
                 }
                 return Ok(());
             }
             let selection = select(requested, native::probe())?;
             if !matches!(selection, Selection::Native) {
-                let image = apply_once(&socket, &store, false)?;
+                let image = apply_once(&socket, &session_store(&store, session.as_deref()), false)?;
                 print_json(&serde_json::json!({
                     "dry_run": false,
                     "backend": selection.as_str(),
@@ -186,7 +247,13 @@ fn run_cli() -> Result<(), String> {
                 }));
                 return Ok(());
             }
-            if let Err(err) = print_plan(requested, &socket, &store, false, "apply") {
+            if let Err(err) = print_plan(
+                requested,
+                &socket,
+                &session_store(&store, session.as_deref()),
+                false,
+                "apply",
+            ) {
                 eprintln!("better-wallpaper: {err}; continuing with the scene default");
             }
             eprintln!(
@@ -197,7 +264,8 @@ fn run_cli() -> Result<(), String> {
                 Ok(()) => Ok(()),
                 Err(native::NativeError::Unsupported(reason)) if requested == Backend::Auto => {
                     eprintln!("better-wallpaper: {reason}; using the command backend");
-                    let image = apply_once(&socket, &store, false)?;
+                    let image =
+                        apply_once(&socket, &session_store(&store, session.as_deref()), false)?;
                     print_json(&serde_json::json!({
                         "dry_run": false,
                         "backend": "command",
@@ -211,16 +279,27 @@ fn run_cli() -> Result<(), String> {
         }
         "watch" => {
             let requested = requested_backend(backend)?;
-            let scene = active_scene(&store)?;
+            let scene = active_scene(&store, session.as_deref())?;
             let socket = socket()?;
             if dry_run {
-                print_plan(requested, &socket, &store, true, "watch")?;
+                print_plan(
+                    requested,
+                    &socket,
+                    &session_store(&store, session.as_deref()),
+                    true,
+                    "watch",
+                )?;
                 return Ok(());
             }
             let selection = select(requested, native::probe())?;
             match selection {
                 Selection::Command => {
-                    let applied = watch(&socket, &store, &command_template(), false)?;
+                    let applied = watch(
+                        &socket,
+                        &session_store(&store, session.as_deref()),
+                        &command_template(),
+                        false,
+                    )?;
                     print_json(&serde_json::json!({
                         "backend": selection.as_str(),
                         "applied": applied,
@@ -228,7 +307,13 @@ fn run_cli() -> Result<(), String> {
                     Ok(())
                 }
                 Selection::Native => {
-                    if let Err(err) = print_plan(requested, &socket, &store, false, "watch") {
+                    if let Err(err) = print_plan(
+                        requested,
+                        &socket,
+                        &session_store(&store, session.as_deref()),
+                        false,
+                        "watch",
+                    ) {
                         eprintln!("better-wallpaper: {err}; continuing with the scene default");
                     }
                     match native::run(&scene, Some(&socket), Mode::Watch) {
@@ -239,7 +324,12 @@ fn run_cli() -> Result<(), String> {
                             eprintln!(
                                 "better-wallpaper: {reason}; using the command backend instead"
                             );
-                            let applied = watch(&socket, &store, &command_template(), false)?;
+                            let applied = watch(
+                                &socket,
+                                &session_store(&store, session.as_deref()),
+                                &command_template(),
+                                false,
+                            )?;
                             print_json(&serde_json::json!({
                                 "backend": "command",
                                 "applied": applied,
@@ -256,6 +346,9 @@ fn run_cli() -> Result<(), String> {
             let probe = native::probe();
             print_json(&serde_json::json!({
                 "active": store.active,
+                "selected_scene": store.scene_name_for_session(session.as_deref()),
+                "session": session,
+                "session_scenes": store.session_scenes,
                 "scenes": store.scenes,
                 "template": command_template(),
                 "backend": {
@@ -278,9 +371,17 @@ fn requested_backend(explicit: Option<Backend>) -> Result<Backend, String> {
     }
 }
 
-fn active_scene(store: &Store) -> Result<Scene, String> {
+fn session_store(store: &Store, session: Option<&str>) -> Store {
+    let mut copy = store.clone();
+    if let Some(name) = store.scene_name_for_session(session) {
+        copy.active = Some(name.to_owned());
+    }
+    copy
+}
+
+fn active_scene(store: &Store, session: Option<&str>) -> Result<Scene, String> {
     store
-        .active_scene()
+        .scene_for_session(session)
         .cloned()
         .ok_or_else(|| "no active scene; use `scene use <name>` first".to_owned())
 }

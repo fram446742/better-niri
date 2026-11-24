@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use crate::{Sink, Stream};
+use crate::{LinkInfo, Sink, Source, Stream};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DumpPort {
@@ -32,6 +32,7 @@ pub struct DumpLink {
 #[derive(Debug, Clone, Default)]
 pub struct Dump {
     pub sinks: Vec<Sink>,
+    pub sources: Vec<Source>,
     pub streams: Vec<Stream>,
     pub ports: Vec<DumpPort>,
     pub links: Vec<DumpLink>,
@@ -42,6 +43,17 @@ pub struct Dump {
 impl Dump {
     pub fn sink_by_name(&self, name: &str) -> Option<&Sink> {
         self.sinks.iter().find(|sink| sink.name == name)
+    }
+
+    pub fn links(&self) -> Vec<LinkInfo> {
+        self.links
+            .iter()
+            .map(|link| LinkInfo {
+                id: link.id,
+                output_node: link.output_node,
+                input_node: link.input_node,
+            })
+            .collect()
     }
 }
 
@@ -54,6 +66,7 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
 
     let mut dump = Dump::default();
     let mut sink_nodes = Vec::new();
+    let mut source_nodes = Vec::new();
     let mut stream_nodes = Vec::new();
 
     for entry in array {
@@ -85,6 +98,19 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
                         name,
                         description,
                     });
+                } else if class == "Audio/Source" {
+                    let name = string_prop(props, "node.name")
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("source {id}"));
+                    let description = string_prop(props, "node.description")
+                        .or_else(|| string_prop(props, "node.nick"))
+                        .unwrap_or(&name)
+                        .to_owned();
+                    source_nodes.push(Source {
+                        id,
+                        name,
+                        description,
+                    });
                 } else if class == "Stream/Output/Audio" {
                     let (volume, mute) = parse_props(info);
                     let app = string_prop(props, "application.name")
@@ -93,6 +119,8 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
                         .or_else(|| string_prop(props, "node.name"))
                         .map(str::to_owned)
                         .unwrap_or_else(|| format!("stream {id}"));
+                    let binary =
+                        string_prop(props, "application.process.binary").map(str::to_owned);
                     let media_name = string_prop(props, "media.name")
                         .unwrap_or_default()
                         .to_owned();
@@ -100,6 +128,7 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
                         id,
                         sink_id: None,
                         app,
+                        binary,
                         media_name,
                         volume,
                         mute,
@@ -152,6 +181,7 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
     }
 
     sink_nodes.sort_by_key(|sink| sink.id);
+    source_nodes.sort_by_key(|source| source.id);
     let sink_ids: HashSet<u32> = sink_nodes.iter().map(|sink| sink.id).collect();
 
     // A playback stream is connected to the first of its links whose input is
@@ -167,6 +197,7 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
     stream_nodes.sort_by_key(|stream| stream.id);
 
     dump.sinks = sink_nodes;
+    dump.sources = source_nodes;
     dump.streams = stream_nodes;
     dump.ports.sort_by_key(|port| port.id);
     dump.links.sort_by_key(|link| link.id);
@@ -246,6 +277,7 @@ mod tests {
             .find(|stream| stream.app == "Zen")
             .unwrap();
         assert_eq!(zen.sink_id, Some(52));
+        assert_eq!(zen.binary.as_deref(), Some("zen-bin"));
         assert_eq!(zen.media_name, "Song");
         assert_eq!(zen.volume, Some(0.5));
         assert_eq!(zen.mute, Some(false));
@@ -281,5 +313,30 @@ mod tests {
         assert_eq!(dump.streams.len(), 1);
         assert_eq!(dump.streams[0].sink_id, None);
         assert_eq!(dump.streams[0].volume, None);
+    }
+
+    #[test]
+    fn parses_input_sources_and_links() {
+        let json = r#"[
+            {"id": 9, "type": "PipeWire:Interface:Node", "info": {"props": {
+                "media.class": "Audio/Source", "node.name": "alsa_input.usb-mic",
+                "node.description": "USB Mic"
+            }}},
+            {"id": 12, "type": "PipeWire:Interface:Link", "info": {
+                "output-node-id": 4, "output-port-id": 5, "input-node-id": 9, "input-port-id": 6
+            }}
+        ]"#;
+        let dump = parse_dump(json).unwrap();
+        assert_eq!(dump.sources.len(), 1);
+        assert_eq!(dump.sources[0].name, "alsa_input.usb-mic");
+        assert_eq!(dump.sources[0].description, "USB Mic");
+        assert_eq!(
+            dump.links(),
+            vec![LinkInfo {
+                id: 12,
+                output_node: 4,
+                input_node: 9
+            }]
+        );
     }
 }

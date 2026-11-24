@@ -12,13 +12,24 @@ niri's Cargo workspace).
 - A rule may also set a **profile**: a linear volume (`1.0` == `100%`, stored in
   PipeWire's `Props`) and a mute state. The profile is applied only when the
   stream's current value differs, so `watch` does not rewrite it every tick.
+- Optional **context fields** on a rule (`binary`, `title`, `workspace`) match
+  the focused window, read from `--focus-command` (default
+  `$BETTER_AUDIO_FOCUS_COMMAND`). Matching is per stream: an app with several
+  streams gets each one routed, and context never assumes one stream per app.
+- **Sources** (capture devices) can be listed and made the default, and named
+  **profiles** set a default sink, default source and a global volume/mute set
+  with `profile apply` / `profile restore`.
 - `apply` queries sinks, streams and the default sink, then moves every
   matching stream whose current sink differs and applies the profile. Streams
   without a rule are left alone.
 - `default <sink>` additionally sets the default sink when it differs.
-- `watch` repeats `apply` on an interval, so streams are routed as they appear.
+- `watch` repeats `apply` on an interval, re-evaluates rules when the device set
+  changes, and skips identical plans (`ChangeGate`) so it does not switch
+  streams unnecessarily.
 - `restore` moves streams back to the sink they had before the first rule moved
   them, then forgets those entries.
+- `diagnose` prints the backend attempts, sinks/sources/defaults, links, focus
+  context, every stream's matched rule indices, the winning rule and a reason.
 
 ## Backends
 
@@ -27,9 +38,9 @@ same rule/plan model, so matching and dry-run behaviour is identical.
 
 | Backend | Implementation | Requirements |
 | --- | --- | --- |
-| `native` | Direct `libpipewire-0.3` connection through the `pipewire` crate: registry enumeration, link creation/destruction for moves, `default` metadata for the default sink, node `Props` for volume/mute. | Build-time `libpipewire-0.3` headers and library; enabled by the default `native` feature. |
-| `pactl` | `pactl -f json list …`, `move-sink-input`, `set-default-sink`, `set-sink-input-volume/-mute`. | `pactl` (PipeWire's PulseAudio compatibility layer). |
-| `wpctl` | `pw-dump` JSON snapshots, `pw-cli create-link`/`destroy`/`set-param` for moves and profile, `wpctl set-default` for the default sink. | `pw-dump`, `pw-cli` and `wpctl`; no PulseAudio needed. |
+| `native` | Direct `libpipewire-0.3` connection through the `pipewire` crate: registry enumeration (sinks, sources, streams, links), link creation/destruction for moves, `default` metadata for default sink/source, node `Props` for volume/mute. | Build-time `libpipewire-0.3` headers and library; enabled by the default `native` feature. |
+| `pactl` | `pactl -f json list …` for sinks/sources/streams, `move-sink-input`, `set-default-sink`/`set-default-source`, `set-sink-input-volume/-mute`. | `pactl` (PipeWire's PulseAudio compatibility layer). |
+| `wpctl` | `pw-dump` JSON snapshots, `pw-cli create-link`/`destroy`/`set-param` for moves and profile, `wpctl set-default` for defaults. | `pw-dump`, `pw-cli` and `wpctl`; no PulseAudio needed. |
 
 `auto` (the default) probes **native → pactl → wpctl** and uses the first backend
 that can reach a server. An explicit `--backend` that is unavailable also falls
@@ -77,20 +88,109 @@ Native builds need `libpipewire-0.3` development files and `libclang` for
   stream again. Use `restore` without a running `watch` when you want the move
   to stick.
 
+## Sources, profiles and hotplug
+
+```sh
+better-audio sources
+better-audio links
+better-audio default-source alsa_input.usb-mic
+better-audio profile apply headset
+better-audio profile restore --dry-run
+better-audio diagnose
+```
+
+A profile is a named set of defaults and a global stream volume/mute:
+
+```json
+{
+  "profiles": {
+    "headset": {
+      "sink": "alsa_output.usb-headset",
+      "source": "alsa_input.usb-mic",
+      "volume": 0.5,
+      "mute": false
+    }
+  }
+}
+```
+
+`profile apply` remembers the previous defaults in `profile_restore` and
+`profile restore` returns to them. Only values that differ are written, so
+applying a profile twice is a no-op. Source support by backend: `native`,
+`pactl` and `wpctl` enumerate sources and set the default source; builds
+without the native feature still get it from the CLI backends.
+
+`watch` polls the device set (`DeviceSnapshot`) and reports changes (sink or
+source plugged/removed, default changed). Rules are re-evaluated on that change
+and every interval; a `ChangeGate` suppresses an identical plan, so repeated
+ticks do not rewrite volume or relink a stream. This is polling, not a
+PipeWire event subscription.
+
+## Context-aware rules
+
+Rules can additionally match the focused window/workspace:
+
+```json
+{
+  "rules": [
+    {
+      "app": "firefox",
+      "binary": "firefox",
+      "title": "Meeting*",
+      "workspace": "work",
+      "sink": "headset",
+      "volume": 0.8
+    }
+  ]
+}
+```
+
+The focus JSON is read from `--focus-command` (or
+`$BETTER_AUDIO_FOCUS_COMMAND`), for example:
+
+```sh
+better-audio --focus-command 'niri msg --json focused-window' apply
+```
+
+Accepted keys are `app`/`app_id`/`application`, `title` and
+`workspace`/`workspace_name`. `app`/`binary` also match
+`application.name`/`application.process.binary` stream properties; `title` and
+`workspace` come from the focused context. A matching rule is resolved per
+stream, so several streams from one app are each routed according to their own
+properties.
+
+## Diagnostics and mixer
+
+`diagnose` prints machine-readable JSON with backend attempts and degradation,
+sinks, sources, defaults, links, the focus context, all rules, and for each
+stream the matched rule indices, the winner and a human-readable reason. It is
+read-only.
+
+There is **no graphical mixer**. A GTK/egui mixer would add a GUI toolkit,
+D-Bus/portal or event-loop stack to a deliberately small CLI daemon; the JSON
+commands (`sinks`, `sources`, `streams`, `links`, `diagnose`, `status`) are the
+supported interface. Script a mixer against those commands if needed.
+
 ## Usage
 
 ```sh
 better-audio sinks
+better-audio sources
+better-audio links
 better-audio streams
 better-audio rules add spotify headset
 better-audio rules add 'fire*' hdmi --priority 5
 better-audio rules add mpv 'usb-headset' --volume 0.6 --mute off
 better-audio default headset
+better-audio default-source alsa_input.usb-mic
+better-audio profile apply headset
+better-audio profile restore
 better-audio apply --dry-run
 better-audio apply
 better-audio restore --dry-run
 better-audio restore
 better-audio watch --interval-ms 2000
+better-audio diagnose
 better-audio status
 better-audio --backend=pactl apply
 better-audio --backend=wpctl status
@@ -145,6 +245,12 @@ Run `watch` from niri's `spawn-at-startup` to route new streams automatically.
 - On systems where `default.audio.sink` cannot be written, native default-sink
   changes fail with the permission error; use `--backend=pactl` or `wpctl`
   instead.
+- Hotplug detection is polling (`watch --interval-ms`), not a PipeWire event
+  subscription; a very short-lived device may be missed between polls.
+- Context rules correlate the focused window with stream properties by
+  app/binary/title/workspace. They do not inspect per-window PipeWire client
+  credentials beyond those properties.
+- No graphical mixer or tray applet (see above).
 
 ## Test
 
@@ -156,4 +262,6 @@ cargo clippy --all-targets
 
 Tests use captured `pactl` JSON and `pw-dump` fixtures plus fake executables, so
 they need neither PipeWire nor a running audio server. The fixtures live in
-`tests/fixtures/`.
+`tests/fixtures/`. The suite also covers input sources, context-aware rules,
+named profiles and restore, hotplug snapshots, the change gate and rule
+diagnostics.

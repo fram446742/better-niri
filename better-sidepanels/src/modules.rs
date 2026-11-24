@@ -53,6 +53,22 @@ impl ModuleKind {
     pub fn needs_command(self) -> bool {
         matches!(self, Self::Custom)
     }
+
+    /// Stable name used in configs, selectors and diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clock => "clock",
+            Self::Workspaces => "workspaces",
+            Self::WindowTitle => "window-title",
+            Self::Media => "media",
+            Self::Battery => "battery",
+            Self::Cpu => "cpu",
+            Self::Memory => "memory",
+            Self::Network => "network",
+            Self::Volume => "volume",
+            Self::Custom => "custom",
+        }
+    }
 }
 
 /// Module configuration. `kind` defaults to `custom` so v1 command modules keep

@@ -7,7 +7,15 @@ niri's Cargo workspace).
 ## Features
 
 - Named **scenes** mapping workspace names (plus an optional `default` image) to
-  image paths.
+  image paths, with free-form `metadata` and JSON import/export.
+- Optional **playlists** (ordered or deterministically shuffled, with an
+  interval), **time rules** (`HH:MM` day/night ranges, including ranges that
+  wrap midnight) and **random** scene selection.
+- A configurable CPU **cross-fade** on the native backend (`transition`:
+  duration and easing), driven by a frame timer only while an animation runs.
+- **Per-session scenes**: `scene session <name> <scene>` binds a session, read
+  from `BETTER_WALLPAPER_SESSION`, `BETTER_SESSION_CONTEXT` (better-session's
+  hook variable), `BETTER_WALLPAPER_SESSION_FILE` or `--session`.
 - Two backends:
   - **native** — one built-in `zwlr_layer_shell_v1` background surface per
     output, drawn with `wl_shm`. No `swaybg`/`swww` needed. Supports PNG and
@@ -31,6 +39,9 @@ export NIRI_SOCKET=...        # normally set inside niri
 better-wallpaper scene set work main ~/Pictures/main.png
 better-wallpaper scene set work default ~/Pictures/default.png
 better-wallpaper scene use work
+better-wallpaper scene session work office    # per-session scene
+better-wallpaper scene export work ~/work-scene.json
+better-wallpaper scene import ~/work-scene.json copy
 better-wallpaper status
 better-wallpaper apply --dry-run
 better-wallpaper watch --dry-run
@@ -58,6 +69,63 @@ Example with `swww` (command backend):
 export BETTER_WALLPAPER_COMMAND='swww img {image} --outputs {output}'
 better-wallpaper watch --backend=command
 ```
+
+Transitions and playlists belong to the native backend; the command backend is
+an external program, so its own flags implement them. For example:
+
+```sh
+# swww: built-in transition types/durations
+export BETTER_WALLPAPER_COMMAND='swww img {image} --outputs {output} --transition-type wipe --transition-duration 1'
+# swaybg: no transitions; it swaps immediately
+export BETTER_WALLPAPER_COMMAND='swaybg -i {image} -o {output}'
+```
+
+`better-wallpaper` does not add a transition flag to the template; use the
+backend's native option so the renderer stays in charge of its own animation
+loop.
+
+### Scene extras
+
+```json
+{
+  "default": "/wallpapers/default.png",
+  "wallpapers": { "main": "/wallpapers/main.png" },
+  "transition": { "duration_ms": 600, "easing": "in-out" },
+  "playlist": {
+    "images": ["/wallpapers/a.png", "/wallpapers/b.png"],
+    "interval_secs": 300,
+    "shuffle": true
+  },
+  "time_rules": [
+    { "start": "07:00", "end": "19:00", "image": "/wallpapers/day.png" },
+    { "start": "19:00", "end": "07:00", "image": "/wallpapers/night.png" }
+  ],
+  "random": false,
+  "metadata": { "author": "me", "source": "unsplash" }
+}
+```
+
+Resolution order: the first matching `time_rules` range, the workspace image,
+the playlist slot, random scene image, then `default`. Time ranges wrap around
+midnight when `end` is before `start`. `random` changes at most once per
+five-minute slot, so redraws do not flicker. `easing` is `linear`, `in`, `out`
+or `in-out`.
+
+### Per-session scenes
+
+```json
+{
+  "active": "default",
+  "session_scenes": { "work": "office", "game": "dark" }
+}
+```
+
+bind sessions with `scene session work office` or edit the state file. The
+session name comes from `--session`, `BETTER_WALLPAPER_SESSION`,
+`BETTER_SESSION_CONTEXT` (set by better-session restore hooks) or the first line
+of `BETTER_WALLPAPER_SESSION_FILE`. Unknown sessions use the active scene. The
+selected scene is resolved at startup; restart `watch` after changing the
+mapping.
 
 `--socket PATH` overrides `$NIRI_SOCKET`. `--dry-run` queries niri and prints
 the image resolved for each output without creating surfaces or spawning
@@ -101,9 +169,16 @@ Behaviour:
 | Focused workspace changes (`watch`) | each output re-resolves its workspace image |
 | Output has no named workspace | scene `default` is used |
 | Image file modified | re-decoded and re-rendered within a second (mtime+size) |
+| Image switches (workspace/playlist/time rule) | cross-fades when `transition` is set; immediate swap otherwise |
 | niri IPC drops or restarts | event watcher reconnects every second |
 | Compositor disconnects | session is rebuilt every second until it is back |
 | Image missing or undecodable | dark fallback colour, retried when the file changes |
+
+The native backend commits **SDR sRGB** pixels in `Xrgb8888` (`wl_shm`). It does
+not advertise or convert HDR/wide-gamut content; on an HDR-enabled output the
+compositor tone-maps this SDR surface like any other SDR client. True HDR
+wallpapers would need a `wp_color_management`/`wp_color` surface and a
+`wl_shm`/DMA-BUF format negotiation layer this crate does not implement.
 
 `apply` with the native backend renders every output and **keeps running** so
 the surfaces stay mapped (like `swaybg`); use `watch` to also follow workspace
@@ -112,26 +187,30 @@ and buffer commits.
 
 Limitations (native backend):
 
-- No transitions or animations between images; a change is an immediate swap.
-  The design has no animation loop, so adding one would need a frame-driven
-  cross-fade, not just a bigger buffer.
+- Transitions cross-fade only between two decoded images of the same geometry;
+  a resize or output mode change swaps immediately. Frames are CPU-blended and
+  the frame timer only runs while a transition is active (no idle redraw loop).
 - Images are decoded and scaled on the CPU when they change, which can take a
   moment for large photos on very high-resolution outputs; steady-state CPU use
-  is idle (no frame callbacks, one timer tick per second).
-- The active scene is read at startup; after `scene set`/`scene use`, restart
-  `watch` to pick it up (same as the command backend).
+  is idle (no frame callbacks, one maintenance tick per second).
+- Playlists rotate on the one-second maintenance tick; the first image after a
+  restart depends on the wall clock slot. Time rules use local time.
+- The active scene/profile is read at startup; after `scene use`/`scene set`,
+  restart `watch` to pick it up (same as the command backend).
 - Per-output images come from the scene of each output's active workspace; there
   is no per-output override file yet.
+- HDR output is not implemented: the surface is SDR sRGB (see above).
 - Wayland only. Under X11 or a compositor without layer-shell, use
   `--backend=command`.
 
 ## Resolution
 
-For an output whose active workspace is named `main`: exact
-`wallpapers["main"]`, else the scene `default`, else nothing (the native backend
-paints a dark fallback). Unnamed workspaces only use the default. The command
-backend resolves for the globally focused workspace; the native backend resolves
-per output.
+For an output whose active workspace is named `main`: first matching time rule,
+exact `wallpapers["main"]`, playlist slot, random pick, else the scene
+`default`, else nothing (the native backend paints a dark fallback). Unnamed
+workspaces only use the time/default/playlist path. The command backend
+resolves for the globally focused workspace; the native backend resolves per
+output and re-evaluates playlists each maintenance tick.
 
 ## Test
 
@@ -141,8 +220,10 @@ cargo fmt --check
 cargo clippy --all-targets
 ```
 
-The 30 unit tests cover scene resolution and JSON parsing, aspect-fill geometry,
-rotation/scale, image reload stamps, rendering to XRGB8888, backend selection and
-degradation, and the command watcher/`watch` IPC loop against a fake niri socket.
-No test needs a running compositor: Wayland is only probed by `status`, and the
-native session is exercised manually.
+The 42 unit tests cover scene resolution (including time rules, playlists,
+random selection and session mappings), scene import/export and metadata,
+JSON parsing, aspect-fill geometry, rotation/scale, image reload stamps,
+rendering to XRGB8888, cross-fade/easing math, backend selection and
+degradation, and the command watcher/`watch` IPC loop against a fake niri
+socket. No test needs a running compositor: Wayland is only probed by `status`,
+and the native session is exercised manually.

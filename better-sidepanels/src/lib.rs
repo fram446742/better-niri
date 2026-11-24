@@ -10,8 +10,10 @@
 //! command), and optional click/scroll actions.
 
 pub mod action;
+pub mod behavior;
 pub mod modules;
 pub mod niri;
+pub mod session;
 pub mod system;
 
 use std::collections::BTreeMap;
@@ -19,10 +21,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 pub use action::ActionSpec;
+use behavior::{AppRule, Context as BehaviorContext};
+pub use behavior::{PeekState, ReloadSignal};
 use cairo::{Context, FontSlant, FontWeight, Format, ImageSurface};
 pub use modules::{ModuleKind, ModuleOutput, ModuleSpec, ModuleState, OutputItem};
 pub use niri::NiriAction;
 use serde::{Deserialize, Serialize};
+pub use session::SessionState;
 pub use system::{Env, RealEnv};
 
 pub const HEADER_HEIGHT: u32 = 46;
@@ -252,6 +257,14 @@ pub struct Row {
     /// Draws a divider instead of a label, and is not clickable.
     #[serde(default, skip_serializing_if = "is_false")]
     pub separator: bool,
+    /// Shows the row only on these workspace names (globs allowed). Omitted
+    /// means every workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspaces: Option<Vec<String>>,
+    /// Shows the row only for these focused app ids (globs allowed). Omitted
+    /// means every application.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<Vec<String>>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -269,6 +282,8 @@ impl Row {
             scroll_up: None,
             scroll_down: None,
             separator: false,
+            workspaces: None,
+            apps: None,
         }
     }
 
@@ -309,6 +324,26 @@ impl Row {
     pub fn on_scroll(mut self, up: ActionSpec, down: ActionSpec) -> Self {
         self.scroll_up = Some(up);
         self.scroll_down = Some(down);
+        self
+    }
+
+    /// Shows this row only on the listed workspaces.
+    pub fn on_workspaces<I, S>(mut self, workspaces: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.workspaces = Some(workspaces.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Shows this row only when one of these app ids is focused.
+    pub fn for_apps<I, S>(mut self, apps: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.apps = Some(apps.into_iter().map(Into::into).collect());
         self
     }
 
@@ -364,6 +399,19 @@ pub struct PanelConfig {
     pub row_height: u32,
     #[serde(default = "default_title")]
     pub title: String,
+    /// Fixed panel height. Vertical panels otherwise span the output;
+    /// top/bottom bars derive it from padding and row height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Hide behind the output edge, leaving a thin reveal strip.
+    #[serde(default)]
+    pub auto_hide: bool,
+    /// Width (vertical) or height (horizontal) of the reveal strip.
+    #[serde(default = "default_reveal")]
+    pub reveal: u32,
+    /// Do not reserve space (exclusive zone 0) for tiled windows.
+    #[serde(default)]
+    pub floating: bool,
     #[serde(default)]
     pub theme: Theme,
     #[serde(default)]
@@ -385,6 +433,9 @@ fn default_row_height() -> u32 {
 fn default_title() -> String {
     "BETTER".to_owned()
 }
+fn default_reveal() -> u32 {
+    behavior::DEFAULT_REVEAL
+}
 pub fn default_interval() -> u64 {
     30
 }
@@ -399,6 +450,10 @@ impl Default for PanelConfig {
             padding: default_padding(),
             row_height: default_row_height(),
             title: default_title(),
+            height: None,
+            auto_hide: false,
+            reveal: default_reveal(),
+            floating: false,
             theme: Theme::default(),
             rows: vec![
                 Row::label("Workspaces").with_command("niri msg workspaces"),
@@ -427,15 +482,32 @@ impl PanelConfig {
 
     /// Space reserved on the output edge; used as the exclusive zone.
     pub fn exclusive_zone(&self) -> u32 {
+        self.exclusive_zone_with(false)
+    }
+
+    /// Exclusive zone for a panel that may be hidden or floating.
+    pub fn exclusive_zone_with(&self, hidden: bool) -> u32 {
+        if self.floating || (self.auto_hide && hidden) {
+            return 0;
+        }
         match self.side {
             Side::Left | Side::Right => self.width + self.margin,
             Side::Top | Side::Bottom => self.bar_height() + self.margin,
         }
     }
 
-    /// Height of a horizontal (top/bottom) panel.
+    /// Height of a horizontal (top/bottom) panel, or the fixed height of a
+    /// vertical panel.
     pub fn bar_height(&self) -> u32 {
-        self.padding * 2 + self.row_height
+        self.height.unwrap_or(self.padding * 2 + self.row_height)
+    }
+
+    /// Full (revealed) size of the panel along its stacking axis.
+    pub fn panel_extent(&self) -> u32 {
+        match self.side {
+            Side::Left | Side::Right => self.width,
+            Side::Top | Side::Bottom => self.bar_height(),
+        }
     }
 
     pub fn matches_output(&self, output: &str) -> bool {
@@ -464,6 +536,17 @@ impl PanelConfig {
         }
         if self.row_height < 16 {
             errors.push("panel `row_height` must be at least 16".to_owned());
+        }
+        if self.reveal == 0 {
+            errors.push("panel `reveal` must be at least 1".to_owned());
+        }
+        if let Some(height) = self.height
+            && height < 16
+        {
+            errors.push("panel `height` must be at least 16".to_owned());
+        }
+        if self.auto_hide && !self.floating && self.reveal >= self.panel_extent() {
+            errors.push("panel `reveal` must be smaller than the panel".to_owned());
         }
         self.theme.validate(&mut errors);
         if self.rows.is_empty() {
@@ -577,8 +660,20 @@ pub struct Config {
     /// Per-output overrides keyed by output connector name, e.g. `DP-1`.
     #[serde(default)]
     pub outputs: BTreeMap<String, PanelOverrides>,
+    /// Panels of the unnamed/default layout.
     #[serde(default)]
     pub panels: Vec<PanelConfig>,
+    /// Named panel layouts ("profiles"), switchable at runtime. `layouts` is
+    /// accepted as an alias so either term can be used in a config file.
+    #[serde(default, alias = "layouts")]
+    pub profiles: BTreeMap<String, Vec<PanelConfig>>,
+    /// Named profile used when the config does not say otherwise; session state
+    /// (and `--layout`) can override it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
+    /// Context-aware show/hide/reorder rules for rows.
+    #[serde(default)]
+    pub rules: Vec<AppRule>,
 }
 
 fn default_version() -> u32 {
@@ -608,6 +703,9 @@ impl Default for Config {
                 ],
                 ..PanelConfig::default()
             }],
+            profiles: BTreeMap::new(),
+            active_profile: None,
+            rules: Vec::new(),
         }
     }
 }
@@ -626,7 +724,14 @@ impl Config {
     pub fn from_slice(bytes: &[u8]) -> Result<Self, String> {
         let value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|err| err.to_string())?;
-        if value.get("panels").is_some() {
+        if value.get("panels").is_some()
+            || value.get("profiles").is_some()
+            || value.get("layouts").is_some()
+            || value.get("version").is_some()
+            || value.get("outputs").is_some()
+            || value.get("rules").is_some()
+            || value.get("active_profile").is_some()
+        {
             return serde_json::from_value(value).map_err(|err| err.to_string());
         }
         let panel: PanelConfig = serde_json::from_value(value).map_err(|err| err.to_string())?;
@@ -634,6 +739,9 @@ impl Config {
             version: 1,
             outputs: BTreeMap::new(),
             panels: vec![panel],
+            profiles: BTreeMap::new(),
+            active_profile: None,
+            rules: Vec::new(),
         })
     }
 
@@ -643,10 +751,19 @@ impl Config {
         write_config_file(path, &bytes)
     }
 
+    /// Panels of the selected profile, or the default `panels` list.
+    pub fn base_panels(&self) -> &[PanelConfig] {
+        self.active_profile
+            .as_deref()
+            .and_then(|name| self.profiles.get(name))
+            .map(Vec::as_slice)
+            .unwrap_or(&self.panels)
+    }
+
     /// Panels for one output, with per-output overrides applied.
     pub fn panels_for(&self, output: &str) -> Vec<PanelConfig> {
         let overrides = self.outputs.get(output);
-        self.panels
+        self.base_panels()
             .iter()
             .filter(|panel| panel.matches_output(output))
             .map(|panel| {
@@ -659,6 +776,31 @@ impl Config {
             .collect()
     }
 
+    /// Names of every named layout, sorted.
+    pub fn profile_names(&self) -> Vec<String> {
+        self.profiles.keys().cloned().collect()
+    }
+
+    /// Switches to a named profile. Returns false when the name is unknown.
+    pub fn select_profile(&mut self, name: &str) -> bool {
+        if self.profiles.contains_key(name) {
+            self.active_profile = Some(name.to_owned());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies `--layout`/session profile selection, ignoring unknown names.
+    pub fn with_profile(mut self, name: Option<&str>) -> Self {
+        if let Some(name) = name
+            && self.profiles.contains_key(name)
+        {
+            self.active_profile = Some(name.to_owned());
+        }
+        self
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         if self.version == 0 || self.version > CONFIG_VERSION {
@@ -667,11 +809,17 @@ impl Config {
                 self.version
             ));
         }
+        if let Some(active) = self.active_profile.as_deref()
+            && !active.trim().is_empty()
+            && !self.profiles.contains_key(active)
+        {
+            errors.push(format!("config `active_profile` `{active}` is not defined"));
+        }
         for (name, overrides) in &self.outputs {
             if name.trim().is_empty() {
                 errors.push("output override name must not be empty".to_owned());
             }
-            for (index, panel) in self.panels.iter().enumerate() {
+            for (index, panel) in self.base_panels().iter().enumerate() {
                 let mut panel = panel.clone();
                 overrides.apply(&mut panel);
                 if let Err(problems) = panel.validate() {
@@ -681,14 +829,43 @@ impl Config {
                 }
             }
         }
-        if self.panels.is_empty() {
+        if self.base_panels().is_empty() {
             errors.push("config defines no panels".to_owned());
         }
-        for (index, panel) in self.panels.iter().enumerate() {
+        for (index, panel) in self.base_panels().iter().enumerate() {
             if let Err(problems) = panel.validate() {
                 for problem in problems {
                     errors.push(format!("panel {index}: {problem}"));
                 }
+            }
+        }
+        for (name, panels) in &self.profiles {
+            if name.trim().is_empty() {
+                errors.push("profile name must not be empty".to_owned());
+            }
+            if panels.is_empty() {
+                errors.push(format!("profile `{name}` defines no panels"));
+            }
+            for (index, panel) in panels.iter().enumerate() {
+                if let Err(problems) = panel.validate() {
+                    for problem in problems {
+                        errors.push(format!("profile `{name}` panel {index}: {problem}"));
+                    }
+                }
+            }
+        }
+        for rule in &self.rules {
+            if rule.app.trim().is_empty()
+                && rule
+                    .workspace
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(str::is_empty)
+                && rule.show.is_empty()
+                && rule.hide.is_empty()
+                && rule.order.is_empty()
+            {
+                errors.push("rule has no app, workspace, show, hide or order".to_owned());
             }
         }
         if errors.is_empty() {
@@ -796,6 +973,26 @@ impl InteractionMap {
     }
 }
 
+/// Reads the focused app id and workspace name from niri for context rules.
+fn context_from_env(env: &mut dyn Env) -> BehaviorContext {
+    let workspace = env
+        .niri(&serde_json::Value::String("Workspaces".to_owned()))
+        .as_ref()
+        .map(niri::parse_workspaces)
+        .and_then(|workspaces| {
+            workspaces
+                .into_iter()
+                .find(|workspace| workspace.is_focused)
+                .and_then(|workspace| workspace.name)
+        });
+    let app = env
+        .niri(&serde_json::Value::String("FocusedWindow".to_owned()))
+        .as_ref()
+        .and_then(niri::parse_focused_window)
+        .and_then(|window| window.app_id);
+    BehaviorContext { app, workspace }
+}
+
 /// Runtime panel state: config plus refreshed module output.
 #[derive(Debug, Clone)]
 pub struct Panel {
@@ -805,19 +1002,52 @@ pub struct Panel {
     items: Vec<Vec<OutputItem>>,
     updated: Vec<Option<Instant>>,
     states: Vec<ModuleState>,
+    /// Rows as authored; `config.rows` is the context-filtered view.
+    base_rows: Vec<Row>,
+    rules: Vec<AppRule>,
+    context: BehaviorContext,
 }
 
 impl Panel {
     pub fn new(config: PanelConfig) -> Self {
         let len = config.rows.len();
         Self {
+            base_rows: config.rows.clone(),
             config,
             output: None,
             outputs: vec![String::new(); len],
             items: vec![Vec::new(); len],
             updated: vec![None; len],
             states: vec![ModuleState::Idle; len],
+            rules: Vec::new(),
+            context: BehaviorContext::default(),
         }
+    }
+
+    /// Attaches context-aware show/hide/reorder rules.
+    pub fn with_rules(mut self, rules: Vec<AppRule>) -> Self {
+        self.rules = rules;
+        self
+    }
+
+    pub fn rules(&self) -> &[AppRule] {
+        &self.rules
+    }
+
+    /// Replaces the rules and filters the current rows. Returns true when the
+    /// visible row set changed.
+    pub fn set_rules(&mut self, rules: Vec<AppRule>) -> bool {
+        self.rules = rules;
+        let rows = self.rows_for_context(&self.context.clone());
+        if rows == self.config.rows {
+            return false;
+        }
+        self.reset_rows(rows);
+        true
+    }
+
+    pub fn context(&self) -> &BehaviorContext {
+        &self.context
     }
 
     /// Panel bound to the output it is displayed on (workspace filtering).
@@ -832,12 +1062,67 @@ impl Panel {
 
     /// Replaces the configuration, resetting module output and deltas.
     pub fn set_config(&mut self, config: PanelConfig) {
-        let len = config.rows.len();
+        self.base_rows = config.rows.clone();
+        self.set_config_keep_base(config);
+        let rows = self.rows_for_context(&self.context.clone());
+        if rows != self.config.rows {
+            self.reset_rows(rows);
+        }
+    }
+
+    fn set_config_keep_base(&mut self, config: PanelConfig) {
+        self.reset_rows(config.rows.clone());
         self.config = config;
+    }
+
+    fn reset_rows(&mut self, rows: Vec<Row>) {
+        let len = rows.len();
+        self.config.rows = rows;
         self.outputs = vec![String::new(); len];
         self.items = vec![Vec::new(); len];
         self.updated = vec![None; len];
         self.states = vec![ModuleState::Idle; len];
+    }
+
+    /// Rows for a context: authored rows filtered by `rules` and by each row's
+    /// `workspaces`/`apps` visibility lists.
+    pub fn rows_for_context(&self, context: &BehaviorContext) -> Vec<Row> {
+        let filtered = behavior::filter_rows(&self.base_rows, context, &self.rules);
+        filtered
+            .into_iter()
+            .filter(|row| behavior::row_visible_on_workspace(row, context.workspace.as_deref()))
+            .filter(|row| behavior::row_visible_for_app(row, context.app.as_deref()))
+            .collect()
+    }
+
+    /// Applies a focused app/workspace context. Returns true when the visible
+    /// row set changed (so the caller redraws).
+    pub fn apply_context(&mut self, context: BehaviorContext) -> bool {
+        if self.context == context {
+            return false;
+        }
+        self.context = context;
+        let rows = self.rows_for_context(&self.context.clone());
+        if rows == self.config.rows {
+            return false;
+        }
+        self.reset_rows(rows);
+        true
+    }
+
+    /// Reads the focused window/workspace from niri when rules or per-row
+    /// visibility lists need it.
+    fn refresh_context(&mut self, env: &mut dyn Env) -> bool {
+        let needs_context = !self.rules.is_empty()
+            || self
+                .base_rows
+                .iter()
+                .any(|row| row.workspaces.is_some() || row.apps.is_some());
+        if !needs_context {
+            return false;
+        }
+        let context = context_from_env(env);
+        self.apply_context(context)
     }
 
     pub fn output(&self, index: usize) -> Option<&str> {
@@ -859,7 +1144,7 @@ impl Panel {
     }
 
     pub fn refresh_with(&mut self, env: &mut dyn Env, now: Instant) -> bool {
-        let mut changed = false;
+        let mut changed = self.refresh_context(env);
         for (index, row) in self.config.rows.iter().enumerate() {
             let Some(module) = &row.module else {
                 continue;
@@ -1027,6 +1312,38 @@ impl Panel {
             }
         }
         Ok(InteractionMap { regions })
+    }
+
+    /// Renders a thin reveal strip shown while an auto-hidden panel is hidden.
+    pub fn render_strip(&self, width: u32, height: u32) -> Result<PanelImage, String> {
+        if width == 0 || height == 0 {
+            return Err("cannot render an empty strip".to_owned());
+        }
+        let colors = self.config.theme.colors()?;
+        let stride = width as i32 * 4;
+        let surface = ImageSurface::create_for_data(
+            vec![0u8; (width * height * 4) as usize],
+            Format::ARgb32,
+            width as i32,
+            height as i32,
+            stride,
+        )
+        .map_err(|err| format!("cannot create surface: {err}"))?;
+        {
+            let ctx = Context::new(&surface).map_err(|err| format!("cairo: {err}"))?;
+            let (r, g, b, a) = colors.accent.with_alpha(colors.opacity.max(0.5));
+            ctx.set_source_rgba(r, g, b, a);
+            ctx.paint().map_err(|err| format!("cairo: {err}"))?;
+        }
+        let data = surface
+            .take_data()
+            .map_err(|_| "cannot take surface data".to_owned())?;
+        Ok(PanelImage {
+            width,
+            height,
+            stride: stride as usize,
+            data: data.as_ref().to_vec(),
+        })
     }
 
     /// Renders the panel into an ARGB32 buffer.
@@ -2031,5 +2348,205 @@ mod tests {
             items: vec![OutputItem::text("1"), OutputItem::text("2")],
         };
         assert_eq!(output.text, "1 2");
+    }
+
+    #[test]
+    fn reveal_strip_renders_in_the_accent_colour() {
+        let panel = panel();
+        let strip = panel.render_strip(6, 200).unwrap();
+        assert_eq!((strip.width, strip.height), (6, 200));
+        assert_eq!(strip.rgba(0, 0), [0x4f, 0x9c, 0xf9, 0xff]);
+        assert!(panel.render_strip(0, 10).is_err());
+    }
+
+    #[test]
+    fn named_profiles_are_switchable_layouts() {
+        let mut config = Config {
+            panels: vec![PanelConfig {
+                rows: vec![Row::label("Main")],
+                ..PanelConfig::default()
+            }],
+            profiles: BTreeMap::from([
+                (
+                    "media".to_owned(),
+                    vec![PanelConfig {
+                        side: Side::Top,
+                        rows: vec![Row::label("Media").with_kind(ModuleKind::Media, 1)],
+                        ..PanelConfig::default()
+                    }],
+                ),
+                (
+                    "work".to_owned(),
+                    vec![PanelConfig {
+                        side: Side::Right,
+                        width: 320,
+                        rows: vec![Row::label("Work")],
+                        ..PanelConfig::default()
+                    }],
+                ),
+            ]),
+            ..Config::default()
+        };
+        assert_eq!(config.profile_names(), ["media", "work"]);
+        assert_eq!(config.panels_for("DP-1")[0].rows[0].label, "Main");
+        assert!(config.select_profile("work"));
+        assert_eq!(config.panels_for("DP-1")[0].width, 320);
+        assert!(!config.select_profile("missing"));
+        assert_eq!(
+            config
+                .clone()
+                .with_profile(Some("media"))
+                .panels_for("DP-1")[0]
+                .side,
+            Side::Top
+        );
+        assert_eq!(
+            config
+                .clone()
+                .with_profile(Some("missing"))
+                .panels_for("DP-1")[0]
+                .side,
+            Side::Right
+        );
+        assert_eq!(
+            config.clone().with_profile(None).panels_for("DP-1")[0].side,
+            Side::Right
+        );
+        config.active_profile = Some("missing".to_owned());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn layouts_alias_and_active_profile_round_trip() {
+        let dir = temp_dir("profiles-json");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "version": 2,
+                "layouts": { "media": [ { "side": "top", "rows": [ { "label": "M" } ] } ] },
+                "active_profile": "media",
+                "rules": [ { "app": "fire*", "hide": ["Media"] } ]
+            }"#,
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.panels_for("DP-1").len(), 1);
+        assert_eq!(config.panels_for("DP-1")[0].side, Side::Top);
+        assert_eq!(config.rules[0].app, "fire*");
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn focused_context_applies_rules_and_refreshes_rows() {
+        let env = MockEnv::new(0)
+            .reply(
+                "Workspaces",
+                json!({ "Ok": { "Workspaces": [
+                    { "id": 1, "idx": 1, "name": "web", "output": "DP-1", "is_active": true, "is_focused": true }
+                ] } }),
+            )
+            .reply(
+                "FocusedWindow",
+                json!({ "Ok": { "FocusedWindow": { "id": 2, "title": "Docs", "app_id": "firefox" } } }),
+            );
+        let config = PanelConfig {
+            rows: vec![
+                Row::label("Workspaces").with_kind(ModuleKind::Workspaces, 1),
+                Row::label("Media").with_kind(ModuleKind::Media, 1),
+                Row::label("Scratch").on_workspaces(["scratch"]),
+            ],
+            ..PanelConfig::default()
+        };
+        let rules = vec![AppRule {
+            app: "fire*".to_owned(),
+            hide: vec!["Media".to_owned()],
+            ..AppRule::default()
+        }];
+        let mut panel = Panel::new(config).with_rules(rules).with_output("DP-1");
+        let mut env = env;
+        panel.refresh_all_with(&mut env);
+        assert_eq!(panel.context().app.as_deref(), Some("firefox"));
+        assert_eq!(panel.context().workspace.as_deref(), Some("web"));
+        // The hidden Media row and the scratch-only row are gone.
+        assert_eq!(panel.config.rows.len(), 1);
+        assert_eq!(panel.config.rows[0].label, "Workspaces");
+        assert_eq!(panel.output(0), Some("web"));
+
+        // A different workspace keeps the workspace-scoped row.
+        env.replies.insert(
+            "Workspaces".into(),
+            json!({ "Ok": { "Workspaces": [
+                { "id": 1, "idx": 1, "name": "scratch", "output": "DP-1", "is_active": true, "is_focused": true }
+            ] } }),
+        );
+        env.replies.insert(
+            "FocusedWindow".into(),
+            json!({ "Ok": { "FocusedWindow": { "id": 3, "title": "Term", "app_id": "foot" } } }),
+        );
+        panel.refresh_all_with(&mut env);
+        assert_eq!(panel.config.rows.len(), 3);
+    }
+
+    #[test]
+    fn floating_height_and_auto_hide_change_geometry() {
+        let config = PanelConfig {
+            height: Some(120),
+            floating: true,
+            auto_hide: true,
+            reveal: 6,
+            ..PanelConfig::default()
+        };
+        assert_eq!(config.bar_height(), 120);
+        assert_eq!(config.exclusive_zone(), 0);
+        assert_eq!(config.exclusive_zone_with(false), 0);
+        let normal = PanelConfig {
+            height: Some(120),
+            auto_hide: true,
+            reveal: 6,
+            ..PanelConfig::default()
+        };
+        assert_eq!(normal.exclusive_zone_with(true), 0);
+        assert_eq!(
+            normal.exclusive_zone_with(false),
+            normal.width + normal.margin
+        );
+        assert_eq!(
+            behavior::surface_size(
+                normal.side,
+                normal.width,
+                normal.bar_height(),
+                normal.reveal,
+                true,
+                Some((normal.width, 900))
+            ),
+            (6, 900)
+        );
+
+        let bar = PanelConfig {
+            side: Side::Bottom,
+            height: Some(40),
+            ..PanelConfig::default()
+        };
+        assert_eq!(bar.bar_height(), 40);
+        assert_eq!(bar.exclusive_zone(), 48);
+
+        let mut invalid = PanelConfig {
+            height: Some(1),
+            reveal: 0,
+            auto_hide: true,
+            width: 6,
+            margin: 0,
+            ..PanelConfig::default()
+        };
+        invalid.rows = vec![Row::label("x")];
+        let errors = invalid.validate().unwrap_err().join("\n");
+        assert!(errors.contains("height"), "{errors}");
+        assert!(errors.contains("reveal"), "{errors}");
+        invalid.reveal = 6;
+        let errors = invalid.validate().unwrap_err().join("\n");
+        assert!(errors.contains("smaller than the panel"), "{errors}");
     }
 }
