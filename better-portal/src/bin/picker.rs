@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU32;
 
-use better_portal::SelectionRect;
+use better_portal::{PickerMode as Mode, SelectionRect};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
@@ -26,13 +26,6 @@ use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Region,
-    Output,
-    Window,
-}
 
 struct PickerSurface {
     output: wl_output::WlOutput,
@@ -70,13 +63,7 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let mode = if std::env::args().any(|arg| arg == "--screencast-window") {
-        Mode::Window
-    } else if std::env::args().any(|arg| arg == "--screencast") {
-        Mode::Output
-    } else {
-        Mode::Region
-    };
+    let mode = Mode::from_args(std::env::args().skip(1));
     if mode == Mode::Window {
         let path = std::env::var_os("NIRI_SOCKET")
             .map(std::path::PathBuf::from)
