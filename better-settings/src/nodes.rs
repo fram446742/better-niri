@@ -717,14 +717,24 @@ pub fn rules(text: &str, kind: RuleKind) -> Vec<RuleSpec> {
     let all_lines: Vec<&str> = text.lines().collect();
     found
         .iter()
-        .filter(|node| node.depth == 0 && node.name == kind.node_name() && node.block)
-        .map(|node| {
-            let mut body: Vec<String> = all_lines
-                .iter()
-                .take(node.end_line)
-                .skip(node.start_line + 1)
-                .map(|line| line.to_string())
-                .collect();
+        .enumerate()
+        .filter(|(_, node)| node.depth == 0 && node.name == kind.node_name() && node.block)
+        .map(|(index, node)| {
+            let mut body: Vec<String> = if node.start_line == node.end_line {
+                // Inline rule: reconstruct its direct children.
+                found
+                    .iter()
+                    .filter(|child| child.parent == Some(index))
+                    .map(|child| child.raw_header.trim().to_owned())
+                    .collect()
+            } else {
+                all_lines
+                    .iter()
+                    .take(node.end_line)
+                    .skip(node.start_line + 1)
+                    .map(|line| line.to_string())
+                    .collect()
+            };
             let indent = body
                 .iter()
                 .filter(|line| !line.trim().is_empty())

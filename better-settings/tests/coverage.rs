@@ -250,6 +250,14 @@ fn rule_and_startup_lists_round_trip() {
         vec![vec!["waybar".to_owned(), "-s".to_owned()]]
     );
     assert_eq!(remove_startup(&patched, 0).unwrap(), text);
+
+    let inline = "window-rule { match app-id=\"x\"; open-floating true; }\n";
+    let parsed = rules(inline, RuleKind::Window);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(
+        parsed[0].lines,
+        vec!["match app-id=\"x\"", "open-floating true"]
+    );
 }
 
 #[test]
@@ -277,7 +285,7 @@ fn column_width_settings_round_trip() {
 
 #[test]
 fn export_import_json_is_deterministic() {
-    let config = "layout {\n    gaps 16\n}\n\nbinds {\n    Mod+Left { focus-column-left; }\n}\n\nwindow-rule {\n    match app-id=\"Alacritty\"\n    open-floating true\n}\n\nspawn-at-startup \"waybar\"\nenvironment {\n    QT_QPA_PLATFORM \"wayland\"\n}\n";
+    let config = "layout {\n    gaps 16\n}\n\nbinds {\n    Mod+Left { focus-column-left; }\n}\n\nwindow-rule {\n    match app-id=\"Alacritty\"\n    open-floating true\n}\n\nlayer-rule {\n    match namespace=\"waybar\"\n    opacity 0.9\n}\n\nspawn-at-startup \"waybar\"\nenvironment {\n    QT_QPA_PLATFORM \"wayland\"\n}\n";
     let model = export_model(config);
     let first = serde_json::to_string_pretty(&model).unwrap();
     let second = serde_json::to_string_pretty(&export_model(config)).unwrap();
@@ -288,8 +296,11 @@ fn export_import_json_is_deterministic() {
     assert_eq!(again.settings, model.settings);
     assert_eq!(again.binds, model.binds);
     assert_eq!(again.window_rules, model.window_rules);
+    assert_eq!(again.layer_rules, model.layer_rules);
     assert_eq!(again.spawn_at_startup, model.spawn_at_startup);
     assert_eq!(environment(&rebuilt), model.environment);
+    assert!(rebuilt.contains("layer-rule {\n    match namespace=\"waybar\""));
+    assert!(!rebuilt.contains("window-rule {\n    match namespace"));
 }
 
 #[test]

@@ -131,10 +131,14 @@ pub fn import_model(text: &str, model: &Model) -> Result<String, PatchError> {
         out = set_bind(&out, bind)?;
     }
     for rule in &model.window_rules {
-        out = add_rule(&out, rule)?;
+        let mut rule = rule.clone();
+        rule.kind = RuleKind::Window;
+        out = add_rule(&out, &rule)?;
     }
     for rule in &model.layer_rules {
-        out = add_rule(&out, rule)?;
+        let mut rule = rule.clone();
+        rule.kind = RuleKind::Layer;
+        out = add_rule(&out, &rule)?;
     }
     for command in &model.spawn_at_startup {
         out = crate::nodes::add_startup(&out, command)?;
