@@ -13,7 +13,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use better_sidepanels::niri::socket_path;
 use better_sidepanels::{
-    ActionSpec, Config, ConfigWatcher, Panel, PanelConfig, ScrollDirection, Side, config_path,
+    ActionSpec, Config, ConfigWatcher, Panel, PanelConfig, PeekState, ReloadSignal,
+    ScrollDirection, SessionState, Side, config_path, session,
 };
 use calloop::EventLoop;
 use calloop::timer::{TimeoutAction, Timer};
@@ -48,6 +49,8 @@ struct PanelSurface {
     size: (u32, u32),
     configured: bool,
     hovered: Option<usize>,
+    peek: PeekState,
+    output_name: Option<String>,
 }
 
 struct Sidepanels {
@@ -61,19 +64,26 @@ struct Sidepanels {
     surfaces: Vec<PanelSurface>,
     pointer: Option<wl_pointer::WlPointer>,
     watcher: ConfigWatcher,
+    session: SessionState,
+    session_path: PathBuf,
+    reload: ReloadSignal,
     exit: bool,
 }
 
 fn usage() -> &'static str {
-    "better-sidepanels [--config PATH] [--check|--validate|--init]\n\n\
+    "better-sidepanels [--config PATH] [--profile NAME] [--check|--validate|--init]\n\n\
      Creates persistent layer-shell panels on every output. Without a config\n\
      file, a default bar (workspaces, window title, media, cpu, memory, battery,\n\
      network, volume, clock) is used.\n\n\
-     --validate  Parse and validate the configuration, then exit.\n\
-     --check     Print the loaded configuration and exit.\n\
-     --init      Write the default configuration to PATH and exit.\n\n\
+     --profile NAME  Start with a named layout from `profiles`/`layouts`\n\
+                     (also remembered across runs). `--layout` is an alias.\n\
+     --validate      Parse and validate the configuration, then exit.\n\
+     --check         Print the loaded configuration and exit.\n\
+     --init          Write the default configuration to PATH and exit.\n\n\
      Config defaults to $BETTER_SIDEPANELS_CONFIG, then\n\
-     $XDG_CONFIG_HOME/better-sidepanels/config.json."
+     $XDG_CONFIG_HOME/better-sidepanels/config.json. Runtime state defaults to\n\
+     $BETTER_SIDEPANELS_STATE, then\n\
+     $XDG_STATE_HOME/better-sidepanels/state.json. SIGHUP reloads the config."
 }
 
 fn main() -> Result<()> {
@@ -83,11 +93,15 @@ fn main() -> Result<()> {
     let mut check = false;
     let mut validate = false;
     let mut init = false;
+    let mut profile = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => {
                 path = PathBuf::from(args.next().context("--config needs a path")?);
+            }
+            "--profile" | "--layout" => {
+                profile = Some(args.next().context("--profile needs a name")?);
             }
             "--check" => check = true,
             "--validate" => validate = true,
@@ -107,6 +121,31 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let config = Config::load(&path).map_err(anyhow::Error::msg)?;
+    let state_path = std::env::var_os("BETTER_SIDEPANELS_STATE")
+        .map(PathBuf::from)
+        .unwrap_or_else(session::state_path);
+    let mut session = SessionState::load(&state_path).unwrap_or_else(|err| {
+        eprintln!("better-sidepanels: ignoring session state: {err}");
+        SessionState::default()
+    });
+    let explicit_profile = profile.clone();
+    let wanted = profile.as_deref().or(session.profile.as_deref());
+    let mut config = config;
+    if let Some(name) = wanted {
+        if config.select_profile(name) {
+            session.profile = Some(name.to_owned());
+        } else if explicit_profile.is_some() {
+            anyhow::bail!(
+                "unknown layout `{name}` (known: {})",
+                config.profile_names().join(", ")
+            );
+        } else {
+            eprintln!(
+                "better-sidepanels: session layout `{name}` no longer exists; using the default"
+            );
+            session.profile = None;
+        }
+    }
     if validate {
         match config.validate() {
             Ok(()) => println!("{}: ok", path.display()),
@@ -126,10 +165,15 @@ fn main() -> Result<()> {
     config
         .validate()
         .map_err(|errors| anyhow::anyhow!("{}", errors.join("\n")))?;
-    run(config, path)
+    run(config, path, state_path, session)
 }
 
-fn run(config: Config, config_path: PathBuf) -> Result<()> {
+fn run(
+    config: Config,
+    config_path: PathBuf,
+    session_path: PathBuf,
+    session: SessionState,
+) -> Result<()> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<Sidepanels>(&conn)?;
     let qh = queue.handle();
@@ -149,8 +193,14 @@ fn run(config: Config, config_path: PathBuf) -> Result<()> {
         surfaces: Vec::new(),
         pointer: None,
         watcher: ConfigWatcher::new(config_path),
+        session,
+        session_path,
+        reload: ReloadSignal::install(),
         exit: false,
     };
+    if let Err(err) = state.save_session() {
+        eprintln!("better-sidepanels: cannot save session state: {err}");
+    }
 
     queue.roundtrip(&mut state)?;
     let outputs: Vec<_> = state.output_state.outputs().collect();
@@ -190,6 +240,10 @@ fn run(config: Config, config_path: PathBuf) -> Result<()> {
                         redraw = true;
                     }
                 }
+                if state.reload.take() {
+                    state.reload_config(&qh_tick);
+                    redraw = true;
+                }
                 if state.watcher.poll() {
                     state.reload(&qh_tick);
                     redraw = true;
@@ -216,7 +270,78 @@ fn run(config: Config, config_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Applies side, anchor, size, margin, exclusive zone and peek state to a
+/// layer surface.
+fn configure_layer(layer: &LayerSurface, config: &PanelConfig, hidden: bool) {
+    let anchor = match config.side {
+        Side::Left => Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+        Side::Right => Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
+        Side::Top => Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
+        Side::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+    };
+    let anchor = if config.side.is_vertical() && config.height.is_some() {
+        // A fixed-height vertical panel hangs from the top instead of spanning
+        // the whole output.
+        anchor & !Anchor::BOTTOM
+    } else {
+        anchor
+    };
+    layer.set_anchor(anchor);
+    layer.set_exclusive_zone(config.exclusive_zone_with(hidden) as i32);
+    let reveal = config.reveal;
+    match config.side {
+        Side::Left | Side::Right => {
+            let width = if hidden { reveal.max(1) } else { config.width };
+            let height = config.height.unwrap_or(0);
+            layer.set_size(width, height);
+        }
+        Side::Top | Side::Bottom => {
+            let height = if hidden {
+                reveal.max(1)
+            } else {
+                config.bar_height()
+            };
+            layer.set_size(0, height);
+        }
+    }
+    let margin = config.margin as i32;
+    let (top, right, bottom, left) = match config.side {
+        Side::Left => (0, 0, 0, margin),
+        Side::Right => (0, margin, 0, 0),
+        Side::Top => (margin, 0, 0, 0),
+        Side::Bottom => (0, 0, margin, 0),
+    };
+    layer.set_margin(top, right, bottom, left);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+}
+
 impl Sidepanels {
+    fn save_session(&self) -> Result<(), String> {
+        self.session.save(&self.session_path)
+    }
+
+    /// Re-reads the config file, keeping the active layout if it still exists.
+    fn reload_config(&mut self, qh: &QueueHandle<Self>) {
+        let path = self.watcher.path().to_path_buf();
+        match Config::load(&path) {
+            Ok(mut config) => {
+                if let Some(name) = self.session.profile.as_deref()
+                    && config.profiles.contains_key(name)
+                {
+                    config.active_profile = Some(name.to_owned());
+                }
+                match config.validate() {
+                    Ok(()) => self.apply_config(config, qh),
+                    Err(errors) => eprintln!(
+                        "better-sidepanels: keeping previous config, {} problem(s):\n  {}",
+                        errors.len(),
+                        errors.join("\n  ")
+                    ),
+                }
+            }
+            Err(err) => eprintln!("better-sidepanels: keeping previous config: {err}"),
+        }
+    }
     fn output_name(&self, output: &wl_output::WlOutput) -> Option<String> {
         self.output_state
             .info(output)
@@ -252,28 +377,11 @@ impl Sidepanels {
             Some("better-sidepanels"),
             Some(&output),
         );
-        let anchor = match config.side {
-            Side::Left => Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            Side::Right => Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
-            Side::Top => Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-            Side::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-        };
-        layer.set_anchor(anchor);
-        layer.set_exclusive_zone(config.exclusive_zone() as i32);
-        if config.side.is_vertical() {
-            layer.set_size(config.width, 0);
-        } else {
-            layer.set_size(0, config.bar_height());
-        }
-        let margin = config.margin as i32;
-        let (top, right, bottom, left) = match config.side {
-            Side::Left => (0, 0, 0, margin),
-            Side::Right => (0, margin, 0, 0),
-            Side::Top => (margin, 0, 0, 0),
-            Side::Bottom => (0, 0, margin, 0),
-        };
-        layer.set_margin(top, right, bottom, left);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        let visible = output_name
+            .as_deref()
+            .is_some_and(|name| self.session.is_visible(name));
+        let hidden = config.auto_hide && !visible;
+        configure_layer(&layer, &config, hidden);
         layer.commit();
 
         let pool_size = (config.width as usize * 64).max(4096);
@@ -284,9 +392,10 @@ impl Sidepanels {
                 return;
             }
         };
-        let panel = match output_name {
-            Some(name) => Panel::new(config).with_output(name),
-            None => Panel::new(config),
+        let rules = self.config.rules.clone();
+        let panel = match output_name.as_deref() {
+            Some(name) => Panel::new(config).with_output(name).with_rules(rules),
+            None => Panel::new(config).with_rules(rules),
         };
         self.surfaces.push(PanelSurface {
             output,
@@ -296,6 +405,8 @@ impl Sidepanels {
             size: (0, 0),
             configured: false,
             hovered: None,
+            peek: PeekState::new(hidden),
+            output_name,
         });
     }
 
@@ -306,18 +417,7 @@ impl Sidepanels {
     }
 
     fn reload(&mut self, qh: &QueueHandle<Self>) {
-        let path = self.watcher.path().to_path_buf();
-        match Config::load(&path) {
-            Ok(config) => match config.validate() {
-                Ok(()) => self.apply_config(config, qh),
-                Err(errors) => eprintln!(
-                    "better-sidepanels: keeping previous config, {} problem(s):\n  {}",
-                    errors.len(),
-                    errors.join("\n  ")
-                ),
-            },
-            Err(err) => eprintln!("better-sidepanels: keeping previous config: {err}"),
-        }
+        self.reload_config(qh);
     }
 
     fn apply_config(&mut self, config: Config, qh: &QueueHandle<Self>) {
@@ -337,10 +437,18 @@ impl Sidepanels {
                     surface.output == *output
                         && surface.panel.config.side == panel.side
                         && surface.panel.config.output == panel.output
+                        && surface.panel.config.width == panel.width
+                        && surface.panel.config.height == panel.height
+                        && surface.panel.config.margin == panel.margin
+                        && surface.panel.config.auto_hide == panel.auto_hide
+                        && surface.panel.config.reveal == panel.reveal
+                        && surface.panel.config.floating == panel.floating
                 });
         if same_structure {
             // Keep the layer surfaces; swap config and refresh modules.
+            let rules = config.rules.clone();
             for ((_, panel), surface) in layout.into_iter().zip(&mut self.surfaces) {
+                surface.panel.set_rules(rules.clone());
                 surface.panel.set_config(panel);
                 surface.panel.refresh_all();
             }
@@ -385,7 +493,12 @@ impl Sidepanels {
         if width == 0 || height == 0 {
             return;
         }
-        let image = match surface.panel.render_with(width, height, surface.hovered) {
+        let image = if surface.peek.hidden() {
+            surface.panel.render_strip(width, height)
+        } else {
+            surface.panel.render_with(width, height, surface.hovered)
+        };
+        let image = match image {
             Ok(image) => image,
             Err(err) => {
                 eprintln!("better-sidepanels: render: {err}");
@@ -414,6 +527,45 @@ impl Sidepanels {
             surface.layer.commit();
         }
         let _ = qh;
+    }
+
+    /// Shows or hides an auto-hide panel and persists the choice for the run.
+    fn set_peek(&mut self, index: usize, hidden: bool) {
+        let Some(surface) = self.surfaces.get_mut(index) else {
+            return;
+        };
+        if !surface.panel.config.auto_hide || !surface.peek.set_hidden(hidden) {
+            return;
+        }
+        let config = surface.panel.config.clone();
+        configure_layer(&surface.layer, &config, hidden);
+        surface.layer.commit();
+        surface.configured = false;
+        surface.size = (0, 0);
+        let output = surface.output_name.clone();
+        if let Some(output) = output {
+            self.session.set_visible(output, !hidden);
+            if let Err(err) = self.save_session() {
+                eprintln!("better-sidepanels: cannot save session state: {err}");
+            }
+        }
+    }
+
+    /// Switches to a named layout/profile and recreates the surfaces.
+    fn switch_layout(&mut self, qh: &QueueHandle<Self>, name: &str) {
+        if !self.config.select_profile(name) {
+            eprintln!(
+                "better-sidepanels: unknown layout `{name}` (known: {})",
+                self.config.profile_names().join(", ")
+            );
+            return;
+        }
+        self.session.profile = Some(name.to_owned());
+        if let Err(err) = self.save_session() {
+            eprintln!("better-sidepanels: cannot save session state: {err}");
+        }
+        let config = self.config.clone();
+        self.apply_config(config, qh);
     }
 
     fn index_of(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
@@ -446,6 +598,11 @@ impl Sidepanels {
     }
 
     fn run_surface_action(&mut self, qh: &QueueHandle<Self>, index: usize, action: &ActionSpec) {
+        if let Some(name) = action.layout_name() {
+            let name = name.to_owned();
+            self.switch_layout(qh, &name);
+            return;
+        }
         let result = self
             .surfaces
             .get(index)
@@ -572,11 +729,16 @@ impl LayerShellHandler for Sidepanels {
             return;
         };
         let vertical = self.surfaces[index].panel.config.side.is_vertical();
+        let hidden = self.surfaces[index].peek.hidden();
         let width = NonZeroU32::new(configure.new_size.0)
             .map(NonZeroU32::get)
             .unwrap_or_else(|| {
                 if vertical {
-                    self.surfaces[index].panel.config.width
+                    if hidden {
+                        self.surfaces[index].panel.config.reveal.max(1)
+                    } else {
+                        self.surfaces[index].panel.config.width
+                    }
                 } else {
                     0
                 }
@@ -585,7 +747,14 @@ impl LayerShellHandler for Sidepanels {
             .map(NonZeroU32::get)
             .unwrap_or_else(|| {
                 if vertical {
-                    1
+                    self.surfaces[index]
+                        .panel
+                        .config
+                        .height
+                        .filter(|height| *height > 0)
+                        .unwrap_or(1)
+                } else if hidden {
+                    self.surfaces[index].panel.config.reveal.max(1)
                 } else {
                     self.surfaces[index].panel.config.bar_height()
                 }
@@ -650,11 +819,26 @@ impl PointerHandler for Sidepanels {
             let (x, y) = event.position;
             match event.kind {
                 PointerEventKind::Leave { .. } => {
-                    if self.surfaces[index].hovered.take().is_some() {
+                    let hovered = self.surfaces[index].hovered.take().is_some();
+                    if hovered {
+                        self.draw(qh, index);
+                    }
+                    self.set_peek(index, true);
+                }
+                PointerEventKind::Enter { .. } => {
+                    self.set_peek(index, false);
+                    let (width, height) = self.surface_size(index);
+                    let hovered = self.surfaces[index]
+                        .panel
+                        .interaction_map(width, height)
+                        .ok()
+                        .and_then(|map| map.row_at(x, y));
+                    if self.surfaces[index].hovered != hovered {
+                        self.surfaces[index].hovered = hovered;
                         self.draw(qh, index);
                     }
                 }
-                PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } => {
+                PointerEventKind::Motion { .. } => {
                     let (width, height) = self.surface_size(index);
                     let hovered = self.surfaces[index]
                         .panel
@@ -667,6 +851,7 @@ impl PointerHandler for Sidepanels {
                     }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                    self.set_peek(index, false);
                     if let Some((_, action)) = self.action_at(index, x, y) {
                         self.run_surface_action(qh, index, &action);
                     }

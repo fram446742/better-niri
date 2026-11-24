@@ -11,6 +11,11 @@ Each panel is a **layer-shell surface** on the top layer with an **exclusive
 zone**, so tiled windows do not overlap it. Panels can be placed on `left`,
 `right`, `top` or `bottom`, and one output can have several panels.
 
+Panels can also be **floating** (no exclusive zone), **auto-hidden** behind the
+edge with a thin reveal strip, fixed to an explicit `height`, switched between
+named **layouts** (profiles), and filtered/reordered by the focused
+application/workspace through **rules**.
+
 A panel is a list of rows:
 
 - **Label** — static text with an optional `icon` prefix.
@@ -29,6 +34,7 @@ configurable font, colours and background opacity.
 better-sidepanels --init          # write the default config
 better-sidepanels --validate      # parse + validate, print problems and exit
 better-sidepanels --check         # print the loaded config and exit
+better-sidepanels --profile work  # start with a named layout
 better-sidepanels                 # run the panels
 ```
 
@@ -197,6 +203,10 @@ older `--init`) is still accepted and wrapped in a single panel.
 | `padding`    | `12`       | Inner padding                                                       |
 | `row_height` | `34`       | Height of each row                                                  |
 | `title`      | `"BETTER"` | Header text; vertical panels only                                   |
+| `height`     | —          | Fixed height (vertical) or bar height (top/bottom)                  |
+| `auto_hide`  | `false`    | Hide behind the edge until the pointer enters the reveal strip      |
+| `reveal`     | `6`        | Width (vertical) / height (horizontal) of the hidden reveal strip   |
+| `floating`   | `false`    | Do not reserve space (`exclusive zone 0`)                           |
 | `theme`      | see above  | Colours, `font`, `opacity`                                          |
 | `rows`       | —          | List of rows                                                        |
 
@@ -212,6 +222,8 @@ older `--init`) is still accepted and wrapped in a single panel.
 | `click`       | Click action (string command or niri action object); wins over `command` |
 | `scroll_up`   | Action for wheel up / two-finger scroll up                              |
 | `scroll_down` | Action for wheel down / scroll down                                     |
+| `workspaces`  | Show only on these workspace names (globs allowed)                      |
+| `apps`        | Show only when one of these focused app ids matches (globs allowed)     |
 
 ### Version 1 files
 
@@ -266,18 +278,121 @@ Panels do not take keyboard focus (`KeyboardInteractivity::None`).
 - Per-output overrides in `outputs` can change size, padding, title, side and
   individual theme fields for one connector without duplicating a panel.
 
+## Auto-hide, floating and sizing
+
+```json
+{
+  "side": "left",
+  "width": 300,
+  "height": 520,
+  "auto_hide": true,
+  "reveal": 8,
+  "floating": true
+}
+```
+
+- `auto_hide` keeps the surface as a `reveal`-pixel strip on the edge. Pointer
+  enter (or a click on the strip) reveals the full panel; pointer leave hides
+  it again. The hidden strip is painted in the theme accent colour.
+- `floating` sets the exclusive zone to `0`, so tiled windows may go under it.
+- `height` fixes a vertical panel's height and anchors it to the top of its
+  edge; for `top`/`bottom` it replaces the derived bar height. `width` already
+  controls vertical panels; horizontal bars span the output.
+- The reveal strip is never larger than the panel; `--validate` reports both
+  `reveal: 0` and a strip as large as the panel.
+
+## Application and workspace rules
+
+Rules are evaluated every refresh from niri's focused window and workspace
+(`FocusedWindow`, `Workspaces`). Selectors match a row label, a module kind
+(`kind:media`) or the row's original index (`#2`). Globs (`*`, `?`) are
+case-insensitive.
+
+```json
+{
+  "rules": [
+    {
+      "app": "fire*",
+      "hide": ["kind:media"],
+      "order": ["Workspaces", "Window"]
+    },
+    {
+      "workspace": "game*",
+      "show": ["Workspaces", "Clock", "CPU"]
+    }
+  ]
+}
+```
+
+`show` is a whitelist applied first, `hide` removes rows next, and `order`
+moves matching rows to the front (unlisted rows keep their order). A row can
+also name `workspaces` and `apps` lists directly; that is a per-row variant of
+the same idea and defaults to visible. Hiding a row removes its module polling
+until the context changes.
+
+## Named layouts (profiles) and switching
+
+`profiles` (aliased as `layouts`) holds named panel lists. `active_profile`
+selects one, `--profile NAME` / `--layout NAME` overrides it for the run, and
+the choice is remembered in session state:
+
+```json
+{
+  "active_profile": "work",
+  "profiles": {
+    "work": [
+      { "side": "left", "width": 280, "rows": [{ "label": "Work" }] }
+    ],
+    "media": [
+      { "side": "top", "height": 40, "rows": [{ "label": "Media", "module": { "kind": "media" } }] }
+    ]
+  }
+}
+```
+
+A row can switch layouts at runtime:
+
+```json
+{ "label": "Media layout", "click": { "layout": "media" } }
+```
+
+Switching recreates the layer surfaces, saves the choice to session state and
+keeps the daemon running. It is a daemon-side action, so it cannot be used as a
+plain shell command action.
+
+## Session state
+
+Runtime state is stored in `$BETTER_SIDEPANELS_STATE`, then
+`$XDG_STATE_HOME/better-sidepanels/state.json`:
+
+```json
+{
+  "profile": "work",
+  "visible": { "DP-1": true }
+}
+```
+
+On startup the saved layout is restored if it still exists, and auto-hidden
+panels start revealed where `visible` says so. An unknown saved layout is
+reported and ignored; an unknown `--layout` is an error.
+
 ## Reload
 
-The config file is watched (mtime + size, polled every 250 ms). On a valid
-change:
+The config file is watched (mtime + size, polled every 250 ms) and `SIGHUP`
+forces the same reload path. On a valid change:
 
-- if the panel structure (output, edge, count) is unchanged, panels update in
-  place and module output refreshes — the layer surfaces are **not** recreated;
-- if panels were added, removed or moved to another edge, surfaces are recreated.
+- if the panel structure (output, edge, count, size, auto-hide/floating) is
+  unchanged, panels update in place and module output refreshes — the layer
+  surfaces are **not** recreated;
+- if panels were added, removed, resized or moved to another edge, surfaces
+  are recreated.
 
 An invalid reload is rejected and the previous config keeps running; run
-`better-sidepanels --validate` to see every problem at once. There is no
-`SIGHUP` handler; edit the file (or restart the process) instead.
+`better-sidepanels --validate` to see every problem at once.
+
+```sh
+pkill -HUP better-sidepanels
+```
 
 ## Security notes
 
@@ -301,7 +416,10 @@ An invalid reload is rejected and the previous config keeps running; run
 - `playerctl`, `pactl`/`wpctl` are optional; their rows simply stay blank.
 - Top/bottom panels have no header title.
 - Module polling is per panel: several identical panels on many outputs repeat
-  the same reads (and niri requests).
+  the same reads (and niri requests). Application rules add one `Workspaces`
+  and one `FocusedWindow` request per refresh while rules are configured.
+- Auto-hide has no hide delay or pinning gesture; leaving the surface hides it
+  immediately.
 - `battery` uses the first `Battery` entry; `network` uses one interface;
   `volume` uses the default sink.
 - Clock month/weekday names are English, and the UTC offset is sampled per
@@ -310,7 +428,8 @@ An invalid reload is rejected and the previous config keeps running; run
 - No buffer scale / font DPI setting: text is rendered at logical pixels.
 - With `KeyboardInteractivity::None` the panel cannot receive keyboard shortcuts.
 - Niri's IPC socket is the only IPC integration; there is no event-stream
-  subscription, so modules poll on their intervals.
+  subscription, so modules poll on their intervals and rules re-evaluate on
+  the same tick.
 
 ## Test
 
@@ -320,10 +439,12 @@ cargo fmt --check
 cargo clippy --all-targets
 ```
 
-The 45 library tests cover config v1/v2 parsing, defaults, per-output overrides,
-validation, layout (vertical and horizontal), hit testing and workspace chip
-clicks, scroll action mapping, clock formatting, `/proc/stat` and
-`/proc/meminfo` deltas, battery/network/volume/media parsing and fallbacks,
-window-title truncation, reload watching, security (untrusted titles never reach
-commands) and cairo renderer smoke tests for all four sides — no compositor or
-real niri instance required.
+The 61 library tests cover config v1/v2 parsing, defaults, per-output overrides,
+named profiles/layouts, application rules and workspace/app row visibility,
+auto-hide/peek and floating geometry, session state persistence and reload
+latching, validation, layout (vertical and horizontal), hit testing and
+workspace chip clicks, scroll action mapping, clock formatting, `/proc/stat`
+and `/proc/meminfo` deltas, battery/network/volume/media parsing and fallbacks,
+window-title truncation, reload watching, security (untrusted titles never
+reach commands) and cairo renderer smoke tests for all four sides — no
+compositor or real niri instance required.

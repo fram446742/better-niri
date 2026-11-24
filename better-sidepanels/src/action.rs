@@ -22,6 +22,11 @@ use crate::system::Env;
 pub enum ActionSpec {
     Command(String),
     Niri(NiriAction),
+    /// Switches to another named panel layout; handled by the daemon.
+    Layout {
+        /// Profile/layout name from `Config::profiles`.
+        layout: String,
+    },
 }
 
 impl ActionSpec {
@@ -29,8 +34,23 @@ impl ActionSpec {
         Self::Command(command.into())
     }
 
+    /// Action that switches the active panel layout/profile.
+    pub fn layout(name: impl Into<String>) -> Self {
+        Self::Layout {
+            layout: name.into(),
+        }
+    }
+
     pub fn is_niri(&self) -> bool {
         matches!(self, Self::Niri(_))
+    }
+
+    /// Name of the layout this action switches to, if it is a layout action.
+    pub fn layout_name(&self) -> Option<&str> {
+        match self {
+            Self::Layout { layout } => Some(layout),
+            _ => None,
+        }
     }
 
     /// Executes the action with the given environment.
@@ -49,6 +69,9 @@ impl ActionSpec {
                     None => Err(format!("niri did not answer `{}`", action.describe())),
                 }
             }
+            Self::Layout { layout } => Err(format!(
+                "layout `{layout}` must be switched by the panel daemon"
+            )),
         }
     }
 
@@ -56,6 +79,7 @@ impl ActionSpec {
         match self {
             Self::Command(command) => command.clone(),
             Self::Niri(action) => action.describe(),
+            Self::Layout { layout } => format!("layout {layout}"),
         }
     }
 }
@@ -82,6 +106,14 @@ mod tests {
             serde_json::from_value(json!({ "niri": "focus-workspace-down" })).unwrap();
         assert_eq!(scroll.describe(), "focus-workspace-down");
         assert!(serde_json::from_value::<ActionSpec>(json!({ "niri": "bogus" })).is_err());
+
+        let layout: ActionSpec = serde_json::from_value(json!({ "layout": "media" })).unwrap();
+        assert_eq!(layout, ActionSpec::layout("media"));
+        assert_eq!(layout.layout_name(), Some("media"));
+        assert_eq!(layout.describe(), "layout media");
+        assert!(!layout.is_niri());
+        assert!(layout.run_with(&mut MockEnv::new(0)).is_err());
+        assert_eq!(ActionSpec::command("true").layout_name(), None);
     }
 
     #[test]
