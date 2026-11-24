@@ -764,6 +764,22 @@ impl TtyOffscreen {
             _ => None,
         }
     }
+
+    /// Borrows the GLES texture, if this is one.
+    pub fn as_gles(&self) -> Option<&GlesTexture> {
+        match self {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            _ => None,
+        }
+    }
+
+    /// Borrows the Vulkan texture, if this is one.
+    pub fn as_vulkan(&self) -> Option<&smithay::backend::renderer::vulkan::VulkanTexture> {
+        match self {
+            TtyOffscreen::Vulkan(texture) => Some(texture),
+            _ => None,
+        }
+    }
 }
 
 impl Texture for TtyOffscreen {

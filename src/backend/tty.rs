@@ -199,6 +199,14 @@ impl TtyOffscreen {
             TtyOffscreen::Multi(_) => None,
         }
     }
+
+    /// Borrows the GLES texture, if this is one.
+    pub fn as_gles(&self) -> Option<&smithay::backend::renderer::gles::GlesTexture> {
+        match self {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            TtyOffscreen::Multi(_) => None,
+        }
+    }
 }
 
 #[cfg(not(feature = "vulkan"))]
