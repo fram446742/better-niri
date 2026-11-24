@@ -24,8 +24,19 @@ MSG
   exit 1
 fi
 if command -v ffprobe >/dev/null; then
-  TRANSFER=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer -of default=nw=1:nk=1 "$CLIP" 2>/dev/null || true)
-  echo "clip colour transfer: ${TRANSFER:-unknown} (expect smpte2084 for HDR10)"
+  INFO=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,pix_fmt,color_transfer,color_primaries -of default=nw=1:nk=1 "$CLIP" 2>/dev/null | tr '\n' ' ')
+  echo "clip: $INFO (HDR10 needs smpte2084 + bt2020)"
+fi
+if ! grep -qE 'hdr([[:space:]]|$)' "$HOME/.config/niri/config.kdl" 2>/dev/null; then
+  cat <<'MSG'
+WARNING: no `hdr` entry in ~/.config/niri/config.kdl, so niri does not
+advertise colour management and mpv will stay SDR. Add, then restart niri:
+  output "DP-1" {
+      hdr mode="on" {
+          reference-luminance 203
+      }
+  }
+MSG
 fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
-exec mpv --fs --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
+exec mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
