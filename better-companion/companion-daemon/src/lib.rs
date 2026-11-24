@@ -25,6 +25,15 @@ pub fn build_registry(socket: &Path) -> io::Result<Registry> {
 pub fn build_registry_with_parking(
     socket: &Path,
 ) -> io::Result<(Registry, companion_parking::Parking)> {
+    build_registry_with_activity(socket, companion_idle::ActivityClock::new())
+}
+
+/// Builds the registry with a caller-owned idle activity clock, so the daemon
+/// can feed niri events into the same clock `idle.*` reads.
+pub fn build_registry_with_activity(
+    socket: &Path,
+    activity: companion_idle::ActivityClock,
+) -> io::Result<(Registry, companion_parking::Parking)> {
     let mut registry = Registry::with_socket(socket);
     let parking = companion_parking::Parking::from_state_dir()?;
     registry.register(parking.clone());
@@ -49,6 +58,11 @@ pub fn build_registry_with_parking(
         parking.clone(),
         companion_niri::Compositor::from_env(),
     )?);
+    registry.register(companion_idle::Idle::with_activity(
+        companion_idle::state_path(),
+        activity,
+    )?);
+    registry.register(companion_rotate::Rotate::from_state_dir()?);
     for adapter in companion_adapters::default_adapters()? {
         registry.register(adapter);
     }
@@ -175,6 +189,8 @@ mod tests {
                 assert!(contexts.contains_key("parking"));
                 assert!(contexts.contains_key("automation"));
                 assert!(contexts.contains_key("hooks"));
+                assert!(contexts.contains_key("idle"));
+                assert!(contexts.contains_key("rotate"));
                 assert!(contexts.contains_key("system"));
                 assert!(contexts.contains_key("compositor"));
                 assert!(contexts.contains_key("parker"));
@@ -222,10 +238,12 @@ mod tests {
                 "automation",
                 "compositor",
                 "hooks",
+                "idle",
                 "monitor",
                 "nsticky",
                 "parker",
                 "parking",
+                "rotate",
                 "rules",
                 "scratchpad",
                 "session",

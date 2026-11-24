@@ -18,4 +18,6 @@ companion-system.workspace = true
 companion-niri.workspace = true
 companion-rules.workspace = true
 companion-adapters.workspace = true
+companion-idle.workspace = true
+companion-rotate.workspace = true
 serde_json.workspace = true
