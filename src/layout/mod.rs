@@ -223,9 +223,9 @@ pub trait LayoutElement {
     }
 
     /// Renders the background effect behind the main surface of the element.
-    fn render_background_effect(
+    fn render_background_effect<R: NiriRenderer>(
         &self,
-        _ctx: RenderCtx<GlesRenderer>,
+        _ctx: RenderCtx<R>,
         _geometry: Rectangle<f64, Logical>,
         _scale: f64,
         _clip_to_geometry: bool,
@@ -238,9 +238,9 @@ pub trait LayoutElement {
 
     /// Renders the blur on top of the element when it is blocked out with `block-out-blur`.
     #[allow(clippy::too_many_arguments)]
-    fn render_block_out_blur(
+    fn render_block_out_blur<R: NiriRenderer>(
         &self,
-        _ctx: RenderCtx<GlesRenderer>,
+        _ctx: RenderCtx<R>,
         _geometry: Rectangle<f64, Logical>,
         _scale: f64,
         _radius: CornerRadius,

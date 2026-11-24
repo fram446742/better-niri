@@ -17,7 +17,7 @@ use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Transform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 use crate::render_helpers::capture;
 use crate::render_helpers::renderer::AsGlesFrame as _;
-use crate::render_helpers::shader_element::ShaderRenderElement;
+use crate::render_helpers::shader_element::{ShaderRenderElement, gles_texture_map};
 #[cfg(feature = "vulkan")]
 use crate::render_helpers::shaders;
 use crate::render_helpers::shaders::{ProgramType, Shaders};
@@ -254,7 +254,7 @@ impl RenderElement<GlesRenderer> for GlobalShaderElement {
                     self.scale,
                     1.,
                     uniforms.clone(),
-                    buf_textures,
+                    gles_texture_map(buf_textures),
                     Kind::Unspecified,
                 );
 
@@ -301,7 +301,7 @@ impl RenderElement<GlesRenderer> for GlobalShaderElement {
                 self.scale,
                 1.,
                 uniforms.clone(),
-                textures,
+                gles_texture_map(textures),
                 Kind::Unspecified,
             );
 

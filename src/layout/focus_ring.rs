@@ -345,7 +345,9 @@ impl FocusRing {
             self.light.borrow_mut().clear();
             return None;
         };
-        // Decoration light is a GLSL program; skip on Vulkan.
+        // The decoration-light *program* compiles on Vulkan, but its producer
+        // (`DecorationLight::render`) renders emission through a GLES `OffscreenBuffer` and blurs
+        // it with the GLES `Blur`, so there is no Vulkan texture to feed the composite yet.
         let Some(renderer) = renderer.as_gles_renderer() else {
             self.light.borrow_mut().clear();
             return None;
