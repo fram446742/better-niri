@@ -293,20 +293,30 @@ picked up without re-auditing.
    fallback. Phase 8 packaging is in `packaging/`: Arch/AUR recipes for
    `niri-better` and `better-desktop`, pinned and `-git` variants, feature
    profiles (minimal/desktop/full), `verify.sh`, and `docs/PACKAGING.md` with
-   the compatibility matrix. Remaining: hardware validation (VRR/tearing/
-   explicit sync/multi-GPU/HDR mixed on real panels) and split packages. `better-settings/` now covers layout, input
+   the compatibility matrix. The Arch/AUR recipes are now split into
+   `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
+   `better-session`, `better-shot`, `better-wallpaper`, `better-settings`,
+   `better-audio`, `better-sidepanels` and the `better-desktop` meta package,
+   with ownership/staging checks in `verify.sh`. Remaining: hardware validation
+   (VRR/tearing/explicit sync/multi-GPU/HDR mixed on real panels). `better-settings/` now covers layout, input
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
    byte-preserving edits, dry-run diffs, export/import and a sectioned GTK UI.
+   `better-monitor/` now has schema v2 (matching by name/make/model/serial,
+   max BPC, HDR notes, VRR aliases), layout validation, ordered apply,
+   partial-failure rollback, rules with priorities, a debounced watch mode and
+   JSON reports; `better-shot/` added `record` with `wf-recorder`/command
+   backends, region/window/output selection, codecs/containers, audio, HDR
+   handling, PID state, `--stop` and JSON reports.
    Still open across the ecosystem: Noctalia plugins (Phase 6); session
    orchestration of monitor/audio/wallpaper profiles with partial-success
    reporting; monitor confirmation timer and graphical arrangement editor;
-   shot recording/editor extras, wallpaper transitions, sidepanel auto-hide and
-   audio input/profile management; companion event subscriptions and window
-   marks; nsticky delegating sticky to the compositor when the capability is
-   present; systemd units for companion daemons and CI jobs for the companion
-   workspaces. On the compositor side the only planned port left is
+   shot editor extras (blur/pixelate/crop/spotlight/history), wallpaper
+   transitions, sidepanel auto-hide and audio input/profile management;
+   companion event subscriptions and window marks; nsticky delegating sticky to
+   the compositor when the capability is present; systemd units for companion
+   daemons and CI jobs for the companion workspaces. On the compositor side the only planned port left is
    `wp-commit-timing-v1` plus SurfaceBarrier; DPMS VRAM/GTT cleanup stays
    deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY

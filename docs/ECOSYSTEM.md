@@ -90,7 +90,7 @@ operate the desktop without the shell.
 | better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | **delivered**: one daemon + per-context crates; parking, rules, windows, stage/scratchpad, nsticky aliases, swallow, idle/rotate modules and event adapters (187 tests) |
 | better-session | Context/session save/restore | **delivered**: named contexts with outputs, workspaces, windows, hooks, ordered idempotent restore and late-app waiting (16 tests) |
 | better-sidepanels | Persistent side panels | **delivered**: layer-shell panels on all edges, built-in modules (clock/workspaces/title/media/battery/cpu/memory/network/volume/custom), actions, per-output config, reload (45 tests) |
-| better-shot | Capture/recording/annotation | **delivered**: screenshots with HDR modes, built-in annotations, PNG/JPEG/WebP, metadata; recording in progress (35+ tests) |
+| better-shot | Capture/recording/annotation | **delivered**: screenshots with HDR modes, built-in annotations, PNG/JPEG/WebP, metadata and screen recording (`wf-recorder`/command backends, region/window/output, codecs, audio, PID state, `--stop`) (66 tests) |
 | better-monitor | Output profiles, safe apply | **delivered**: schema v2 with matching, rules, watch, validation, rollback and JSON output; confirmation timer and GUI editor still open (58 tests) |
 | better-audio | PipeWire routing | **delivered**: native PipeWire backend (registry, port-link moves, metadata default sink, volume/mute) with pactl/wpctl fallbacks and restore (31 tests) |
 | better-wallpaper | Scenes, per-workspace wallpapers | **delivered**: native layer-shell background backend with cover-scaled shm images, reload and command fallback (30 tests); transitions open |
