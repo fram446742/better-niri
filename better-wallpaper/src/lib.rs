@@ -1,10 +1,16 @@
 //! `better-wallpaper`: per-workspace wallpaper scenes for niri.
 //!
-//! Scenes map workspace names (or `default`) to image paths. A watcher follows
-//! niri's event stream and runs an external wallpaper command for the focused
-//! workspace, replacing the previous process on that output. The command is a
-//! shell template with `{image}`, `{workspace}` and `{output}` placeholders,
-//! defaulting to `swaybg -i {image}`.
+//! Scenes map workspace names (or `default`) to image paths. Two backends can
+//! render them:
+//!
+//! - **native** (`native`): one `zwlr_layer_shell_v1` background surface per output, filled through
+//!   `wl_shm` — no external wallpaper program needed.
+//! - **command** (`command`): the original behaviour, an external command template (`swaybg`/`ssww`
+//!   style) run per output, with `{image}`, `{workspace}` and `{output}` placeholders.
+//!
+//! `auto` (the default) uses the native backend when the compositor supports
+//! it and degrades to the command template otherwise. `watch` follows niri's
+//! event stream and reapplies on workspace focus changes; `apply` renders once.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -12,6 +18,11 @@ use std::process::{Child, Command, Stdio};
 
 use niri_ipc::{Event, Request, Response, Workspace};
 use serde::{Deserialize, Serialize};
+
+pub mod backend;
+pub mod geom;
+pub mod images;
+pub mod native;
 
 pub const DEFAULT_COMMAND: &str = "swaybg -i {image}";
 
@@ -134,6 +145,48 @@ pub fn workspace_infos(workspaces: &[Workspace]) -> Vec<WorkspaceInfo> {
         .collect()
 }
 
+/// Maps each output name to the name of the workspace currently active on it.
+///
+/// The native backend renders per output, so it needs the active workspace of
+/// every output, not just the globally focused one. Unnamed workspaces and
+/// outputs without a name are skipped; those outputs fall back to the scene
+/// `default`.
+pub fn active_workspaces(workspaces: &[Workspace]) -> BTreeMap<String, String> {
+    workspaces
+        .iter()
+        .filter(|ws| ws.is_active)
+        .filter_map(|ws| Some((ws.output.clone()?, ws.name.clone()?)))
+        .collect()
+}
+
+/// Resolves the image to show on every output given the active workspace map.
+pub fn plan_for_outputs(
+    scene: &Scene,
+    active: &BTreeMap<String, String>,
+) -> BTreeMap<String, Option<String>> {
+    active
+        .iter()
+        .map(|(output, workspace)| (output.clone(), resolve(scene, Some(workspace)).cloned()))
+        .collect()
+}
+
+/// Queries niri once and resolves the image for every output. Used by
+/// `--dry-run` (no compositor surface is created) and by the native backend's
+/// startup message.
+pub fn workspace_plan(
+    socket: &Path,
+    store: &Store,
+) -> Result<BTreeMap<String, Option<String>>, String> {
+    let scene = store
+        .active_scene()
+        .ok_or_else(|| "no active scene; use `scene use <name>` first".to_owned())?;
+    let workspaces = match send(socket, Request::Workspaces)? {
+        Response::Workspaces(workspaces) => workspaces,
+        other => return Err(format!("unexpected niri response: {other:?}")),
+    };
+    Ok(plan_for_outputs(scene, &active_workspaces(&workspaces)))
+}
+
 #[derive(Debug, Default)]
 pub struct Watcher {
     template: String,
@@ -184,7 +237,7 @@ impl Watcher {
     }
 }
 
-fn send(socket: &Path, request: Request) -> Result<Response, String> {
+pub(crate) fn send(socket: &Path, request: Request) -> Result<Response, String> {
     use niri_ipc::socket::Socket;
     let mut socket =
         Socket::connect_to(socket).map_err(|err| format!("cannot connect to niri IPC: {err}"))?;
@@ -442,8 +495,15 @@ mod tests {
         watcher.apply(&scene, Some("web"), "HDMI-1").unwrap();
         wait_for(&log, |text| text.lines().count() == 2, "both images");
         watcher.finish();
-        let contents = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(contents, "/a.png\n/b.png\n");
+        // Both detached commands run concurrently, so their appends can land in
+        // either order; each image must appear exactly once.
+        let mut lines: Vec<_> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines.sort();
+        assert_eq!(lines, ["/a.png", "/b.png"]);
     }
 
     #[test]
@@ -547,5 +607,133 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let meta = std::fs::metadata(&script).unwrap();
         assert_eq!(meta.permissions().mode() & 0o111, 0o111);
+    }
+
+    fn workspace(id: u64, name: Option<&str>, output: Option<&str>, active: bool) -> Workspace {
+        Workspace {
+            id,
+            idx: id as u8,
+            name: name.map(str::to_owned),
+            output: output.map(str::to_owned),
+            is_urgent: false,
+            is_active: active,
+            is_focused: false,
+            active_window_id: None,
+            is_hidden: false,
+        }
+    }
+
+    #[test]
+    fn active_workspaces_maps_every_output() {
+        let workspaces = vec![
+            workspace(1, Some("main"), Some("eDP-1"), true),
+            workspace(2, Some("web"), Some("eDP-1"), false),
+            workspace(3, Some("scratch"), Some("HDMI-1"), true),
+            workspace(4, None, Some("DP-1"), true),
+            workspace(5, Some("ghost"), None, true),
+        ];
+        let active = active_workspaces(&workspaces);
+        assert_eq!(active.len(), 2);
+        assert_eq!(active["eDP-1"], "main");
+        assert_eq!(active["HDMI-1"], "scratch");
+        assert!(!active.contains_key("DP-1"));
+        assert!(!active.contains_key(""));
+    }
+
+    #[test]
+    fn plan_for_outputs_resolves_each_active_workspace() {
+        let scene = Scene {
+            default: Some("/default.png".to_owned()),
+            wallpapers: BTreeMap::from([
+                ("main".to_owned(), "/main.png".to_owned()),
+                ("web".to_owned(), "/web.png".to_owned()),
+            ]),
+        };
+        let active = BTreeMap::from([
+            ("eDP-1".to_owned(), "main".to_owned()),
+            ("HDMI-1".to_owned(), "games".to_owned()),
+        ]);
+        let plan = plan_for_outputs(&scene, &active);
+        assert_eq!(plan["eDP-1"].as_deref(), Some("/main.png"));
+        assert_eq!(plan["HDMI-1"].as_deref(), Some("/default.png"));
+
+        let empty = Scene::default();
+        let plan = plan_for_outputs(&empty, &active);
+        assert!(plan["eDP-1"].is_none());
+    }
+
+    #[test]
+    fn scene_parses_partial_json_and_rejects_bad_values() {
+        let scene: Scene = serde_json::from_str(r#"{"wallpapers":{"main":"/m.png"}}"#).unwrap();
+        assert_eq!(scene.wallpapers["main"], "/m.png");
+        assert!(scene.default.is_none());
+        assert!(
+            serde_json::from_str::<Scene>("{}")
+                .unwrap()
+                .wallpapers
+                .is_empty()
+        );
+        assert!(serde_json::from_str::<Scene>(r#"{"wallpapers":{"main":7}}"#).is_err());
+    }
+
+    #[test]
+    fn store_load_reports_malformed_json() {
+        let dir = temp_dir("badjson");
+        let path = dir.join("scenes.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        let err = Store::load(&path).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        // A missing file is an empty store, not an error.
+        let missing = Store::load(&dir.join("absent.json")).unwrap();
+        assert!(missing.scenes.is_empty());
+    }
+
+    #[test]
+    fn workspace_plan_resolves_every_output_from_niri() {
+        let dir = temp_dir("plan");
+        let socket = dir.join("niri.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            assert!(matches!(request, Request::Workspaces));
+            let response = json!({ "Ok": { "Workspaces": [
+                focused_workspace(),
+                {
+                    "id": 8,
+                    "idx": 1,
+                    "name": "web",
+                    "output": "HDMI-1",
+                    "is_urgent": false,
+                    "is_active": true,
+                    "is_focused": false,
+                    "active_window_id": null,
+                    "is_hidden": false
+                }
+            ] } });
+            let mut stream = stream;
+            stream
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .unwrap();
+            stream.write_all(b"\n").unwrap();
+            stream.flush().unwrap();
+        });
+        let store = Store {
+            active: Some("work".to_owned()),
+            scenes: BTreeMap::from([(
+                "work".to_owned(),
+                Scene {
+                    default: Some("/default.png".to_owned()),
+                    wallpapers: BTreeMap::from([("main".to_owned(), "/main.png".to_owned())]),
+                },
+            )]),
+        };
+        let plan = workspace_plan(&socket, &store).unwrap();
+        server.join().unwrap();
+        assert_eq!(plan["eDP-1"].as_deref(), Some("/main.png"));
+        assert_eq!(plan["HDMI-1"].as_deref(), Some("/default.png"));
     }
 }
