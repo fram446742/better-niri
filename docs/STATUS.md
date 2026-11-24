@@ -194,8 +194,11 @@ picked up without re-auditing.
    region, SHM and dmabuf), ext-image-copy-capture (SHM advertised, dmabuf
    accepted), and screencast frames (SHM advertised on Vulkan; dmabuf handled)
    render through the active renderer, with damage/cursor semantics unchanged.
-   Still open: transition capture on rotated outputs and popup background
-   effects (still gated on GLES). Textured `ShaderRenderElement`s now draw on
+   Transition captures are transform-aware (all eight transforms covered by a
+   readback test), and popup/layer-popup background effects now draw on Vulkan
+   instead of being gated on GLES. Remaining GLES-only render bits: the window
+   opening animation and tile alpha fade, MRU title/fade/panel textures, and
+   the screencast picker transition/panel/preview bakes. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
