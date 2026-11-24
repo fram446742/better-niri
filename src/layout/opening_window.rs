@@ -14,7 +14,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 use crate::animation::Animation;
 use crate::niri_render_elements;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenData, OffscreenRenderElement};
-use crate::render_helpers::shader_element::ShaderRenderElement;
+use crate::render_helpers::shader_element::{ShaderRenderElement, gles_texture_map};
 use crate::render_helpers::shaders::{ProgramType, Shaders, mat3_uniform};
 
 #[derive(Debug)]
@@ -118,7 +118,7 @@ impl OpenAnimation {
                     Uniform::new("niri_clamped_progress", clamped_progress as f32),
                     Uniform::new("niri_random_seed", self.random_seed),
                 ]),
-                HashMap::from([(String::from("niri_tex"), texture.clone())]),
+                gles_texture_map(HashMap::from([(String::from("niri_tex"), texture.clone())])),
                 Kind::Unspecified,
             )
             .with_location(area.loc);

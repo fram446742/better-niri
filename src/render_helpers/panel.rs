@@ -11,7 +11,7 @@ use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform}
 
 use super::panel_quad::{bounding_box, sampling_matrix};
 use super::renderer::NiriRenderer;
-use super::shader_element::ShaderRenderElement;
+use super::shader_element::{ShaderRenderElement, gles_texture_map};
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
@@ -83,7 +83,7 @@ impl PanelRenderElement {
                 mat3_uniform("niri_panel_inv", inv),
                 Uniform::new("niri_panel_dim", dim),
             ]),
-            textures,
+            gles_texture_map(textures),
             Kind::Unspecified,
         )
         .with_location(Point::from((bx, by)));
@@ -170,7 +170,7 @@ impl PanelRenderElement {
                 mat3_uniform("niri_panel_inv", inv),
                 Uniform::new("niri_panel_dim", dim),
             ]),
-            textures,
+            gles_texture_map(textures),
         );
 
         // `ShaderRenderElement::update` doesn't touch location (only `with_location`, a

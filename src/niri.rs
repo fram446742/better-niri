@@ -7431,6 +7431,11 @@ impl Niri {
         #[cfg(feature = "navigation")]
         if self.layout.active_output() == Some(output) {
             if self.carousel_panels_needed() {
+                // Panel contents are baked through `OffscreenBuffer`, which owns a `GlesTexture`
+                // and takes `&mut GlesRenderer` (see `update_panel_sources`), so there is no
+                // Vulkan producer yet. The `ShaderRenderElement`/`PanelRenderElement` draw path
+                // itself accepts `TtyOffscreen::Vulkan` textures (see
+                // `render_helpers/shader_element.rs`), so only this producer is missing.
                 if let Some(mut gles) = ctx.as_gles() {
                     self.update_panel_sources(&mut gles, output, self.panel_frame.get());
                 }

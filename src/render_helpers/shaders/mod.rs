@@ -777,14 +777,26 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 /// Vulkan-compiled niri shader programs.
 ///
 /// The TTY Vulkan renderer draws the same GLSL sources as GLES, compiled to
-/// SPIR-V through better-smithay's custom pixel pipeline. Only the programs that
-/// do not depend on GLES offscreen textures live here; textured effects keep
-/// their GLES path.
+/// SPIR-V through better-smithay's custom pixel pipeline. Textured programs
+/// (panel, decoration light, blur, background composite) sample
+/// renderer-owned `VulkanTexture`s; producers that only exist on the GLES
+/// side (resize/close/open snapshots, xray backdrop buffers) still keep their
+/// GLES path.
 #[cfg(feature = "vulkan")]
 pub struct VulkanShaders {
     pub border: Option<VulkanPixelProgram>,
     pub shadow: Option<VulkanPixelProgram>,
     pub clipped_surface: Option<VulkanPixelProgram>,
+    /// Textured decoration light (`ShaderRenderElement` with `ProgramType::DecorationLight`).
+    pub decoration_light: Option<VulkanPixelProgram>,
+    /// Perspective-tilted carousel panel (`ProgramType::Panel`).
+    pub panel: Option<VulkanPixelProgram>,
+    /// Dual-Kawase downsample/upsample passes for the Vulkan background blur.
+    pub blur_down: Option<VulkanPixelProgram>,
+    pub blur_up: Option<VulkanPixelProgram>,
+    /// Background-effect composite (`clipped_surface.frag` + `postprocess.frag`), used by
+    /// `FramebufferEffectElement` on Vulkan and carrying the liquid-glass uniforms.
+    pub postprocess_and_clip: Option<VulkanPixelProgram>,
     pub decorations: RefCell<HashMap<u64, VulkanPixelProgram>>,
     pub global_passes: RefCell<Vec<VulkanPixelProgram>>,
     pub global_buffers: RefCell<Vec<Option<VulkanPixelProgram>>>,
@@ -866,10 +878,90 @@ impl VulkanShaders {
                 .ok()
         };
 
+        let decoration_light = compile_vulkan_program(
+            renderer,
+            include_str!("decoration_light.frag"),
+            &[
+                UniformName::new("light_gain", UniformType::_1f),
+                UniformName::new("light_tex_scale", UniformType::_2f),
+            ],
+            &["light_texture"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan decoration light shader: {err:?}"))
+        .ok();
+
+        let panel = compile_vulkan_program(
+            renderer,
+            include_str!("panel.frag"),
+            &[
+                UniformName::new("niri_panel_inv", UniformType::Matrix3x3),
+                UniformName::new("niri_panel_dim", UniformType::_1f),
+            ],
+            &["niri_panel_tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan panel shader: {err:?}"))
+        .ok();
+
+        let blur_down = compile_vulkan_program(
+            renderer,
+            include_str!("blur_down.frag"),
+            &[
+                UniformName::new("half_pixel", UniformType::_2f),
+                UniformName::new("offset", UniformType::_1f),
+            ],
+            &["tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan blur_down shader: {err:?}"))
+        .ok();
+        let blur_up = compile_vulkan_program(
+            renderer,
+            include_str!("blur_up.frag"),
+            &[
+                UniformName::new("half_pixel", UniformType::_2f),
+                UniformName::new("offset", UniformType::_1f),
+            ],
+            &["tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan blur_up shader: {err:?}"))
+        .ok();
+
+        // Background-effect composite: same GLSL as the GLES `postprocess_and_clip`
+        // program. The custom-uniform block has no integer kind, so the alpha-mask flag
+        // is shipped as a float and the shader's `== 1` test is rewritten to `> 0.5`.
+        let postprocess_and_clip = {
+            let mut src = String::from(include_str!("clipped_surface.frag"));
+            src.push_str(include_str!("rounding_alpha.frag"));
+            src.push_str(
+                &include_str!("postprocess.frag")
+                    .replace(
+                        "uniform int alpha_mask_enabled;",
+                        "uniform float alpha_mask_enabled;",
+                    )
+                    .replace("alpha_mask_enabled == 1", "alpha_mask_enabled > 0.5"),
+            );
+            let mut uniforms = clipped_surface_uniform_names();
+            uniforms.extend([
+                UniformName::new("noise", UniformType::_1f),
+                UniformName::new("saturation", UniformType::_1f),
+                UniformName::new("bg_color", UniformType::_4f),
+                UniformName::new("surface_to_geo", UniformType::Matrix3x3),
+                UniformName::new("alpha_mask_enabled", UniformType::_1f),
+                UniformName::new("alpha_threshold", UniformType::_1f),
+            ]);
+            compile_vulkan_program(renderer, &src, &uniforms, &["tex", "surface_tex"])
+                .map_err(|err| warn!("error compiling Vulkan postprocess shader: {err:?}"))
+                .ok()
+        };
+
         Self {
             border,
             shadow,
             clipped_surface,
+            decoration_light,
+            panel,
+            blur_down,
+            blur_up,
+            postprocess_and_clip,
             decorations: RefCell::new(HashMap::new()),
             global_passes: RefCell::new(Vec::new()),
             global_buffers: RefCell::new(Vec::new()),
@@ -886,6 +978,8 @@ impl VulkanShaders {
         match program {
             ProgramType::Border => self.border.clone(),
             ProgramType::Shadow => self.shadow.clone(),
+            ProgramType::Panel => self.panel.clone(),
+            ProgramType::DecorationLight => self.decoration_light.clone(),
             ProgramType::Decoration(key) => self.decorations.borrow().get(&key).cloned(),
             ProgramType::GlobalPass(pass) => self.global_passes.borrow().get(pass).cloned(),
             ProgramType::GlobalPassBuffer(pass) => self
@@ -1465,6 +1559,26 @@ mod tests {
             assert!(
                 shaders.clipped_surface.is_some(),
                 "clipped-surface shader failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.panel.is_some(),
+                "panel shader failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.decoration_light.is_some(),
+                "decoration-light shader failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.blur_down.is_some() && shaders.blur_up.is_some(),
+                "blur shaders failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.postprocess_and_clip.is_some(),
+                "background-effect postprocess shader failed to compile on {}",
                 device.name()
             );
             // Global/scoped programs need five samplers; better-smithay now

@@ -827,9 +827,9 @@ impl LayoutElement for Mapped {
         }
     }
 
-    fn render_block_out_blur(
+    fn render_block_out_blur<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<GlesRenderer>,
+        ctx: RenderCtx<R>,
         geometry: Rectangle<f64, Logical>,
         scale: f64,
         radius: CornerRadius,
@@ -862,9 +862,9 @@ impl LayoutElement for Mapped {
         effect.render(ctx, None, params, xray_pos, 0., None, push);
     }
 
-    fn render_background_effect(
+    fn render_background_effect<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<GlesRenderer>,
+        ctx: RenderCtx<R>,
         geometry: Rectangle<f64, Logical>,
         scale: f64,
         clip_to_geometry: bool,

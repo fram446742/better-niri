@@ -12,7 +12,7 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform};
 
 use super::renderer::NiriRenderer;
-use super::shader_element::ShaderRenderElement;
+use super::shader_element::{ShaderRenderElement, gles_texture_map};
 use super::shaders::{ProgramType, Shaders, mat3_uniform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
@@ -104,10 +104,10 @@ impl ResizeRenderElement {
                     Uniform::new("niri_corner_radius", <[f32; 4]>::from(corner_radius)),
                     Uniform::new("niri_clip_to_geometry", clip_to_geometry),
                 ]),
-                HashMap::from([
+                gles_texture_map(HashMap::from([
                     (String::from("niri_tex_prev"), texture_prev),
                     (String::from("niri_tex_next"), texture_next),
-                ]),
+                ])),
                 Kind::Unspecified,
             )
             .with_location(area.loc),

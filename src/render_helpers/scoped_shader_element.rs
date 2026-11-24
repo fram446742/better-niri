@@ -18,7 +18,7 @@ use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 use crate::render_helpers::capture;
 use crate::render_helpers::offscreen::OffscreenBuffer;
 use crate::render_helpers::renderer::AsGlesFrame as _;
-use crate::render_helpers::shader_element::ShaderRenderElement;
+use crate::render_helpers::shader_element::{ShaderRenderElement, gles_texture_map};
 #[cfg(feature = "vulkan")]
 use crate::render_helpers::shaders;
 use crate::render_helpers::shaders::{ProgramType, Shaders};
@@ -230,7 +230,7 @@ impl RenderElement<GlesRenderer> for ScopedShaderElement {
                 self.scale,
                 1.,
                 uniforms.clone(),
-                textures,
+                gles_texture_map(textures),
                 Kind::Unspecified,
             );
 

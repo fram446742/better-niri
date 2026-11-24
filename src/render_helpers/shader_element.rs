@@ -17,7 +17,21 @@ use super::blend::FrameBlendState;
 use super::renderer::AsGlesFrame;
 use super::resources::Resources;
 use super::shaders::{ProgramType, Shaders};
-use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty::{TtyFrame, TtyOffscreen, TtyRenderer, TtyRendererError};
+
+/// Converts a map of GLES textures into the backend-agnostic map used by
+/// [`ShaderRenderElement`].
+///
+/// This keeps the GLES-only producers (offscreen buffers, blur and snapshot
+/// textures) unchanged: the GLES draw arm unwraps the `Gles` variant again and
+/// binds it exactly as before, while the Vulkan draw arm samples the `Vulkan`
+/// variant.
+pub fn gles_texture_map(textures: HashMap<String, GlesTexture>) -> HashMap<String, TtyOffscreen> {
+    textures
+        .into_iter()
+        .map(|(name, texture)| (name, TtyOffscreen::Gles(texture)))
+        .collect()
+}
 
 /// Renders a shader with optional texture input, on the primary GPU.
 #[derive(Debug, Clone)]
@@ -31,7 +45,10 @@ pub struct ShaderRenderElement {
     scale: f32,
     alpha: f32,
     additional_uniforms: Rc<[Uniform<'static>]>,
-    textures: HashMap<String, GlesTexture>,
+    /// Texture inputs by shader sampler name. Backend-agnostic: the GLES draw
+    /// path binds `TtyOffscreen::Gles` and the Vulkan draw path samples
+    /// `TtyOffscreen::Vulkan`.
+    textures: HashMap<String, TtyOffscreen>,
     kind: Kind,
     screen_blend: bool,
 }
@@ -248,7 +265,7 @@ impl ShaderRenderElement {
         scale: f32,
         alpha: f32,
         additional_uniforms: Rc<[Uniform<'static>]>,
-        textures: HashMap<String, GlesTexture>,
+        textures: HashMap<String, TtyOffscreen>,
         kind: Kind,
     ) -> Self {
         Self {
@@ -317,7 +334,7 @@ impl ShaderRenderElement {
         scale: f32,
         alpha: f32,
         uniforms: Rc<[Uniform<'static>]>,
-        textures: HashMap<String, GlesTexture>,
+        textures: HashMap<String, TtyOffscreen>,
     ) {
         self.area.size = size;
         self.opaque_regions = opaque_regions.unwrap_or_default();
@@ -465,6 +482,18 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
         let has_debug = !frame.debug_flags().is_empty();
         let has_tint = frame.debug_flags().contains(DebugFlags::TINT);
 
+        // Bind only GLES textures; indices must line up with the sampler uniforms, so collect
+        // names and textures in the same iteration order. On the GLES backend every texture in
+        // the map is a `Gles` one, so this is identical to iterating the map directly.
+        let gles_textures: Vec<(&String, &GlesTexture)> = self
+            .textures
+            .iter()
+            .filter_map(|(name, texture)| match texture {
+                TtyOffscreen::Gles(texture) => Some((name, texture)),
+                _ => None,
+            })
+            .collect();
+
         // render
         let span_loc = smithay::gpu_span_location!("draw shader");
         frame.with_profiled_context(span_loc, move |gl| -> Result<(), GlesError> {
@@ -475,7 +504,7 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
             };
 
             unsafe {
-                for (i, texture) in self.textures.values().enumerate() {
+                for (i, (_, texture)) in gles_textures.iter().enumerate() {
                     gl.ActiveTexture(ffi::TEXTURE0 + i as u32);
                     gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
                     gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
@@ -494,8 +523,8 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
 
                 gl.UseProgram(program.program);
 
-                for (i, name) in self.textures.keys().enumerate() {
-                    gl.Uniform1i(program.texture_uniforms[name], i as i32);
+                for (i, (name, _)) in gles_textures.iter().enumerate() {
+                    gl.Uniform1i(program.texture_uniforms[*name], i as i32);
                 }
 
                 gl.UniformMatrix3fv(
@@ -655,8 +684,12 @@ impl ShaderRenderElement {
     /// Draws this element with the Vulkan renderer, using the SPIR-V program
     /// compiled from the same GLSL source as the GLES path.
     ///
-    /// Only elements without texture inputs are supported; textured shader
-    /// effects (resize snapshots, clipped surfaces) keep their GLES path.
+    /// Texture inputs in the element's map are resolved by name to their
+    /// `TtyOffscreen::Vulkan` variants and bound as `(&str, &VulkanTexture)`
+    /// samplers. Programs without texture inputs draw as before. Elements whose
+    /// textures were produced by a GLES-only producer are skipped rather than
+    /// drawn with missing samplers (a `GlesTexture` cannot be sampled by the
+    /// Vulkan renderer without an import path).
     pub(super) fn draw_vulkan(
         &self,
         frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
@@ -667,8 +700,13 @@ impl ShaderRenderElement {
 
         let _span = tracy_client::span!("ShaderRenderElement::draw_vulkan");
 
-        if !self.textures.is_empty() {
-            return Ok(());
+        let mut textures = Vec::with_capacity(self.textures.len());
+        for (name, texture) in &self.textures {
+            match texture {
+                TtyOffscreen::Vulkan(texture) => textures.push((name.as_str(), texture)),
+                // GLES-only producer: the Vulkan backend cannot sample it.
+                _ => return Ok(()),
+            }
         }
 
         let Some(program) = super::shaders::get_vulkan_frame(frame)
@@ -705,7 +743,7 @@ impl ShaderRenderElement {
             });
         }
 
-        frame.render_custom(&program, dst, damage, &uniforms, &[], self.alpha)
+        frame.render_custom(&program, dst, damage, &uniforms, &textures, self.alpha)
     }
 }
 
@@ -799,5 +837,105 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
         // If scanout for things other than Wayland buffers is implemented, this will need to take
         // the target GPU into account.
         None
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::gles::Uniform;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{
+        Bind, Color32F, ExportMem, Frame as _, ImportMem, Offscreen, Renderer,
+    };
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Rectangle, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::shaders::{init_vulkan, mat3_uniform};
+
+    /// Draws a `ProgramType::Panel` element whose sampler is a Vulkan texture created through
+    /// `import_memory`, then reads the framebuffer back. This exercises the whole textured
+    /// `ShaderRenderElement` Vulkan path: map resolution, `render_custom` sampler binding,
+    /// uniform conversion and the real `panel.frag` program. Skips silently without a device.
+    #[test]
+    fn vulkan_textured_shader_element_samples_its_texture() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            init_vulkan(&mut renderer, &niri_config::Config::default());
+
+            // A 4×4 opaque red (Argb8888 little-endian: B, G, R, A).
+            let tex_size = Size::<i32, smithay::utils::Buffer>::from((4, 4));
+            let data = [0u8, 0, 255, 255].repeat(16);
+            let source = renderer
+                .import_memory(&data, Fourcc::Argb8888, tex_size, false)
+                .expect("import the source texture");
+
+            let textures = HashMap::from([(
+                "niri_panel_tex".to_owned(),
+                crate::backend::tty::TtyOffscreen::Vulkan(source),
+            )]);
+            let element = ShaderRenderElement::new(
+                ProgramType::Panel,
+                Size::from((8., 8.)),
+                None,
+                1.,
+                1.,
+                Rc::new([
+                    mat3_uniform("niri_panel_inv", glam::Mat3::IDENTITY),
+                    Uniform::new("niri_panel_dim", 1.0f32),
+                ]),
+                textures,
+                Kind::Unspecified,
+            );
+
+            let buffer_size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((8, 8));
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, buffer_size)
+                .expect("offscreen target");
+            let mut fb = renderer.bind(&mut target).expect("bind target");
+            let mut frame = renderer
+                .render(&mut fb, output_size, Transform::Normal)
+                .expect("begin frame");
+            let dst = Rectangle::from_size(output_size);
+            frame
+                .clear(Color32F::TRANSPARENT, &[dst])
+                .expect("clear frame");
+            element
+                .draw_vulkan(&mut frame, dst, &[dst])
+                .expect("draw the textured panel element");
+            frame.finish().expect("finish frame");
+
+            let mapping = renderer
+                .copy_framebuffer(&fb, Rectangle::from_size(buffer_size), Fourcc::Argb8888)
+                .expect("copy framebuffer");
+            let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+            // Sample the middle of the 8×8 quad: edge pixels interpolate with the
+            // transparent-border sampler, while the centre is fully inside the 4×4 texture.
+            let center = (4 * 8 + 4) * 4;
+            assert_eq!(
+                &pixels[center..center + 4],
+                &[0, 0, 255, 255],
+                "the sampled texture did not reach the framebuffer"
+            );
+            eprintln!(
+                "Vulkan textured ShaderRenderElement draw OK on {}",
+                device.name()
+            );
+            return;
+        }
     }
 }

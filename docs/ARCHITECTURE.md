@@ -89,7 +89,7 @@ Only heavy or platform-specific dependencies are optional:
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `vulkan` | on | Compiles better-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. The TTY backend renders through `TtyRenderer`/`TtyFrame` enums over the GLES and Vulkan multi-GPU renderers, so `vulkan` drives outputs with `VulkanRenderer`; borders and shadows recompile their GLSL to SPIR-V, other GLSL-only visuals stay on GLES and are skipped. `niri --check-vulkan` prints the plan as JSON. |
+| `vulkan` | on | Compiles better-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. The TTY backend renders through `TtyRenderer`/`TtyFrame` enums over the GLES and Vulkan multi-GPU renderers, so `vulkan` drives outputs with `VulkanRenderer`; borders, shadows, textured shader elements (panel/decoration-light programs), the per-window blur/background composite and liquid glass recompile their GLSL to SPIR-V and draw. Producers that remain GLES-only (panel-source bakes, decoration-light emission, xray backdrops, resize/screen transitions) stay on GLES and are skipped. `niri --check-vulkan` prints the plan as JSON. |
 | `agent` | on | Agent seat, agent IPC socket, automation helpers. No heavy dependency; default-on so the compositor is complete. |
 | `portal` | on | Built-in XDG portal backend (`zbus` already optional upstream). |
 | `svg-cursors` | on | SVG cursor themes (`resvg`/`usvg`). |

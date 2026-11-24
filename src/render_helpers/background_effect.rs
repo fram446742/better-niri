@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use niri_config::CornerRadius;
 use smithay::backend::renderer::Renderer as _;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, import_surface};
 use smithay::utils::{Logical, Point, Rectangle, Scale};
 use smithay::wayland::compositor::{SurfaceData, with_states};
@@ -15,6 +15,7 @@ use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
 use crate::render_helpers::liquid_glass::LiquidGlassOptions;
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::{XrayElement, XrayPos};
 use crate::utils::region::TransformedRegion;
 use crate::utils::surface_geo;
@@ -162,9 +163,9 @@ impl BackgroundEffect {
         self.options.is_visible()
     }
 
-    pub fn render(
+    pub fn render<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<GlesRenderer>,
+        mut ctx: RenderCtx<R>,
         ns: Option<usize>,
         mut params: RenderParams,
         xray_pos: XrayPos,
@@ -202,8 +203,15 @@ impl BackgroundEffect {
             _ => None,
         };
 
-        if self.options.xray {
-            let Some(xray) = ctx.xray else {
+        // Xray samples a shared scene-wide backdrop built from GLES offscreen buffers
+        // (`Xray`/`EffectBuffer`), which the Vulkan backend has no producer for yet. When only
+        // the Vulkan renderer is available, fall back to the per-window framebuffer effect,
+        // which captures the composited scene below the window on either backend.
+        if self.options.xray && ctx.renderer.as_gles_renderer().is_some() {
+            let Some(gles) = ctx.as_gles() else {
+                return;
+            };
+            let Some(xray) = gles.xray else {
                 return;
             };
 
@@ -217,7 +225,7 @@ impl BackgroundEffect {
 
             push(damage.into());
             xray.render(
-                ctx,
+                gles,
                 params,
                 xray_xray_pos,
                 blur,
@@ -339,8 +347,8 @@ pub fn damage_surface(states: &SurfaceData) {
     }
 }
 
-pub fn render_for_tile(
-    ctx: RenderCtx<GlesRenderer>,
+pub fn render_for_tile<R: NiriRenderer>(
+    mut ctx: RenderCtx<R>,
     ns: Option<usize>,
     geometry: Rectangle<f64, Logical>,
     scale: f64,
@@ -374,23 +382,29 @@ pub fn render_for_tile(
 
         let alpha_mask = if background_effect.options.ignore_opacity.is_some() && !should_block_out
         {
-            let _ = import_surface(ctx.renderer, states);
-            let data = states.data_map.get::<RendererSurfaceStateUserData>();
-            let texture = data.and_then(|data| {
-                data.lock()
-                    .unwrap()
-                    .texture(ctx.renderer.context_id())
-                    .cloned()
-            });
+            // The mask is a GLES surface texture sampled by the GLES composite; the Vulkan
+            // background path does not carry it (its alpha-mask branch is disabled).
+            if let Some(gles) = ctx.as_gles() {
+                let _ = import_surface(gles.renderer, states);
+                let data = states.data_map.get::<RendererSurfaceStateUserData>();
+                let texture = data.and_then(|data| {
+                    data.lock()
+                        .unwrap()
+                        .texture(gles.renderer.context_id())
+                        .cloned()
+                });
 
-            let mut mask_geo = surface_geo_logical.upscale(surface_anim_scale);
-            mask_geo.loc += geometry.loc;
+                let mut mask_geo = surface_geo_logical.upscale(surface_anim_scale);
+                mask_geo.loc += geometry.loc;
 
-            texture.map(|surface_tex| AlphaMask {
-                surface_tex,
-                surface_geo: mask_geo,
-                threshold: 0.0,
-            })
+                texture.map(|surface_tex| AlphaMask {
+                    surface_tex,
+                    surface_geo: mask_geo,
+                    threshold: 0.0,
+                })
+            } else {
+                None
+            }
         } else {
             None
         };

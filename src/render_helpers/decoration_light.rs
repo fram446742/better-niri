@@ -10,7 +10,7 @@ use smithay::utils::{Logical, Point, Size};
 
 use super::blur::{Blur, BlurOptions};
 use super::offscreen::OffscreenBuffer;
-use super::shader_element::ShaderRenderElement;
+use super::shader_element::{ShaderRenderElement, gles_texture_map};
 use super::shaders::ProgramType;
 use super::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::layout::focus_ring::FocusRingRenderElement;
@@ -157,7 +157,7 @@ impl DecorationLight {
                     Uniform::new("light_gain", gain as f32),
                     Uniform::new("light_tex_scale", tex_scale),
                 ]),
-                HashMap::from([("light_texture".to_owned(), texture)]),
+                gles_texture_map(HashMap::from([("light_texture".to_owned(), texture)])),
             );
             self.offset = emission.offset();
             self.config = Some(params);

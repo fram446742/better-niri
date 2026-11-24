@@ -24,7 +24,7 @@ This table is the integration contract, not a claim of completion.
 | Custom primaries | Absent | niri-spicy | niri-spicy | Planned | Smithay side required. |
 | SDR/HDR mixing | Absent | niri-spicy | niri-spicy | Planned | SDR composited at reference luminance; niri-elite has an equivalent always-HDR blend fix. |
 | HDR → SDR capture | Absent | niri-spicy, niri-elite | niri-spicy | Planned | Must cover screenshot, ext-image-copy-capture, PipeWire. |
-| Vulkan renderer | Absent | niri-spicy + losnoco/smithay | niri-spicy, optional Cargo feature | TTY renderer enum over GLES/Vulkan; `NIRI_RENDERER=vulkan` selects it, `auto` stays GLES; GLSL-only visuals skipped on Vulkan | Per-output fallback to GLES. |
+| Vulkan renderer | Absent | niri-spicy + losnoco/smithay | niri-spicy, optional Cargo feature | TTY renderer enum over GLES/Vulkan; `NIRI_RENDERER=vulkan` selects it, `auto` stays GLES; borders, shadows, per-window blur/background effects and liquid glass draw on Vulkan; producers that are still GLES-only (decoration light, xray, carousel panels, resize/screen transitions) are skipped | Per-output fallback to GLES. |
 | GLES renderer | Upstream | upstream | upstream | Upstream | HDR/Vulkan work must not regress it. |
 | DMA-BUF import/export | Upstream | upstream | upstream | Upstream | Extend format probes for HDR. |
 | GPU format probing | Partial | niri-spicy, niri-elite | niri-spicy | Planned | niri already has a 10-bit scanout format list; HDR needs per-plane colour probing. |

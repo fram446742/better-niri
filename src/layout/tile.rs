@@ -1283,16 +1283,14 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         // Pushed before the window so that the framebuffer blur samples the window itself.
-        if let Some(mut gles) = ctx.as_gles() {
-            self.window.render_block_out_blur(
-                gles.r(),
-                area,
-                self.scale,
-                radius,
-                xray_pos,
-                &mut |elem| push(elem.into()),
-            );
-        }
+        self.window.render_block_out_blur(
+            ctx.r(),
+            area,
+            self.scale,
+            radius,
+            xray_pos,
+            &mut |elem| push(elem.into()),
+        );
 
         // If we're resizing, try to render a shader, or a fallback.
         let mut pushed_resize = false;
@@ -1568,18 +1566,16 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         let surface_anim_scale = animated_window_size / window_size;
-        if let Some(mut gles_ctx) = ctx.as_gles() {
-            self.window.render_background_effect(
-                gles_ctx.r(),
-                area,
-                self.scale,
-                clip_to_geometry,
-                surface_anim_scale,
-                radius,
-                xray_pos,
-                &mut |elem| push(elem.into()),
-            );
-        }
+        self.window.render_background_effect(
+            ctx.r(),
+            area,
+            self.scale,
+            clip_to_geometry,
+            surface_anim_scale,
+            radius,
+            xray_pos,
+            &mut |elem| push(elem.into()),
+        );
     }
 
     pub fn render<R: NiriRenderer>(

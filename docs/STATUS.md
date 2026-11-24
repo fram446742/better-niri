@@ -185,17 +185,20 @@ picked up without re-auditing.
    the display's 1083-nit peak); SDR/HDR mixed compositing still uses the GLES
    path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
    and desktop content look rougher/differently antialiased than the SDR
-   session, because the SDR-to-HDR blend is not applied there yet. Still open: HDR compositing, and Vulkan paths for the remaining
-   GLSL-only visuals (window/global/
-   scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
-   magnified screenshot capture, screen transitions). Global/scoped/window
-   shaders are blocked on better-smithay: their GLSL needs five samplers
-   (`niri_screen`, `niri_prev`, `niri_screen_prev`, `niri_buffer`,
-   `niri_source`) but `MAX_CUSTOM_TEXTURES` is 2 in the custom pixel pipeline.
-   The Vulkan side already compiles the sources, keys them like the GLES
-   registries and skips them with a warning until the Smithay descriptor
-   layouts/pool grow; the draw path also needs generic offscreen capture
-   textures.
+   session, because the SDR-to-HDR blend is not applied there yet. Still open:
+   HDR compositing, decoration light, xray backdrops, carousel panel contents,
+   magnified screenshot capture and screen transitions. Textured
+   `ShaderRenderElement`s now draw on Vulkan: the panel and decoration-light
+   programs are compiled to SPIR-V and their sampler maps resolve
+   `TtyOffscreen::Vulkan` textures, but the producers that would feed them
+   (panel-source bakes, decoration-light emission/blur) are still GLES-only, so
+   those visuals stay skipped. The per-window background effect does draw on
+   Vulkan: `blur_down`/`blur_up` and the background composite
+   (`clipped_surface.frag` + `postprocess.frag`, including the liquid-glass
+   uniforms) are compiled for Vulkan and run through `render_custom_passes`
+   over framebuffer captures; xray keeps its GLES path because its shared
+   backdrop buffers are GLES offscreen textures. All of this is covered by
+   real-device readback tests that skip when no Vulkan device exists.
 5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker
@@ -249,12 +252,14 @@ picked up without re-auditing.
    enum over `GbmGlesBackend` and `VulkanBackend`, and renders through
    `TtyRenderer`/`TtyFrame` enums, so `NIRI_RENDERER=vulkan` drives outputs with
    the Vulkan renderer (windows, layer surfaces, UI textures, screenshots'
-   texture path). GLSL-only visuals keep their GLES path and are skipped on
-   Vulkan with a warning: decoration light, blur/xray background effects,
-   liquid glass, carousel panel contents, the magnified screenshot UI capture,
-   screen transitions and animated resize. Borders
-   and shadows are compiled for Vulkan; resize animations render the window
-   normally on Vulkan instead of the GLES stretch. The probe has been validated on real hardware
+   texture path). Borders and shadows are compiled for Vulkan, and the
+   per-window background effect (blur plus the background composite, including
+   liquid glass) now draws on Vulkan too; textured `ShaderRenderElement`s
+   resolve `VulkanTexture` samplers. The visuals whose producers remain
+   GLES-only are skipped on Vulkan: decoration light, xray backdrops, carousel
+   panel contents, the magnified screenshot UI capture, screen transitions and
+   animated resize. Resize animations render the window normally on Vulkan
+   instead of the GLES stretch. The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,
    default). Runtime TTY validation of the Vulkan output path still needs a
