@@ -332,12 +332,22 @@ picked up without re-auditing.
    The optional GUI pieces are in too: better-monitor `position`/`arrange`
    (validated, dry-run, rollback), better-audio `volume`/`mute` for sinks and
    sources, a GTK display arrangement editor (drag, snap, overlap validation,
-   preview/apply) and an audio mixer with sliders and mute toggles. Still open:
-   the live Noctalia check (done: all 8 plugins loaded in the running shell with
-   no Lua errors; the added source was removed afterwards) and the hardware
-   checks. On the compositor side all planned core
-   protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
-   DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
+   preview/apply) and an audio mixer with sliders and mute toggles.
+   The live Noctalia check is done: all 8 plugins loaded in the running shell
+   with no Lua errors (see `docs/validation/noctalia-live-2026-11-24.md`) and the
+   temporary source/plugins were removed afterwards. better-nsticky has the
+   capability-gated native sticky delegation as
+   `contrib/patches/nsticky-native-sticky.patch` (applied to the local external
+   checkout, 473 tests): `sticky add/remove/list` and the focused/app-id/title
+   toggles use `Request::Capabilities` + `Action::ToggleWindowSticky` when the
+   compositor supports it, staging clears/restores the native flag, and stock
+   niri keeps the move-based fallback.
+   On the compositor side all planned core protocol ports
+   (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are wired.
+   The only remaining work is the hardware pass (VRR/tearing/explicit sync/
+   multi-GPU/HDR mixed/commit-timing presentation), the manual desktop click of
+   the Noctalia widgets, and DPMS VRAM/GTT cleanup, which needs a reproduced
+   leak before any mitigation.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
