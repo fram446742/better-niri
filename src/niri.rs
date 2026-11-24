@@ -232,6 +232,7 @@ use crate::ui::screenshot_ui::{
 use crate::utils::commit_timing::next_wakeup_time;
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
+use crate::utils::transaction::SurfaceBarriers;
 use crate::utils::vblank_throttle::VBlankThrottle;
 use crate::utils::watcher::Watcher;
 use crate::utils::xwayland::satellite::Satellite;
@@ -337,6 +338,7 @@ pub struct Niri {
     /// Clients to notify about their blockers being cleared.
     pub blocker_cleared_tx: Sender<Client>,
     pub blocker_cleared_rx: Receiver<Client>,
+    pub surface_barriers: SurfaceBarriers,
 
     pub output_state: HashMap<Output, OutputState>,
 
@@ -1459,6 +1461,16 @@ impl State {
         // Handle commits for surfaces whose blockers cleared this cycle. This should happen before
         // layout.refresh() since this is where these surfaces handle commits.
         self.notify_blocker_cleared();
+
+        // Release surface barriers whose every surface became ready, applying their pending
+        // states atomically. Processing the notifications above can complete transactions and
+        // thereby make barriers ready, so this comes right after, and before layout.refresh()
+        // which handles the resulting commits.
+        {
+            let dh = self.niri.display_handle.clone();
+            let surface_barriers = self.niri.surface_barriers.clone();
+            surface_barriers.release_ready(&dh, self);
+        }
 
         // These should be called periodically, before flushing the clients.
         self.niri.popups.cleanup();
@@ -3833,7 +3845,7 @@ impl State {
         self.niri.layout.set_window_minimized(window, true);
 
         if !transaction.is_last() {
-            transaction.register_deadline_timer(&self.niri.event_loop);
+            transaction.register_deadline_timer(&self.niri.event_loop, &self.niri.display_handle);
         }
 
         if was_active {
@@ -4438,6 +4450,14 @@ impl Niri {
 
         let (blocker_cleared_tx, blocker_cleared_rx) = mpsc::channel();
 
+        let (barrier_ping, barrier_ping_source) = calloop::ping::make_ping().unwrap();
+        // The ping only needs to wake the event loop; the barriers are polled and released in
+        // State::refresh().
+        event_loop
+            .insert_source(barrier_ping_source, |_, _, _| ())
+            .unwrap();
+        let surface_barriers = SurfaceBarriers::new(barrier_ping);
+
         fn client_is_unrestricted(client: &Client) -> bool {
             !client.get_data::<ClientState>().unwrap().restricted
         }
@@ -4789,6 +4809,7 @@ impl Niri {
             dmabuf_pre_commit_hook: HashMap::new(),
             blocker_cleared_tx,
             blocker_cleared_rx,
+            surface_barriers,
             monitors_active: true,
             power_off_skip_isolated: false,
             is_lid_closed: false,

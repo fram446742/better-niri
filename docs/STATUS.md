@@ -316,9 +316,9 @@ picked up without re-auditing.
    transitions, sidepanel auto-hide and audio input/profile management;
    companion event subscriptions and window marks; nsticky delegating sticky to
    the compositor when the capability is present; systemd units for companion
-   daemons and CI jobs for the companion workspaces. On the compositor side the only planned port left is
-   SurfaceBarrier; `wp-commit-timing-v1` is wired, and DPMS VRAM/GTT cleanup stays
-   deferred until a leak is reproduced.
+   daemons and CI jobs for the companion workspaces. On the compositor side all planned core
+   protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
+   DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
