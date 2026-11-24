@@ -220,6 +220,43 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all --all-targets
 
+  # `better-*` directories are independent Cargo workspaces (they are excluded
+  # from niri's workspace), so the root jobs above never see them.
+  better-workspaces:
+    strategy:
+      fail-fast: false
+
+    name: better-* workspaces
+    runs-on: ubuntu-26.04
+
+    env:
+      LIBCLANG_PATH: /usr/lib
+      # Surface formatting drift but do not fail on workspaces owned by other
+      # integration branches; set STRICT_FMT=1 to enforce it.
+      STRICT_FMT: "0"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          show-progress: false
+
+      - name: Install workspace dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential pkg-config clang libclang-dev \
+            libgtk-4-dev libgdk-pixbuf-2.0-dev libcairo2-dev libpango1.0-dev \
+            libpipewire-0.3-dev libwayland-dev libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check every better-* workspace
+        run: scripts/check-workspaces.sh
+
   rustfmt:
     runs-on: ubuntu-26.04
 
