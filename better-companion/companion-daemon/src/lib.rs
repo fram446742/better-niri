@@ -34,6 +34,20 @@ pub fn build_registry_with_activity(
     socket: &Path,
     activity: companion_idle::ActivityClock,
 ) -> io::Result<(Registry, companion_parking::Parking)> {
+    let (registry, parking, _adapters) = build_registry_with_adapters(socket, activity)?;
+    Ok((registry, parking))
+}
+
+/// Builds the registry and returns the adapter engine so the daemon can start
+/// its worker and forward niri events to it.
+pub fn build_registry_with_adapters(
+    socket: &Path,
+    activity: companion_idle::ActivityClock,
+) -> io::Result<(
+    Registry,
+    companion_parking::Parking,
+    companion_adapters::Adapters,
+)> {
     let mut registry = Registry::with_socket(socket);
     let parking = companion_parking::Parking::from_state_dir()?;
     registry.register(parking.clone());
@@ -63,10 +77,13 @@ pub fn build_registry_with_activity(
         activity,
     )?);
     registry.register(companion_rotate::Rotate::from_state_dir()?);
-    for adapter in companion_adapters::default_adapters()? {
+    let adapters = companion_adapters::Adapters::from_state_dir()?;
+    for adapter in adapters.adapters() {
         registry.register(adapter);
     }
-    Ok((registry, parking))
+    registry.register(adapters.context());
+    registry.set_observer(adapters.observer());
+    Ok((registry, parking, adapters))
 }
 
 /// Binds the socket, replacing a stale socket file.
@@ -186,6 +203,7 @@ mod tests {
         let response: Response = serde_json::from_str(line.trim()).unwrap();
         match response {
             Response::Contexts { contexts } => {
+                assert!(contexts.contains_key("adapters"));
                 assert!(contexts.contains_key("parking"));
                 assert!(contexts.contains_key("automation"));
                 assert!(contexts.contains_key("hooks"));
@@ -234,6 +252,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "adapters",
                 "audio",
                 "automation",
                 "compositor",

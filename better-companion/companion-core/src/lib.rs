@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fs, io};
 
@@ -103,11 +104,28 @@ pub trait Context: Send + Sync {
     }
 }
 
+/// Notified after every action call delegated to a context.
+///
+/// Observers turn already-completed companion actions into events for optional
+/// consumers such as the companion adapters crate. They must not call back into
+/// the registry: the registry invokes them after the action has finished, and
+/// the daemon's observer only enqueues work.
+pub trait CallObserver: Send + Sync {
+    fn after_call(
+        &self,
+        namespace: &str,
+        action: &str,
+        params: &Value,
+        result: &Result<Value, String>,
+    );
+}
+
 type ContextResult = Result<Value, String>;
 
 /// The merged action registry.
 pub struct Registry {
     contexts: BTreeMap<String, Box<dyn Context>>,
+    observer: Option<Arc<dyn CallObserver>>,
     started: Instant,
     socket: Option<PathBuf>,
 }
@@ -122,6 +140,7 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             contexts: BTreeMap::new(),
+            observer: None,
             started: Instant::now(),
             socket: None,
         }
@@ -138,6 +157,14 @@ impl Registry {
     pub fn register(&mut self, context: impl Context + 'static) {
         let namespace = context.namespace().to_owned();
         self.contexts.insert(namespace, Box::new(context));
+    }
+
+    /// Observes completed action calls without changing the action protocol.
+    ///
+    /// The observer runs on the calling thread after the context returns. It is
+    /// used to translate successful companion actions into adapter events.
+    pub fn set_observer(&mut self, observer: Arc<dyn CallObserver>) {
+        self.observer = Some(observer);
     }
 
     pub fn namespaces(&self) -> Vec<String> {
@@ -193,7 +220,11 @@ impl Registry {
             .contexts
             .get(namespace)
             .ok_or_else(|| format!("unknown namespace `{namespace}`"))?;
-        context.call(action, params)
+        let result = context.call(action, params);
+        if let Some(observer) = &self.observer {
+            observer.after_call(namespace, action, params, &result);
+        }
+        result
     }
 
     fn run_automation(&self, params: &Value) -> ContextResult {

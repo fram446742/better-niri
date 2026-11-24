@@ -391,6 +391,25 @@ pub fn socket_from_env() -> Option<PathBuf> {
 /// kinds and truncated final lines are logged and skipped rather than tearing
 /// the connection down. Only transport errors end the loop.
 pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io::Result<usize> {
+    track_stream_with(path, parking, tracker, |_| {})
+}
+
+/// Subscribes to the event stream and forwards every decoded event to
+/// `on_event` after the tracker has applied it.
+///
+/// Adapters use this to observe the same connection the tracker consumes
+/// instead of opening a rival subscription. A failing observer must not stop
+/// tracking, so it runs after the snapshot update and its own errors are the
+/// caller's responsibility.
+pub fn track_stream_with<F>(
+    path: &Path,
+    parking: &Parking,
+    tracker: &mut Tracker,
+    mut on_event: F,
+) -> io::Result<usize>
+where
+    F: FnMut(&Event),
+{
     let stream = UnixStream::connect(path)?;
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
@@ -449,11 +468,11 @@ pub fn track_stream(path: &Path, parking: &Parking, tracker: &mut Tracker) -> io
                 continue;
             }
         };
-        if let Err(message) = tracker.apply_event(parking, &event) {
-            eprintln!("better-companion: event tracking error: {message}");
-        } else {
-            applied += 1;
+        match tracker.apply_event(parking, &event) {
+            Ok(()) => applied += 1,
+            Err(message) => eprintln!("better-companion: event tracking error: {message}"),
         }
+        on_event(&event);
     }
 }
 
@@ -462,6 +481,31 @@ pub fn run_tracker(path: PathBuf, parking: Parking, swallow: Swallow) {
     let mut tracker = Tracker::with_swallow(swallow);
     loop {
         if let Err(err) = track_stream(&path, &parking, &mut tracker) {
+            eprintln!("better-companion: event stream {}: {err}", path.display());
+        }
+        sleep(Duration::from_secs(1));
+    }
+}
+
+/// Reconnecting loop with per-connection reset and event observation.
+///
+/// `on_connect` runs before each subscription attempt (for example to reset an
+/// event mapper, because niri replays a full snapshot) and `on_event` receives
+/// every decoded event after the tracker applied it.
+pub fn run_tracker_with<F, C>(
+    path: PathBuf,
+    parking: Parking,
+    swallow: Swallow,
+    mut on_connect: C,
+    mut on_event: F,
+) where
+    F: FnMut(&Event),
+    C: FnMut(),
+{
+    let mut tracker = Tracker::with_swallow(swallow);
+    loop {
+        on_connect();
+        if let Err(err) = track_stream_with(&path, &parking, &mut tracker, &mut on_event) {
             eprintln!("better-companion: event stream {}: {err}", path.display());
         }
         sleep(Duration::from_secs(1));
