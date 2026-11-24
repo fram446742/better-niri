@@ -585,7 +585,7 @@ impl input::LibinputInterface for HeadlessLibinputInterface {
         let flags = flags | libc::O_CLOEXEC | libc::O_NOCTTY | libc::O_NOFOLLOW | libc::O_NONBLOCK;
         let fd = unsafe { libc::open(c_path.as_ptr(), flags) };
         if fd < 0 {
-            let errno = unsafe { *libc::__errno_location() };
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
 
             if errno == libc::ENOENT || errno == libc::ENODEV {
                 trace!("headless: libinput open_restricted failed for {path:?}: errno={errno}");
