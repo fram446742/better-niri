@@ -240,11 +240,22 @@ picked up without re-auditing.
    `better-sidepanels/` creates persistent layer-shell side panels per output
    (exclusive zone, click commands, module rows refreshed on an interval,
    cairo-rendered, configurable theme) with a testable model/renderer.
-   Remaining: richer swallowing rules; the companion apps listed in
-   `ECOSYSTEM.md` all have a first implementation (see above), with deeper
-   features still open per app.
-   `better-portal` extraction from the compositor's existing portal backend is
-   still pending.
+   Later rounds added workspace/output placement (`layout` target resolution,
+   `windows.move-to-workspace`/`follow-to-workspace`/`move-to-output`/
+   `focus-output`), cross-workspace swallowing with bounded pair storage and
+   `swallow.reload`, and daemon resilience (tolerant event parsing, reconnects
+   from a snapshot, bounded window cache, oversized-request rejection,
+   idempotent raise/restore). `better-portal/` is installable on its own:
+   `better.portal`, `portals.conf` snippet, D-Bus/systemd units, install and
+   uninstall scripts, and a private-bus smoke test.
+   Remaining in the `better-*` family: nsticky absorption in
+   `better-companion` (`stage`/`scratchpad` plus compatibility aliases),
+   `better-idle` and `better-rotate` modules, HDR-aware capture and annotation
+   in `better-shot`, session contexts (outputs/hooks) in `better-session`,
+   full config coverage in `better-settings`, richer modules in
+   `better-sidepanels`, native PipeWire backends in `better-audio`/
+   `better-wallpaper`, cross-app adapters wired to events, Phase 8 packaging
+   (Arch/AUR/profiles) and hardware validation.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
@@ -257,10 +268,19 @@ picked up without re-auditing.
    texture path). Borders and shadows are compiled for Vulkan, and the
    per-window background effect (blur plus the background composite, including
    liquid glass) now draws on Vulkan too; textured `ShaderRenderElement`s
-   resolve `VulkanTexture` samplers. The visuals whose producers remain
-   GLES-only are skipped on Vulkan: xray backdrops, the magnified screenshot UI
-   capture, screen transitions and animated resize. Resize animations render the window normally on Vulkan
-   instead of the GLES stretch. The probe has been validated on real hardware
+   resolve `VulkanTexture` samplers. Global and scoped shader passes, carousel
+   panel contents (baked through the generic offscreen), decoration light
+   (emission plus the reusable Vulkan Dual-Kawase blur), animated resize
+   (crossfade shader with no red fallback), screen transitions and the
+   magnified screenshot UI bake/open draw on Vulkan. The screenshot UI,
+   `screenshot`/`screenshot-screen`/`screenshot-window` IPC actions and the
+   portal's full-desktop/area capture and pick-colour magnifier capture through
+   the generic offscreen and read back generically, so a Vulkan-only session
+   can open the UI and save PNGs. The visuals whose producers remain GLES-only
+   are skipped on Vulkan: xray backdrops (`EffectBuffer`/`AlphaMask`/`Xray`),
+   closing/unmap animations (tile snapshots typed to `GlesRenderer`) and the
+   screencopy/screencast paths. Vulkan transition captures are stored unrotated
+   (rotated outputs rely on the output frame). The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,
    default). Runtime TTY validation of the Vulkan output path still needs a

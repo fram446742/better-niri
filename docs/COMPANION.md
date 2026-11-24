@@ -415,9 +415,20 @@ niri's Cargo workspace):
 - `companionctl`: list/status/call client.
 
 Phase B is in: `rules.*`, `windows.run-or-raise`/`singleton` and terminal
-`swallow.*`. Phase C adapters are in: `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`
-store commands/hooks and execute only on explicit dispatch. Not yet: the
-companion apps themselves; parking means minimizing.
+`swallow.*`. Workspace/output placement is in: the `layout` module resolves
+targets by id, name or per-output index, and `windows.move-to-workspace`,
+`follow-to-workspace`, `move-to-output` and `focus-output` consume it; rules
+match `workspace_idx`/`workspace_output`. Swallowing follows parent/child moves
+across workspaces and outputs, stores pairs under a configurable bound with
+`swallow.reload`, and restores exactly once; the daemon tolerates malformed
+event lines, reconnects from a full snapshot, bounds its window cache and
+rejects oversized requests without closing the socket. Phase C adapters are in:
+`session.*`, `monitor.*`, `audio.*`, `wallpaper.*` store commands/hooks and
+execute only on explicit dispatch. The companion apps live as excluded
+workspaces in this repository (`better-monitor`, `better-session`, `better-shot`,
+`better-wallpaper`, `better-settings`, `better-audio`, `better-sidepanels`).
+Not yet: nsticky's `stage`/`scratchpad` workflow with compatibility aliases;
+parking still means minimizing.
 
 ## 9. Roadmap
 
