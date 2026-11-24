@@ -59,6 +59,78 @@ fn stdout_json(output: &std::process::Output) -> Value {
 }
 
 #[test]
+fn apply_confirm_timeout_writes_pending_and_confirm_clears_it() {
+    let fake = FakeNiri::start(
+        "cli-confirm",
+        vec![output_at("eDP-1", "BOE", "Panel", None, 0, 1.0)],
+    );
+    let temp = TempState::new("cli-confirm");
+    save_store(&temp, "desk", profile_for("eDP-1", 1.5));
+    let pending = temp.profiles.with_file_name("pending.json");
+
+    let output = run(
+        &args(
+            &["--json", "apply", "desk", "--confirm-timeout", "2"],
+            &temp,
+        ),
+        Some(&fake.path),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = stdout_json(&output);
+    assert_eq!(json["data"]["confirmation"]["timeout_secs"], 2);
+    assert!(pending.is_file(), "pending record was written");
+    let first: Value = serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
+    let id = first["id"].as_str().unwrap().to_owned();
+
+    let output = run(&args(&["--json", "confirm"], &temp), None);
+    assert!(output.status.success());
+    let json = stdout_json(&output);
+    assert_eq!(json["data"]["confirmed"], true);
+    assert!(!pending.is_file(), "confirm removed the pending record");
+
+    // The watcher that was spawned for this record must see it gone (or a newer id)
+    // and leave the applied profile alone. A short wait covers its poll interval.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(!pending.is_file());
+    let _ = id;
+}
+
+#[test]
+fn cancel_restores_the_previous_profile_and_clears_pending() {
+    let fake = FakeNiri::start(
+        "cli-cancel",
+        vec![output_at("eDP-1", "BOE", "Panel", None, 0, 1.0)],
+    );
+    let temp = TempState::new("cli-cancel");
+    let mut store = Store::default();
+    let mut previous = Profile::new();
+    previous
+        .outputs
+        .insert("eDP-1".to_owned(), OutputProfile::default());
+    store.insert("__previous", previous);
+    store.save(&temp.profiles).unwrap();
+
+    let pending = temp.profiles.with_file_name("pending.json");
+    better_monitor::write_pending(&temp.profiles, &fake.path, "desk", std::time::Duration::from_secs(60))
+        .unwrap();
+    assert!(pending.is_file());
+
+    let output = run(&args(&["--json", "cancel"], &temp), Some(&fake.path));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = stdout_json(&output);
+    assert_eq!(json["data"]["cancelled"], true);
+    assert!(!pending.is_file());
+}
+
+#[test]
 fn list_json_uses_an_envelope() {
     let temp = TempState::new("cli-list");
     save_store(&temp, "desk", profile_for("eDP-1", 1.5));

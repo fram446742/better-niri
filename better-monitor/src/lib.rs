@@ -13,6 +13,7 @@
 pub mod ipc;
 pub mod plan;
 pub mod rules;
+pub mod safe;
 pub mod schema;
 pub mod watch;
 
@@ -26,6 +27,10 @@ pub use plan::{
 };
 pub use rules::{
     Rule, RuleCandidate, RuleDecision, RuleStore, build_rules_profile, evaluate_rules,
+};
+pub use safe::{
+    PendingApply, PendingConfirmation, cancel, clear_pending, confirm, expire_pending,
+    load_pending, pending_path, watch_pending, write_pending,
 };
 pub use schema::{
     HdrMode, HdrProfile, OutputMatch, OutputProfile, Profile, SCHEMA_VERSION, Store, lock_path,
