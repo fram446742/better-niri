@@ -190,8 +190,12 @@ picked up without re-auditing.
    `texture_hdr_to_sdr` for SDR captures, and niri's own Vulkan programs read
    the frame blend state. Capture state is cleared after the output so
    screenshots/screencasts stay SDR; 10-bit scanout formats are unchanged.
-   Still open: the screencopy/screencast paths and transition capture on
-   rotated outputs. Textured `ShaderRenderElement`s now draw on
+   Screen capture protocols run on Vulkan too: wlr-screencopy (output/window/
+   region, SHM and dmabuf), ext-image-copy-capture (SHM advertised, dmabuf
+   accepted), and screencast frames (SHM advertised on Vulkan; dmabuf handled)
+   render through the active renderer, with damage/cursor semantics unchanged.
+   Still open: transition capture on rotated outputs and popup background
+   effects (still gated on GLES). Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
@@ -270,9 +274,14 @@ picked up without re-auditing.
    battery, cpu, memory, network, volume, custom), safe click/scroll actions,
    panels on all four edges (several per output), config v2 with per-output
    overrides, validation and file-watch reload. Remaining in the `better-*`
-   family: native PipeWire backends in `better-audio`/`better-wallpaper`,
-   cross-app adapters wired to events, Phase 8 packaging (Arch/AUR/profiles)
-   and hardware validation. `better-settings/` now covers layout, input
+   family: `better-audio/` has a native PipeWire backend (registry
+   enumeration, port-link moves, metadata default sink, per-stream
+   volume/mute) with `pactl`/`wpctl` fallbacks, backend selection and restore;
+   `companion-adapters` now routes niri and companion events to the
+   session/monitor/audio/wallpaper adapters with quoted templates, dedup,
+   timeouts, concurrency limits and an opt-in failure policy.
+   Remaining: native PipeWire support in `better-wallpaper`, Phase 8 packaging
+   (Arch/AUR/profiles) and hardware validation. `better-settings/` now covers layout, input
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
@@ -298,7 +307,7 @@ picked up without re-auditing.
    portal's full-desktop/area capture and pick-colour magnifier capture through
    the generic offscreen and read back generically, so a Vulkan-only session
    can open the UI and save PNGs. The visuals whose producers remain GLES-only
-   are skipped on Vulkan: the screencopy/screencast paths. Shared xray
+   also cover screen capture. Shared xray
    backdrops draw on Vulkan too: `EffectBuffer` bakes a `TtyOffscreen`,
    `XrayAlphaMask` is backend-agnostic, the backdrop blurs with `VulkanBlur`
    and `xray_postprocess_and_clip` composites per window/layer; the per-window
