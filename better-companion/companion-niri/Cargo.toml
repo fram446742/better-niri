@@ -11,3 +11,4 @@ companion-parking.workspace = true
 niri-ipc = { path = "../../niri-ipc" }
 serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true

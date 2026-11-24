@@ -27,7 +27,7 @@ mod parker;
 mod swallow;
 mod windows;
 pub use parker::{DEFAULT_LOT, Parker};
-pub use swallow::{SWALLOW_LOT, Swallow, proc_parent};
+pub use swallow::{SWALLOW_LOT, Swallow, SwallowOutcome, SwallowRule, proc_age, proc_parent};
 pub use windows::Windows;
 
 pub struct Compositor {
@@ -153,6 +153,21 @@ impl Tracker {
 
     /// Applies one event and rewrites the auto-parking lots.
     pub fn apply_event(&mut self, parking: &Parking, event: &Event) -> Result<(), String> {
+        // Windows that were not known before this event. Swallowing only runs
+        // for these, so title/focus/minimize updates cannot re-trigger it.
+        let opened: Vec<Window> = match event {
+            Event::WindowsChanged { windows } => windows
+                .iter()
+                .filter(|window| !self.windows.contains_key(&window.id))
+                .cloned()
+                .collect(),
+            Event::WindowOpenedOrChanged { window } => (!self.windows.contains_key(&window.id))
+                .then(|| window.clone())
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
+
         match event {
             Event::WorkspacesChanged { workspaces } => {
                 self.workspaces = workspaces.iter().map(|ws| (ws.id, ws.clone())).collect();
@@ -231,11 +246,31 @@ impl Tracker {
         self.snapshot(parking)?;
 
         if let Some(swallow) = &self.swallow {
-            let result = match event {
-                Event::WindowOpenedOrChanged { window } => swallow.maybe_swallow(window),
-                Event::WindowClosed { id } => swallow.on_window_closed(*id),
-                _ => Ok(()),
-            };
+            let result = (|| -> Result<(), String> {
+                match event {
+                    Event::WindowClosed { id } => {
+                        // Closing the child restores the terminal; closing the
+                        // terminal drops any pairs that pointed at it.
+                        swallow.on_window_closed(*id)?;
+                        swallow.on_parent_closed(*id)?;
+                    }
+                    Event::WindowsChanged { .. } => {
+                        for window in &opened {
+                            swallow.maybe_swallow(window)?;
+                        }
+                        // Pairs persisted before a daemon restart converge with
+                        // the compositor's current window set.
+                        swallow.reconcile()?;
+                    }
+                    Event::WindowOpenedOrChanged { .. } => {
+                        for window in &opened {
+                            swallow.maybe_swallow(window)?;
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })();
             if let Err(err) = result {
                 eprintln!("better-companion: swallow error: {err}");
             }
@@ -679,6 +714,105 @@ mod tests {
         ));
         assert!(matches!(
             requests[1],
+            Request::Action(Action::UnminimizeWindow { id: Some(1) })
+        ));
+    }
+
+    #[test]
+    fn swallows_windows_from_the_initial_snapshot() {
+        use std::sync::Arc;
+
+        let dir = temp_path("swallow-initial");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 2);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        let parent: Arc<dyn Fn(i32) -> Option<i32> + Send + Sync> = Arc::new(|pid| match pid {
+            200 => Some(100),
+            100 => Some(1),
+            _ => None,
+        });
+        let swallow = Swallow::load_with_parent(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+            parent,
+        )
+        .unwrap();
+        swallow.call("enable", &serde_json::Value::Null).unwrap();
+        let mut tracker = Tracker::with_swallow(swallow);
+
+        // The daemon can start after the terminal and its child already exist.
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![
+                        window_full(1, 1, false, 100, "alacritty", false),
+                        window_full(2, 1, false, 200, "myapp", false),
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(parking.lot(super::SWALLOW_LOT)["child:2"]["parent"], 1);
+
+        tracker
+            .apply_event(&parking, &Event::WindowClosed { id: 2 })
+            .unwrap();
+        assert!(parking.lot(super::SWALLOW_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[0],
+            Request::Action(Action::MinimizeWindow { id: Some(1) })
+        ));
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::UnminimizeWindow { id: Some(1) })
+        ));
+    }
+
+    #[test]
+    fn initial_snapshot_reconciles_pairs_whose_child_is_gone() {
+        use std::sync::Arc;
+
+        let dir = temp_path("swallow-reconcile");
+        let socket = dir.join("niri.sock");
+        let server = fake_actions(&socket, 1);
+        let parking = Parking::load(dir.join("parking.json")).unwrap();
+        parking
+            .call(
+                "park",
+                &serde_json::json!({
+                    "lot": super::SWALLOW_LOT,
+                    "id": "child:2",
+                    "value": { "child": 2, "parent": 1, "restore_on_exit": true }
+                }),
+            )
+            .unwrap();
+        let parent: Arc<dyn Fn(i32) -> Option<i32> + Send + Sync> = Arc::new(|_| Some(1));
+        let swallow = Swallow::load_with_parent(
+            dir.join("swallow.json"),
+            parking.clone(),
+            Compositor::at(&socket),
+            parent,
+        )
+        .unwrap();
+        let mut tracker = Tracker::with_swallow(swallow);
+
+        // Only the minimized terminal survived the restart.
+        tracker
+            .apply_event(
+                &parking,
+                &Event::WindowsChanged {
+                    windows: vec![window_full(1, 1, false, 100, "alacritty", true)],
+                },
+            )
+            .unwrap();
+        assert!(parking.lot(super::SWALLOW_LOT).is_empty());
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[0],
             Request::Action(Action::UnminimizeWindow { id: Some(1) })
         ));
     }
