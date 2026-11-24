@@ -186,8 +186,8 @@ picked up without re-auditing.
    path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
    and desktop content look rougher/differently antialiased than the SDR
    session, because the SDR-to-HDR blend is not applied there yet. Still open:
-   HDR mixed compositing, xray backdrops, the screencopy/screencast paths and
-   transition capture on rotated outputs. Textured `ShaderRenderElement`s now draw on
+   HDR mixed compositing, the screencopy/screencast paths and transition
+   capture on rotated outputs. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
@@ -255,11 +255,16 @@ picked up without re-auditing.
    HDR capture (`--hdr=keep|sdr|tonemap`, PQ tone mapping for 16-bit sources),
    built-in `rect`/`text`/`arrow` annotations, PNG/JPEG/WebP output and JSON
    metadata sidecars.
-   Remaining in the `better-*` family: `better-idle` and `better-rotate`
-   modules, session contexts (outputs/hooks) in `better-session`,
-   full config coverage in `better-settings`, richer modules in
-   `better-sidepanels`, native PipeWire backends in `better-audio`/
-   `better-wallpaper`, cross-app adapters wired to events, Phase 8 packaging
+   Idle and orientation are companion modules: `idle.*` (lock/DPMS/suspend/
+   command timeouts, user/audio/fullscreen inhibitors, logind shell-out,
+   idempotent ticks, explain) and `rotate.*` (iio-sensor-proxy or a configured
+   sensor command, hysteresis, transform+position through `Request::Output`,
+   lock/manual set), both inert by default. `better-session/` gained named
+   contexts with outputs, hooks and ordered, idempotent restore that waits for
+   late apps. Remaining in the `better-*` family: full config coverage in
+   `better-settings`, richer modules in `better-sidepanels`, native PipeWire
+   backends in `better-audio`/`better-wallpaper`, cross-app adapters wired to
+   events, Phase 8 packaging
    (Arch/AUR/profiles) and hardware validation.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
@@ -282,11 +287,13 @@ picked up without re-auditing.
    portal's full-desktop/area capture and pick-colour magnifier capture through
    the generic offscreen and read back generically, so a Vulkan-only session
    can open the UI and save PNGs. The visuals whose producers remain GLES-only
-   are skipped on Vulkan: xray backdrops (`EffectBuffer`/`AlphaMask`/`Xray`)
-   and the screencopy/screencast paths. Closing and unmap animations now draw
-   on Vulkan from pre-baked backend-agnostic tile snapshots; the custom close
-   shader itself stays GLES-only and Vulkan uses the texture/scale/alpha
-   fallback. Vulkan transition captures are stored unrotated
+   are skipped on Vulkan: the screencopy/screencast paths. Shared xray
+   backdrops draw on Vulkan too: `EffectBuffer` bakes a `TtyOffscreen`,
+   `XrayAlphaMask` is backend-agnostic, the backdrop blurs with `VulkanBlur`
+   and `xray_postprocess_and_clip` composites per window/layer; the per-window
+   framebuffer effect remains the fallback. Closing and unmap animations draw
+   from pre-baked backend-agnostic tile snapshots; the custom close shader
+   itself stays GLES-only and Vulkan uses the texture/scale/alpha fallback. Vulkan transition captures are stored unrotated
    (rotated outputs rely on the output frame). The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,
