@@ -1,0 +1,818 @@
+//! Native background renderer: one `zwlr_layer_shell_v1` background surface per
+//! output, drawn into `wl_shm` buffers.
+//!
+//! Each surface is anchored to all four edges with an exclusive zone of `0`, so
+//! the compositor makes it cover exactly the output (including scale and
+//! rotation, which the compositor applies to the surface). Images are scaled to
+//! cover the surface and centered; the image for an output is the one resolved
+//! for that output's active workspace, falling back to the scene `default`.
+//!
+//! niri events arrive on a dedicated thread that reconnects on its own and
+//! feeds a calloop channel, so the Wayland event loop never blocks on IPC. A
+//! one-second timer catches image file changes and retries draws that could not
+//! use a buffer because the compositor still had it.
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use calloop::EventLoop;
+use calloop::channel::{Event as ChannelEvent, Sender, channel};
+use calloop::timer::{TimeoutAction, Timer};
+use calloop_wayland_source::WaylandSource;
+use niri_ipc::{Event, Request, Response};
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shell::wlr_layer::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+    LayerSurfaceConfigure,
+};
+use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
+use smithay_client_toolkit::shm::{Shm, ShmHandler};
+use smithay_client_toolkit::{delegate_registry, registry_handlers};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_output::Transform;
+use wayland_client::protocol::{wl_output, wl_registry, wl_shm, wl_surface};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+
+use crate::geom::{Rotation, Size};
+use crate::images::{self, FileStamp, ImageCache, needs_reload};
+use crate::{Scene, active_workspaces, resolve};
+
+/// Layer-shell namespace, visible in compositor debugging tools.
+pub const NAMESPACE: &str = "better-wallpaper";
+/// Colour shown while an output has no image (or its image cannot be decoded).
+const FALLBACK_COLOR: [u8; 3] = [0x10, 0x10, 0x14];
+/// How often image files and deferred redraws are checked.
+const TICK: Duration = Duration::from_secs(1);
+/// Delay before reconnecting to niri IPC or the compositor.
+const RETRY: Duration = Duration::from_secs(1);
+/// Buffers kept per surface: a redraw must not write into the buffer the
+/// compositor may still be displaying, so a second one absorbs the redraw.
+const MAX_BUFFERS: usize = 2;
+
+/// Verbose diagnostics for a wallpaper that does not show up, enabled with
+/// `BETTER_WALLPAPER_DEBUG=1`.
+fn debug_log(args: std::fmt::Arguments<'_>) {
+    if std::env::var_os("BETTER_WALLPAPER_DEBUG").is_some() {
+        eprintln!("better-wallpaper: {args}");
+    }
+}
+
+/// Whether the session should follow niri's focus changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Render every output once and keep the surfaces mapped (like `swaybg`).
+    Apply,
+    /// Keep following niri events.
+    Watch,
+}
+
+#[derive(Debug)]
+pub enum NativeError {
+    /// The compositor cannot host a native background; another backend is needed.
+    Unsupported(String),
+    /// The session started but could not continue (usually a lost connection).
+    Failed(String),
+}
+
+impl fmt::Display for NativeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported(reason) => write!(f, "the native backend is unavailable: {reason}"),
+            Self::Failed(reason) => write!(f, "native wallpaper session failed: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for NativeError {}
+
+/// Checks whether this compositor can host the native backend without
+/// rendering anything: a Wayland connection plus `wl_compositor`, `wl_shm` and
+/// `zwlr_layer_shell_v1` must all exist.
+pub fn probe() -> Result<(), String> {
+    let conn = Connection::connect_to_env()
+        .map_err(|err| format!("cannot connect to a Wayland compositor: {err}"))?;
+    let (globals, mut queue) = registry_queue_init::<Probe>(&conn)
+        .map_err(|err| format!("cannot list Wayland globals: {err}"))?;
+    queue
+        .roundtrip(&mut Probe)
+        .map_err(|err| format!("Wayland roundtrip failed: {err}"))?;
+    let mut missing = Vec::new();
+    globals.contents().with_list(|list| {
+        for interface in ["wl_compositor", "wl_shm", "zwlr_layer_shell_v1"] {
+            if !list.iter().any(|global| global.interface == interface) {
+                missing.push(interface);
+            }
+        }
+    });
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("missing Wayland globals: {}", missing.join(", ")))
+    }
+}
+
+struct Probe;
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Probe {
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: <wl_registry::WlRegistry as Proxy>::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// Runs the native backend, reconnecting after a compositor restart.
+///
+/// `Unsupported` is returned before anything is rendered, so callers can fall
+/// back to the command backend; once a session has started, lost connections
+/// are retried here instead of failing the daemon.
+pub fn run(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), NativeError> {
+    let mut attempt = 0u32;
+    loop {
+        match session(scene, socket, mode) {
+            Ok(()) => return Ok(()),
+            Err(NativeError::Unsupported(reason)) => {
+                return Err(NativeError::Unsupported(reason));
+            }
+            Err(NativeError::Failed(reason)) => {
+                attempt += 1;
+                eprintln!(
+                    "better-wallpaper: {reason}; reconnecting (attempt {attempt}) in {}s",
+                    RETRY.as_secs()
+                );
+                std::thread::sleep(RETRY);
+            }
+        }
+    }
+}
+
+struct Wallpaper {
+    registry_state: RegistryState,
+    compositor: CompositorState,
+    shm: Shm,
+    layer_shell: LayerShell,
+    output_state: OutputState,
+    scene: Scene,
+    /// Workspace name that is active on each output name.
+    active: BTreeMap<String, String>,
+    cache: ImageCache,
+    surfaces: Vec<Surface>,
+    exit: bool,
+}
+
+struct Surface {
+    output: wl_output::WlOutput,
+    layer: LayerSurface,
+    pool: SlotPool,
+    buffers: Vec<Buffer>,
+    /// Logical (surface-local) size from the last configure.
+    logical: Size,
+    configured: bool,
+    /// Image currently committed for this surface, if any.
+    current: Option<PathBuf>,
+    current_buffer: Size,
+    current_scale: u32,
+    current_stamp: Option<FileStamp>,
+    /// A redraw was requested but could not commit yet.
+    pending: bool,
+}
+
+enum NiriEvent {
+    Workspaces(BTreeMap<String, String>),
+    Failed(String),
+    Disconnected,
+}
+
+fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), NativeError> {
+    let conn = Connection::connect_to_env().map_err(|err| {
+        NativeError::Failed(format!("cannot connect to the Wayland compositor: {err}"))
+    })?;
+    let (globals, mut queue) = registry_queue_init::<Wallpaper>(&conn)
+        .map_err(|err| NativeError::Failed(format!("cannot list Wayland globals: {err}")))?;
+    let qh = queue.handle();
+
+    let compositor = CompositorState::bind(&globals, &qh)
+        .map_err(|err| NativeError::Unsupported(format!("wl_compositor: {err}")))?;
+    let shm = Shm::bind(&globals, &qh)
+        .map_err(|err| NativeError::Unsupported(format!("wl_shm: {err}")))?;
+    let layer_shell = LayerShell::bind(&globals, &qh)
+        .map_err(|err| NativeError::Unsupported(format!("zwlr_layer_shell_v1: {err}")))?;
+    let output_state = OutputState::new(&globals, &qh);
+
+    let active = match socket {
+        Some(socket) => match query_active(socket) {
+            Ok(active) => active,
+            Err(err) => {
+                eprintln!("better-wallpaper: {err}; using the scene default for now");
+                BTreeMap::new()
+            }
+        },
+        None => BTreeMap::new(),
+    };
+
+    let mut state = Wallpaper {
+        registry_state: RegistryState::new(&globals),
+        compositor,
+        shm,
+        layer_shell,
+        output_state,
+        scene: scene.clone(),
+        active,
+        cache: ImageCache::new(),
+        surfaces: Vec::new(),
+        exit: false,
+    };
+
+    queue
+        .roundtrip(&mut state)
+        .map_err(|err| NativeError::Failed(format!("initial roundtrip: {err}")))?;
+    let outputs: Vec<_> = state.output_state.outputs().collect();
+    for output in outputs {
+        state.ensure_surface(&qh, output);
+    }
+    // A second roundtrip picks up output names and scales advertised through
+    // xdg-output, which the first one may not have delivered yet.
+    queue
+        .roundtrip(&mut state)
+        .map_err(|err| NativeError::Failed(format!("output roundtrip: {err}")))?;
+    state.draw_all();
+    debug_log(format_args!(
+        "native backend running on {} output(s)",
+        state.surfaces.len()
+    ));
+
+    let mut event_loop: EventLoop<Wallpaper> = EventLoop::try_new()
+        .map_err(|err| NativeError::Failed(format!("cannot create event loop: {err}")))?;
+    let handle = event_loop.handle();
+    let signal = event_loop.get_signal();
+
+    handle
+        .insert_source(
+            Timer::from_duration(TICK),
+            move |_, _, state: &mut Wallpaper| {
+                state.tick();
+                TimeoutAction::ToDuration(TICK)
+            },
+        )
+        .map_err(|err| NativeError::Failed(format!("cannot register timer: {err}")))?;
+
+    if mode == Mode::Watch {
+        match socket {
+            Some(socket) => {
+                let (sender, receiver) = channel();
+                spawn_niri_thread(socket.to_path_buf(), sender);
+                handle
+                    .insert_source(receiver, |event, _, state: &mut Wallpaper| {
+                        state.on_niri(event);
+                    })
+                    .map_err(|err| {
+                        NativeError::Failed(format!("cannot watch niri events: {err}"))
+                    })?;
+            }
+            None => eprintln!(
+                "better-wallpaper: NIRI_SOCKET is not set; \
+                 wallpapers will not follow workspace focus"
+            ),
+        }
+    }
+
+    WaylandSource::new(conn.clone(), queue)
+        .insert(handle.clone())
+        .map_err(|err| NativeError::Failed(format!("cannot register Wayland source: {err}")))?;
+
+    event_loop
+        .run(None, &mut state, move |state| {
+            if state.exit {
+                signal.stop();
+            }
+        })
+        .map_err(|err| NativeError::Failed(format!("Wayland connection lost: {err}")))?;
+
+    if state.exit {
+        Ok(())
+    } else {
+        Err(NativeError::Failed("Wayland connection closed".to_owned()))
+    }
+}
+
+/// Thread that follows niri's event stream, reconnecting after niri restarts.
+fn spawn_niri_thread(socket: PathBuf, sender: Sender<NiriEvent>) {
+    std::thread::spawn(move || {
+        loop {
+            match event_stream(&socket) {
+                Ok(stream) => {
+                    if let Ok(active) = query_active(&socket)
+                        && sender.send(NiriEvent::Workspaces(active)).is_err()
+                    {
+                        return;
+                    }
+                    let mut read_event = stream.read_events();
+                    loop {
+                        match read_event() {
+                            Ok(Event::WorkspacesChanged { workspaces }) => {
+                                let active = active_workspaces(&workspaces);
+                                if sender.send(NiriEvent::Workspaces(active)).is_err() {
+                                    return;
+                                }
+                            }
+                            Ok(Event::WorkspaceActivated { focused: true, .. }) => {
+                                if let Ok(active) = query_active(&socket)
+                                    && sender.send(NiriEvent::Workspaces(active)).is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(err)
+                                if err.kind() == std::io::ErrorKind::UnexpectedEof
+                                    || err.kind() == std::io::ErrorKind::ConnectionReset =>
+                            {
+                                let _ = sender.send(NiriEvent::Disconnected);
+                                break;
+                            }
+                            Err(err) => {
+                                let _ = sender.send(NiriEvent::Failed(format!(
+                                    "niri event stream error: {err}"
+                                )));
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if sender.send(NiriEvent::Failed(err)).is_err() {
+                        return;
+                    }
+                }
+            }
+            std::thread::sleep(RETRY);
+        }
+    });
+}
+
+fn event_stream(socket: &Path) -> Result<niri_ipc::socket::Socket, String> {
+    let mut stream = niri_ipc::socket::Socket::connect_to(socket)
+        .map_err(|err| format!("cannot connect to niri IPC: {err}"))?;
+    match stream
+        .send(Request::EventStream)
+        .map_err(|err| format!("niri IPC error: {err}"))?
+    {
+        Ok(Response::Handled) => Ok(stream),
+        Ok(other) => Err(format!("unexpected niri response: {other:?}")),
+        Err(message) => Err(format!("niri returned an error: {message}")),
+    }
+}
+
+fn query_active(socket: &Path) -> Result<BTreeMap<String, String>, String> {
+    match crate::send(socket, Request::Workspaces)? {
+        Response::Workspaces(workspaces) => Ok(active_workspaces(&workspaces)),
+        other => Err(format!("unexpected niri response: {other:?}")),
+    }
+}
+
+impl Wallpaper {
+    fn scale_of(&self, output: &wl_output::WlOutput) -> u32 {
+        self.output_state
+            .info(output)
+            .map(|info| info.scale_factor.max(1) as u32)
+            .unwrap_or(1)
+    }
+
+    fn rotation_of(&self, output: &wl_output::WlOutput) -> Rotation {
+        match self.output_state.info(output).map(|info| info.transform) {
+            Some(Transform::_90) | Some(Transform::Flipped90) => Rotation::Cw90,
+            Some(Transform::_180) => Rotation::Cw180,
+            Some(Transform::_270) | Some(Transform::Flipped270) => Rotation::Cw270,
+            _ => Rotation::Normal,
+        }
+    }
+
+    fn index_of(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
+        self.surfaces
+            .iter()
+            .position(|entry| entry.layer.wl_surface() == surface)
+    }
+
+    fn index_of_output(&self, output: &wl_output::WlOutput) -> Option<usize> {
+        self.surfaces
+            .iter()
+            .position(|entry| entry.output == *output)
+    }
+
+    fn ensure_surface(&mut self, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if self.index_of_output(&output).is_some() {
+            return;
+        }
+        let surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Background,
+            Some(NAMESPACE),
+            Some(&output),
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        // Size 0 with all edges anchored lets the compositor hand us the output
+        // size; it is reported back in the first configure.
+        layer.set_size(0, 0);
+        layer.commit();
+
+        let pool = match SlotPool::new(1 << 20, &self.shm) {
+            Ok(pool) => pool,
+            Err(err) => {
+                eprintln!("better-wallpaper: cannot create a shm pool for an output: {err}");
+                return;
+            }
+        };
+        self.surfaces.push(Surface {
+            output,
+            layer,
+            pool,
+            buffers: Vec::new(),
+            logical: Size::default(),
+            configured: false,
+            current: None,
+            current_buffer: Size::default(),
+            current_scale: 0,
+            current_stamp: None,
+            pending: false,
+        });
+    }
+
+    /// Everything a draw needs, resolved from immutable state.
+    fn plan(&self, index: usize) -> Option<(Size, u32, Option<PathBuf>)> {
+        let surface = self.surfaces.get(index)?;
+        if !surface.configured || surface.logical.is_empty() {
+            return None;
+        }
+        let output_name = self
+            .output_state
+            .info(&surface.output)
+            .and_then(|info| info.name);
+        let workspace = output_name
+            .as_deref()
+            .and_then(|name| self.active.get(name))
+            .map(String::as_str);
+        let path = resolve(&self.scene, workspace).map(PathBuf::from);
+        Some((surface.logical, self.scale_of(&surface.output), path))
+    }
+
+    fn draw_all(&mut self) {
+        for index in 0..self.surfaces.len() {
+            let Some((logical, scale, path)) = self.plan(index) else {
+                continue;
+            };
+            let buffer = logical.scaled(scale);
+            let surface = &self.surfaces[index];
+            if !surface.pending
+                && surface.current == path
+                && surface.current_buffer == buffer
+                && surface.current_scale == scale
+            {
+                continue;
+            }
+            self.draw(index);
+        }
+    }
+
+    fn draw(&mut self, index: usize) {
+        let Some((logical, scale, path)) = self.plan(index) else {
+            return;
+        };
+        let buffer = logical.scaled(scale);
+        if buffer.is_empty() {
+            return;
+        }
+        let pixels = match path.as_deref() {
+            Some(path) => match self.cache.get(path) {
+                Ok(image) => match images::render_cover(image, buffer) {
+                    Ok(pixels) => pixels,
+                    Err(err) => {
+                        eprintln!("better-wallpaper: {err}");
+                        images::render_solid(buffer, FALLBACK_COLOR)
+                    }
+                },
+                Err(err) => {
+                    eprintln!("better-wallpaper: {err}");
+                    images::render_solid(buffer, FALLBACK_COLOR)
+                }
+            },
+            None => images::render_solid(buffer, FALLBACK_COLOR),
+        };
+        self.commit(index, scale, buffer, &pixels, path);
+    }
+
+    fn commit(
+        &mut self,
+        index: usize,
+        scale: u32,
+        buffer_size: Size,
+        pixels: &[u8],
+        path: Option<PathBuf>,
+    ) {
+        let Some(surface) = self.surfaces.get_mut(index) else {
+            return;
+        };
+        let width = buffer_size.width as i32;
+        let height = buffer_size.height as i32;
+        let stride = width.saturating_mul(4);
+
+        // Reuse a buffer the compositor has released, so a redraw never
+        // overwrites pixels that may still be on screen.
+        let reusable = (0..surface.buffers.len()).find(|&slot| {
+            let candidate = &surface.buffers[slot];
+            candidate.height() == height
+                && candidate.stride() == stride
+                && candidate.canvas(&mut surface.pool).is_some()
+        });
+        let slot = match reusable {
+            Some(slot) => {
+                if let Some(canvas) = surface.buffers[slot].canvas(&mut surface.pool) {
+                    let len = pixels.len().min(canvas.len());
+                    canvas[..len].copy_from_slice(&pixels[..len]);
+                }
+                slot
+            }
+            None => {
+                if surface.buffers.len() >= MAX_BUFFERS {
+                    // Dropping an in-use buffer is safe: the compositor keeps
+                    // the storage alive until it has released it.
+                    surface.buffers.remove(0);
+                }
+                let created =
+                    surface
+                        .pool
+                        .create_buffer(width, height, stride, wl_shm::Format::Xrgb8888);
+                match created {
+                    Ok((buffer, canvas)) => {
+                        let len = pixels.len().min(canvas.len());
+                        canvas[..len].copy_from_slice(&pixels[..len]);
+                        surface.buffers.push(buffer);
+                        surface.buffers.len() - 1
+                    }
+                    Err(err) => {
+                        eprintln!("better-wallpaper: cannot create a shm buffer: {err}");
+                        surface.pending = true;
+                        return;
+                    }
+                }
+            }
+        };
+
+        let wl_surface = surface.layer.wl_surface().clone();
+        wl_surface.set_buffer_scale(scale as i32);
+        wl_surface.damage_buffer(0, 0, width, height);
+        if let Err(err) = surface.buffers[slot].attach_to(&wl_surface) {
+            eprintln!("better-wallpaper: cannot attach a shm buffer: {err}");
+            surface.pending = true;
+            return;
+        }
+        surface.layer.commit();
+        surface.current_stamp = path.as_deref().and_then(FileStamp::from_path);
+        debug_log(format_args!(
+            "committed {}x{} buffer at scale {} ({})",
+            width,
+            height,
+            scale,
+            path.as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "scene fallback colour".to_owned())
+        ));
+        surface.current = path;
+        surface.current_buffer = buffer_size;
+        surface.current_scale = scale;
+        surface.pending = false;
+    }
+
+    /// Periodic maintenance: redraw changed image files and retry deferred draws.
+    fn tick(&mut self) {
+        for index in 0..self.surfaces.len() {
+            let Some(path) = self.surfaces[index].current.clone() else {
+                continue;
+            };
+            let current = FileStamp::from_path(&path);
+            if needs_reload(
+                self.surfaces[index].current_stamp.as_ref(),
+                current.as_ref(),
+            ) {
+                self.surfaces[index].pending = true;
+            }
+        }
+        self.draw_all();
+        // Drop decoded images that no output displays any more.
+        let paths: Vec<PathBuf> = self
+            .surfaces
+            .iter()
+            .filter_map(|surface| surface.current.clone())
+            .collect();
+        self.cache.retain(paths);
+    }
+
+    fn on_niri(&mut self, event: ChannelEvent<NiriEvent>) {
+        match event {
+            ChannelEvent::Msg(NiriEvent::Workspaces(active)) => {
+                if self.active != active {
+                    self.active = active;
+                    self.draw_all();
+                }
+            }
+            ChannelEvent::Msg(NiriEvent::Failed(err)) => {
+                eprintln!("better-wallpaper: {err}; retrying in {}s", RETRY.as_secs());
+            }
+            ChannelEvent::Msg(NiriEvent::Disconnected) => {
+                eprintln!(
+                    "better-wallpaper: niri event stream closed; reconnecting in {}s",
+                    RETRY.as_secs()
+                );
+            }
+            // The watcher thread only stops once this end is gone.
+            ChannelEvent::Closed => self.exit = true,
+        }
+    }
+
+    /// Logical size to use when a configure reports a zero size.
+    fn fallback_size(&self, output: &wl_output::WlOutput) -> Size {
+        let Some(info) = self.output_state.info(output) else {
+            return Size::default();
+        };
+        if let Some((width, height)) = info.logical_size {
+            return Size::new(width.max(0) as u32, height.max(0) as u32);
+        }
+        let scale = info.scale_factor.max(1) as u32;
+        let mode = info
+            .modes
+            .iter()
+            .find(|mode| mode.current)
+            .or_else(|| info.modes.first());
+        match mode {
+            Some(mode) => Size::new(mode.dimensions.0 as u32, mode.dimensions.1 as u32)
+                .rotated(self.rotation_of(output))
+                .divided(scale),
+            None => Size::default(),
+        }
+    }
+}
+
+impl ShmHandler for Wallpaper {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl ProvidesRegistryState for Wallpaper {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState];
+}
+
+impl OutputHandler for Wallpaper {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        self.ensure_surface(qh, output);
+    }
+
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        // A scale change needs a new buffer size and buffer scale; size changes
+        // from a mode switch arrive through `configure`.
+        let Some(index) = self.index_of_output(&output) else {
+            return;
+        };
+        let scale = self.scale_of(&output);
+        if self.surfaces[index].current_scale != scale {
+            self.surfaces[index].buffers.clear();
+            self.surfaces[index].pending = true;
+            self.draw(index);
+        }
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.surfaces.retain(|surface| surface.output != output);
+    }
+}
+
+impl CompositorHandler for Wallpaper {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+        let Some(index) = self.index_of(surface) else {
+            return;
+        };
+        let scale = self.scale_of(&self.surfaces[index].output);
+        if self.surfaces[index].current_scale != scale {
+            self.surfaces[index].buffers.clear();
+            self.surfaces[index].pending = true;
+            self.draw(index);
+        }
+    }
+
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: Transform,
+    ) {
+        if let Some(index) = self.index_of(surface) {
+            self.surfaces[index].pending = true;
+            self.draw(index);
+        }
+    }
+
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        // No frame callbacks are requested: redraws are driven by niri events,
+        // the timer and configure events, never by the refresh rate.
+    }
+
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl LayerShellHandler for Wallpaper {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        // The compositor dismissed the background surface (for example because
+        // its output went away): drop it. A later `new_output` recreates it.
+        self.surfaces
+            .retain(|surface| surface.layer.wl_surface() != layer.wl_surface());
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _: u32,
+    ) {
+        let Some(index) = self.index_of(layer.wl_surface()) else {
+            return;
+        };
+        let output = self.surfaces[index].output.clone();
+        let logical = match (configure.new_size.0, configure.new_size.1) {
+            (width, height) if width > 0 && height > 0 => Size::new(width, height),
+            _ => self.fallback_size(&output),
+        };
+        let scale = self.scale_of(&output);
+        let surface = &mut self.surfaces[index];
+        let changed = surface.logical != logical || !surface.configured;
+        surface.logical = logical;
+        surface.configured = !logical.is_empty();
+        debug_log(format_args!(
+            "configure {}x{} scale {scale} (changed: {changed})",
+            logical.width, logical.height
+        ));
+        if changed {
+            // Buffers sized for the old geometry cannot be reused, and a
+            // repeated configure with the same size must not re-scale the image.
+            surface.buffers.clear();
+            surface.pending = true;
+            self.draw(index);
+        }
+    }
+}
+
+delegate_registry!(Wallpaper);
+smithay_client_toolkit::delegate_dispatch2!(Wallpaper);
