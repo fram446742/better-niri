@@ -7573,12 +7573,10 @@ impl Niri {
                     // cover the whole output.
                     let caps = self.global_shader_caps();
                     let cursor_radius = self.config.borrow().global_shader.cursor_radius;
-                    // Number of passes in the active chain (registry length). Region mode is
-                    // whole-output only; multi-pass chains (N >= 2) always reshade the
-                    // full output.
-                    let n_passes = ctx.renderer.as_gles_renderer().map_or(0, |renderer| {
-                        Shaders::get(renderer).custom_global_passes.borrow().len()
-                    });
+                    // Number of passes in the active chain (registry length, on whichever
+                    // backend is active). Region mode is whole-output only; multi-pass chains
+                    // (N >= 2) always reshade the full output.
+                    let n_passes = Shaders::global_pass_count(ctx.renderer);
                     let (area, region_norm) = match cursor_radius {
                         Some(r)
                             if caps.uses_cursor

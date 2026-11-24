@@ -99,6 +99,49 @@ pub fn run_global_pass_vulkan(
     frame.render_custom(program, region, &[region], uniforms, &textures, alpha)
 }
 
+/// Creates a renderer-owned offscreen texture for a Vulkan shader pass.
+#[cfg(feature = "vulkan")]
+pub fn create_vulkan_texture(
+    frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+    size: smithay::utils::Size<i32, smithay::utils::Buffer>,
+) -> Result<
+    smithay::backend::renderer::vulkan::VulkanTexture,
+    smithay::backend::renderer::vulkan::VulkanError,
+> {
+    use smithay::backend::renderer::{FrameContext as _, Offscreen as _};
+    let mut guard = frame.renderer();
+    guard
+        .as_mut()
+        .create_buffer(smithay::backend::allocator::Fourcc::Abgr8888, size)
+}
+
+/// Runs one custom shader pass into a fresh renderer-owned offscreen texture of `size`,
+/// returning it shader-readable for later draws in the same frame.
+///
+/// This is the Vulkan counterpart of rendering one pass into an `OffscreenBuffer`: the
+/// destination is fully covered, contents are discarded, and blending is disabled.
+#[cfg(feature = "vulkan")]
+pub fn render_custom_pass_to_texture_vulkan(
+    frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+    size: smithay::utils::Size<i32, smithay::utils::Buffer>,
+    program: &smithay::backend::renderer::vulkan::VulkanPixelProgram,
+    uniforms: &[smithay::backend::renderer::vulkan::CustomUniform<'_>],
+    textures: &[(&str, &smithay::backend::renderer::vulkan::VulkanTexture)],
+) -> Result<
+    smithay::backend::renderer::vulkan::VulkanTexture,
+    smithay::backend::renderer::vulkan::VulkanError,
+> {
+    use smithay::backend::renderer::vulkan::CustomPass;
+    let dst = create_vulkan_texture(frame, size)?;
+    frame.render_custom_passes(&[CustomPass {
+        dst: &dst,
+        program,
+        uniforms,
+        textures,
+    }])?;
+    Ok(dst)
+}
+
 #[cfg(all(test, feature = "vulkan"))]
 mod vulkan_tests {
     use smithay::backend::allocator::Fourcc;
@@ -146,7 +189,7 @@ mod vulkan_tests {
             let mut target = renderer
                 .create_buffer(Fourcc::Argb8888, size)
                 .expect("target");
-            let mut capture = renderer
+            let capture = renderer
                 .create_buffer(Fourcc::Argb8888, size)
                 .expect("capture");
             let mut fb = renderer.bind(&mut target).expect("bind");
@@ -228,7 +271,7 @@ mod vulkan_tests {
             capture_framebuffer_region_vulkan(&mut frame, full, &capture).expect("capture region");
             frame.finish().expect("finish");
 
-            let mut capture_fb = renderer.bind(&mut capture).expect("bind capture");
+            let capture_fb = renderer.bind(&mut capture).expect("bind capture");
             let mapping = renderer
                 .copy_framebuffer(&capture_fb, Rectangle::from_size(size), Fourcc::Argb8888)
                 .expect("copy capture");

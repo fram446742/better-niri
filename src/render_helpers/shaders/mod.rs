@@ -328,6 +328,22 @@ impl Shaders {
             .expect("shaders::init() must be called when creating the renderer")
     }
 
+    /// Number of compiled global post-process passes on either backend.
+    ///
+    /// The render path uses this to size the per-pass chain state; it must not
+    /// depend on a GLES renderer being present (the TTY Vulkan path has none).
+    pub fn global_pass_count(renderer: &mut impl NiriRenderer) -> usize {
+        if let Some(renderer) = renderer.as_gles_renderer() {
+            return Self::get(renderer).custom_global_passes.borrow().len();
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(renderer) = renderer.as_vulkan_renderer() {
+            return get_vulkan_renderer(renderer)
+                .map_or(0, |shaders| shaders.global_passes.borrow().len());
+        }
+        0
+    }
+
     /// Whether the renderer has a compiled program of this type, on either backend.
     pub fn has_program(renderer: &mut impl NiriRenderer, program: ProgramType) -> bool {
         if let Some(renderer) = renderer.as_gles_renderer() {
@@ -773,6 +789,9 @@ pub struct VulkanShaders {
     pub global_passes: RefCell<Vec<VulkanPixelProgram>>,
     pub global_buffers: RefCell<Vec<Option<VulkanPixelProgram>>>,
     pub scoped: RefCell<HashMap<u64, Vec<VulkanPixelProgram>>>,
+    /// 1×1 transparent-black texture used to seed a global/feedback shader's first-frame
+    /// `niri_prev` / `niri_buffer` (an "empty feedback buffer").
+    pub black_texture: Option<smithay::backend::renderer::vulkan::VulkanTexture>,
 }
 
 #[cfg(feature = "vulkan")]
@@ -855,6 +874,11 @@ impl VulkanShaders {
             global_passes: RefCell::new(Vec::new()),
             global_buffers: RefCell::new(Vec::new()),
             scoped: RefCell::new(HashMap::new()),
+            // 1×1 transparent black; sampled (clamped) it returns black for every uv.
+            black_texture: renderer
+                .import_memory(&[0u8, 0, 0, 0], Fourcc::Abgr8888, Size::from((1, 1)), false)
+                .map_err(|err| warn!("error creating Vulkan black texture: {err:?}"))
+                .ok(),
         }
     }
 

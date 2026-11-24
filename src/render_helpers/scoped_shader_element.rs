@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -5,6 +6,10 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
 use smithay::backend::renderer::utils::CommitCounter;
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{
+    CustomUniform, CustomUniformValue, VulkanError, VulkanFrame, VulkanPixelProgram, VulkanTexture,
+};
 use smithay::backend::renderer::{Frame as _, FrameContext as _, Offscreen, Texture as _};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Transform};
@@ -14,6 +19,8 @@ use crate::render_helpers::capture;
 use crate::render_helpers::offscreen::OffscreenBuffer;
 use crate::render_helpers::renderer::AsGlesFrame as _;
 use crate::render_helpers::shader_element::ShaderRenderElement;
+#[cfg(feature = "vulkan")]
+use crate::render_helpers::shaders;
 use crate::render_helpers::shaders::{ProgramType, Shaders};
 
 /// Where the scoped shader reads its initial `niri_screen` texture from.
@@ -56,6 +63,17 @@ pub struct ScopedShaderElement {
     source: ScopedSource,
     /// One offscreen per intermediate pass (indices 0..n_passes-1).
     offscreens: Vec<Rc<OffscreenBuffer>>,
+    /// Vulkan-only per-element offscreen destinations, used by [`Self::draw_vulkan`].
+    #[cfg(feature = "vulkan")]
+    vulkan: VulkanScopedState,
+}
+
+/// Vulkan offscreen destinations for one [`ScopedShaderElement`] draw.
+#[cfg(feature = "vulkan")]
+#[derive(Debug, Clone, Default)]
+struct VulkanScopedState {
+    /// Per-intermediate-pass destinations, indexed by pass.
+    intermediates: RefCell<Vec<Option<VulkanTexture>>>,
 }
 
 impl ScopedShaderElement {
@@ -86,6 +104,8 @@ impl ScopedShaderElement {
             n_passes,
             source,
             offscreens,
+            #[cfg(feature = "vulkan")]
+            vulkan: VulkanScopedState::default(),
         }
     }
 }
@@ -255,6 +275,159 @@ impl RenderElement<GlesRenderer> for ScopedShaderElement {
     }
 }
 
+#[cfg(feature = "vulkan")]
+impl ScopedShaderElement {
+    /// Vulkan equivalent of the GLES `draw` above: capture the region (or use the caller's
+    /// texture when that becomes representable on Vulkan), then run the scoped pass chain with
+    /// all five standard samplers aliasing the current input.
+    fn draw_vulkan(
+        &self,
+        frame: &mut VulkanFrame<'_, '_>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Result<(), VulkanError> {
+        let _span = tracy_client::span!("ScopedShaderElement::draw_vulkan");
+
+        let buffer_size = dst.size.to_logical(1).to_buffer(1, Transform::Normal);
+
+        // Only the capture source is representable on Vulkan: a caller-supplied GLES texture
+        // has no Vulkan image counterpart.
+        if !matches!(self.source, ScopedSource::Capture) {
+            return Ok(());
+        }
+
+        let input_tex = capture::create_vulkan_texture(frame, buffer_size)?;
+        capture::capture_framebuffer_region_vulkan(frame, dst, &input_tex)?;
+
+        let n = self.n_passes;
+        let programs: Option<Vec<VulkanPixelProgram>> = {
+            let Some(shaders) = shaders::get_vulkan_frame(frame) else {
+                return frame.render_texture_from_to(
+                    &input_tex,
+                    Rectangle::from_size(input_tex.size().to_f64()),
+                    dst,
+                    damage,
+                    &[],
+                    Transform::Normal,
+                    1.,
+                );
+            };
+            (0..n)
+                .map(|i| shaders.program(ProgramType::Scoped(self.key, i)))
+                .collect()
+        };
+
+        let Some(programs) = programs.filter(|_| n > 0) else {
+            // Passthrough: blit the captured region unchanged.
+            return frame.render_texture_from_to(
+                &input_tex,
+                Rectangle::from_size(input_tex.size().to_f64()),
+                dst,
+                damage,
+                &[],
+                Transform::Normal,
+                1.,
+            );
+        };
+
+        let uniforms = self.vulkan_uniforms(dst.size);
+        {
+            let mut intermediates = self.vulkan.intermediates.borrow_mut();
+            intermediates.resize(n, None);
+        }
+
+        // `input` advances through the pass chain: pass 0 reads the capture, later passes read
+        // the prior pass's offscreen output.
+        let mut input = input_tex;
+
+        for (i, program) in programs.iter().enumerate() {
+            // v1 scoped shaders: no feedback. All five samplers alias `input`.
+            let textures = [
+                ("niri_screen", &input),
+                ("niri_source", &input),
+                ("niri_prev", &input),
+                ("niri_screen_prev", &input),
+                ("niri_buffer", &input),
+            ];
+
+            if i + 1 < n {
+                // Intermediate pass: render into an offscreen that feeds the next pass's input.
+                match capture::render_custom_pass_to_texture_vulkan(
+                    frame,
+                    buffer_size,
+                    program,
+                    &uniforms,
+                    &textures,
+                ) {
+                    Ok(next) => {
+                        if let Some(slot) = self.vulkan.intermediates.borrow_mut().get_mut(i) {
+                            *slot = Some(next.clone());
+                        }
+                        input = next;
+                    }
+                    Err(err) => {
+                        warn!("scoped pass {i} failed on Vulkan: {err:?}");
+                        // Best effort: feed the input forward unchanged.
+                    }
+                }
+            } else {
+                // Last pass: composite directly into the output framebuffer.
+                frame.render_custom(program, dst, damage, &uniforms, &textures, 1.0)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Builds the uniform set expected by the compiled scoped pass programs.
+    fn vulkan_uniforms(
+        &self,
+        dst_size: smithay::utils::Size<i32, Physical>,
+    ) -> Vec<CustomUniform<'static>> {
+        let mut uniforms = vec![
+            CustomUniform {
+                name: "niri_time",
+                value: CustomUniformValue::Float(self.time),
+            },
+            CustomUniform {
+                name: "niri_cursor",
+                value: CustomUniformValue::Vec2([self.cursor.0, self.cursor.1]),
+            },
+            CustomUniform {
+                name: "niri_region",
+                value: CustomUniformValue::Vec4(self.region_norm),
+            },
+            CustomUniform {
+                name: "niri_output_size",
+                value: CustomUniformValue::Vec2([self.output_size_phys.0, self.output_size_phys.1]),
+            },
+            CustomUniform {
+                name: "niri_size",
+                value: CustomUniformValue::Vec2([dst_size.w as f32, dst_size.h as f32]),
+            },
+            CustomUniform {
+                name: "niri_scale",
+                value: CustomUniformValue::Float(self.scale),
+            },
+        ];
+        // SDR blend-space defaults; Vulkan HDR output is not wired yet.
+        for (name, value) in [
+            ("niri_hdr_pq", 0.0),
+            ("niri_ref_lum_scale", 1.0),
+            ("niri_linear", 0.0),
+            ("niri_linear_scale", 0.0),
+            ("niri_linear_to_ref", 0.0),
+            ("niri_hdr_to_sdr", 0.0),
+        ] {
+            uniforms.push(CustomUniform {
+                name,
+                value: CustomUniformValue::Float(value),
+            });
+        }
+        uniforms
+    }
+}
+
 impl<'render> RenderElement<TtyRenderer<'render>> for ScopedShaderElement {
     fn draw(
         &self,
@@ -265,6 +438,14 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ScopedShaderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
+        #[cfg(feature = "vulkan")]
+        if let TtyFrame::Vulkan(multi) = frame {
+            let vk_frame: &mut VulkanFrame<'_, '_> = multi.as_mut();
+            return self.draw_vulkan(vk_frame, dst, damage).map_err(|err| {
+                TtyRendererError::Vulkan(smithay::backend::renderer::multigpu::Error::Render(err))
+            });
+        }
+
         let Some(gles_frame) = frame.as_gles_frame() else {
             return Ok(());
         };
@@ -278,5 +459,98 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ScopedShaderElement {
             cache,
         )?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame as _, Offscreen, Renderer};
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Rectangle, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::shaders;
+
+    /// Runs a real scoped window shader through the element's Vulkan draw path: capture green,
+    /// sample it, and write red. Skips silently when no Vulkan device is usable.
+    #[test]
+    fn scoped_element_vulkan_pass_reads_back() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            let config = niri_config::Config::parse_mem(
+                r##"
+                window-shaders {
+                    preset "vulkan-test" {
+                        source "vec4 global_color(vec3 c) { vec4 s = tex2D_screen(c.xy); return vec4(s.g, 0.0, 0.0, 1.0); }"
+                    }
+                }
+                "##,
+            )
+            .expect("parse test config");
+            shaders::init_vulkan(&mut renderer, &config);
+
+            let chains = crate::niri::scoped_shader_chains(&config);
+            assert_eq!(chains.len(), 1, "expected one scoped chain");
+            let key = shaders::scoped_key(&chains[0]);
+            assert!(
+                shaders::get_vulkan_renderer(&renderer)
+                    .and_then(|s| s.program(ProgramType::Scoped(key, 0)))
+                    .is_some(),
+                "scoped shader failed to compile on {}",
+                device.name()
+            );
+
+            let size = Size::<i32, Buffer>::from((8, 8));
+            let output_size = Size::<i32, Physical>::from((8, 8));
+            let full = Rectangle::from_size(output_size);
+
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, size)
+                .expect("target");
+            let mut fb = renderer.bind(&mut target).expect("bind");
+            let mut frame = renderer
+                .render(&mut fb, output_size, Transform::Normal)
+                .expect("frame");
+            frame
+                .clear(Color32F::new(0.0, 1.0, 0.0, 1.0), &[full])
+                .expect("clear");
+
+            let element = ScopedShaderElement::new(
+                Id::new(),
+                Rectangle::from_size(Size::<f64, Logical>::from((8.0, 8.0))),
+                1.0,
+                0.0,
+                (0.0, 0.0),
+                [0.0, 0.0, 1.0, 1.0],
+                (8.0, 8.0),
+                key,
+                1,
+                ScopedSource::Capture,
+                Vec::new(),
+            );
+            element
+                .draw_vulkan(&mut frame, full, &[full])
+                .expect("vulkan scoped pass");
+            let _sync = frame.finish().expect("finish");
+
+            let mapping = renderer
+                .copy_framebuffer(&fb, Rectangle::from_size(size), Fourcc::Argb8888)
+                .expect("copy");
+            let pixels = renderer.map_texture(&mapping).expect("map");
+            assert_eq!(&pixels[0..4], &[0, 0, 255, 255], "expected red");
+            eprintln!("Vulkan scoped element pass OK on {}", device.name());
+            return;
+        }
     }
 }
