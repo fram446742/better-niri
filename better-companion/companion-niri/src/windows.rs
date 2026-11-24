@@ -62,7 +62,13 @@ impl Windows {
             self.apply_action(Action::SpawnSh {
                 command: command.to_owned(),
             })?;
-            return Ok(json!({ "spawned": true, "shell": command }));
+            return Ok(json!({
+                "action": "spawned",
+                "spawned": true,
+                "shell": command,
+                "matches": 0,
+                "candidate_ids": [],
+            }));
         }
         if let Some(command) = params.get("spawn").and_then(Value::as_array) {
             let command: Vec<String> = command
@@ -79,18 +85,39 @@ impl Windows {
             self.apply_action(Action::Spawn {
                 command: command.clone(),
             })?;
-            return Ok(json!({ "spawned": true, "command": command }));
+            return Ok(json!({
+                "action": "spawned",
+                "spawned": true,
+                "command": command,
+                "matches": 0,
+                "candidate_ids": [],
+            }));
         }
         Err("run-or-raise needs `spawn` (array) or `spawn_sh` (string)".to_owned())
     }
 
-    fn find(&self, params: &Value) -> Result<Option<Window>, String> {
-        let windows = self.windows()?;
-        Ok(windows
+    /// All matches sorted by window id. Raising prefers the lowest-id focused
+    /// match, then the lowest id, so multiple matches behave deterministically
+    /// regardless of niri's listing order.
+    fn matches_sorted(&self, params: &Value) -> Result<Vec<Window>, String> {
+        let mut matched: Vec<Window> = self
+            .windows()?
+            .into_iter()
+            .filter(|window| Self::matches(window, params))
+            .collect();
+        matched.sort_by_key(|window| window.id);
+        Ok(matched)
+    }
+
+    fn find(&self, params: &Value) -> Result<(Option<Window>, Vec<u64>), String> {
+        let matched = self.matches_sorted(params)?;
+        let candidate_ids: Vec<u64> = matched.iter().map(|window| window.id).collect();
+        let chosen = matched
             .iter()
-            .find(|window| window.is_focused && Self::matches(window, params))
-            .or_else(|| windows.iter().find(|window| Self::matches(window, params)))
-            .cloned())
+            .find(|window| window.is_focused)
+            .cloned()
+            .or_else(|| matched.first().cloned());
+        Ok((chosen, candidate_ids))
     }
 }
 
@@ -116,10 +143,10 @@ impl Context for Windows {
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {
         match action {
             "find" => {
-                let windows = self.windows()?;
-                let matched: Vec<Value> = windows
+                let matched = self.matches_sorted(params)?;
+                let count = matched.len();
+                let matched: Vec<Value> = matched
                     .into_iter()
-                    .filter(|window| Self::matches(window, params))
                     .map(|window| {
                         json!({
                             "id": window.id,
@@ -130,12 +157,23 @@ impl Context for Windows {
                         })
                     })
                     .collect();
-                Ok(json!({ "windows": matched }))
+                Ok(json!({ "windows": matched, "count": count }))
             }
             "run-or-raise" | "singleton" => {
-                if let Some(window) = self.find(params)? {
+                let (found, candidate_ids) = self.find(params)?;
+                if let Some(window) = found {
+                    let was_focused = window.is_focused;
                     self.apply_action(Action::FocusWindow { id: window.id })?;
-                    return Ok(json!({ "raised": window.id, "title": window.title }));
+                    return Ok(json!({
+                        "action": "raised",
+                        "raised": window.id,
+                        "title": window.title,
+                        "app_id": window.app_id,
+                        "workspace_id": window.workspace_id,
+                        "was_focused": was_focused,
+                        "matches": candidate_ids.len(),
+                        "candidate_ids": candidate_ids,
+                    }));
                 }
                 self.spawn(params)
             }
@@ -253,6 +291,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result["spawned"], true);
+        assert_eq!(result["action"], "spawned");
+        assert_eq!(result["matches"], 0);
+        assert_eq!(result["candidate_ids"], json!([]));
 
         let requests = server.join().unwrap();
         assert!(matches!(
@@ -283,6 +324,70 @@ mod tests {
         let windows = Windows::new(Compositor::at(&socket));
         let value = windows.call("find", &json!({ "title": "FIRE" })).unwrap();
         assert_eq!(value["windows"][0]["id"], 10);
+        assert_eq!(value["count"], 1);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn multiple_matches_pick_the_focused_window_and_report_candidates() {
+        let dir = temp_dir("multi-focused");
+        let socket = dir.join("niri.sock");
+        // Deliberately unordered niri output; 11 is focused but not the first.
+        let server = fake_niri(
+            &socket,
+            vec![
+                window_json(12, "firefox", false),
+                window_json(10, "firefox", false),
+                window_json(11, "firefox", true),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let result = windows
+            .call(
+                "run-or-raise",
+                &json!({ "app_id": "fire", "spawn": ["firefox"] }),
+            )
+            .unwrap();
+        assert_eq!(result["action"], "raised");
+        assert_eq!(result["raised"], 11);
+        assert_eq!(result["was_focused"], true);
+        assert_eq!(result["matches"], 3);
+        assert_eq!(result["candidate_ids"], json!([10, 11, 12]));
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::FocusWindow { id: 11 })
+        ));
+    }
+
+    #[test]
+    fn multiple_matches_without_focus_pick_the_lowest_id() {
+        let dir = temp_dir("multi-unfocused");
+        let socket = dir.join("niri.sock");
+        let server = fake_niri(
+            &socket,
+            vec![
+                window_json(12, "firefox", false),
+                window_json(10, "firefox", false),
+                window_json(11, "firefox", false),
+            ],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let result = windows
+            .call(
+                "singleton",
+                &json!({ "app_id": "firefox", "spawn_sh": "firefox" }),
+            )
+            .unwrap();
+        assert_eq!(result["raised"], 10);
+        assert_eq!(result["was_focused"], false);
+        assert_eq!(result["matches"], 3);
+
+        let requests = server.join().unwrap();
+        assert!(matches!(
+            requests[1],
+            Request::Action(Action::FocusWindow { id: 10 })
+        ));
     }
 }
