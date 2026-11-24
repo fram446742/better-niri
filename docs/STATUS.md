@@ -196,9 +196,13 @@ picked up without re-auditing.
    render through the active renderer, with damage/cursor semantics unchanged.
    Transition captures are transform-aware (all eight transforms covered by a
    readback test), and popup/layer-popup background effects now draw on Vulkan
-   instead of being gated on GLES. Remaining GLES-only render bits: the window
-   opening animation and tile alpha fade, MRU title/fade/panel textures, and
-   the screencast picker transition/panel/preview bakes. Textured `ShaderRenderElement`s now draw on
+   instead of being gated on GLES. MRU title/scope/fade textures, the
+   screencast picker transition/panel/preview bakes, the window opening
+   animation and the tile alpha fade now bake through the generic offscreen
+   path too; the custom open/close shaders remain GLES-only with a Vulkan
+   texture fallback. The remaining `as_gles` uses are per-backend dispatch,
+   GLES fast paths with a generic fallback, colour-management capture setup, or
+   genuinely GLES-only raw shader programs. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
@@ -283,8 +287,14 @@ picked up without re-auditing.
    `companion-adapters` now routes niri and companion events to the
    session/monitor/audio/wallpaper adapters with quoted templates, dedup,
    timeouts, concurrency limits and an opt-in failure policy.
-   Remaining: native PipeWire support in `better-wallpaper`, Phase 8 packaging
-   (Arch/AUR/profiles) and hardware validation. `better-settings/` now covers layout, input
+   `better-wallpaper/` gained a native layer-shell backend (one background
+   surface per output, cover-scaled `wl_shm` images, reload on file change,
+   reconnect/hotplug) with `auto|native|command` selection and command
+   fallback. Phase 8 packaging is in `packaging/`: Arch/AUR recipes for
+   `niri-better` and `better-desktop`, pinned and `-git` variants, feature
+   profiles (minimal/desktop/full), `verify.sh`, and `docs/PACKAGING.md` with
+   the compatibility matrix. Remaining: hardware validation (VRR/tearing/
+   explicit sync/multi-GPU/HDR mixed on real panels) and split packages. `better-settings/` now covers layout, input
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
