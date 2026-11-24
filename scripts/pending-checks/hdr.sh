@@ -26,6 +26,5 @@ if [ ! -f "$CLIP" ]; then
     exit 1
   fi
 fi
-fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
 exec mpv --fs --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
