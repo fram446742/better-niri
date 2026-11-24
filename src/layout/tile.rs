@@ -7,7 +7,7 @@ use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
@@ -17,6 +17,7 @@ use super::{
     RESIZE_ANIMATION_THRESHOLD, SizeFrac, StickyRestoreInfo,
 };
 use crate::animation::{Animation, Clock};
+use crate::backend::tty::TtyOffscreen;
 use crate::layout::SizingMode;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
@@ -33,8 +34,9 @@ use crate::render_helpers::shaders::{ProgramType, Shaders};
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::xray::{Xray, XrayPos};
-use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget};
+use crate::render_helpers::{BakedBuffer, RenderCtx, RenderIntent, RenderTarget};
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     baba_is_float_offset, round_logical_in_physical, round_logical_in_physical_max1,
@@ -177,8 +179,35 @@ niri_render_elements! {
     }
 }
 
-pub type TileRenderSnapshot =
-    RenderSnapshot<TileRenderElement<GlesRenderer>, TileRenderElement<GlesRenderer>>;
+/// Snapshot of a tile's contents for the closing animation.
+///
+/// The contents are baked into backend-agnostic textures at snapshot time, so taking an unmap
+/// snapshot also works on a Vulkan-only TTY session (where no GLES renderer exists). Each
+/// [`BakedBuffer`] carries its own texture, offset and context id.
+pub type TileRenderSnapshot = RenderSnapshot<
+    BakedBuffer<TextureBuffer<TtyOffscreen>>,
+    BakedBuffer<TextureBuffer<TtyOffscreen>>,
+>;
+
+/// Bakes render elements into a single backend-agnostic texture.
+///
+/// Works with any [`NiriRenderer`], so the unmap snapshot can be captured on GLES or on the
+/// Vulkan TTY renderer. The returned buffer keeps the encompassing geometry's offset and the
+/// renderer context that produced the texture.
+pub(crate) fn bake_snapshot_contents<R: NiriRenderer, E: RenderElement<R>>(
+    renderer: &mut R,
+    scale: Scale<f64>,
+    contents: Vec<E>,
+) -> anyhow::Result<BakedBuffer<TextureBuffer<TtyOffscreen>>> {
+    let offscreen = OffscreenBuffer::default();
+    let (elem, _sync_point, _data) = offscreen.render(renderer, scale, &contents)?;
+    Ok(BakedBuffer {
+        buffer: elem.texture_buffer(Transform::Normal, Vec::new()),
+        location: elem.offset(),
+        src: None,
+        dst: None,
+    })
+}
 
 #[derive(Debug)]
 struct ResizeAnimation {
@@ -1735,19 +1764,23 @@ impl<W: LayoutElement> Tile<W> {
         }
     }
 
-    pub fn store_unmap_snapshot_if_empty(
+    pub fn store_unmap_snapshot_if_empty<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         if self.unmap_snapshot.is_some() {
             return;
         }
 
         self.unmap_snapshot =
-            Some(self.render_snapshot(renderer, xray, xray_has_blocked_out_layers, xray_pos));
+            self.render_snapshot(renderer, xray, xray_has_blocked_out_layers, xray_pos);
     }
 
     fn render_snapshot<R: NiriRenderer>(
@@ -1756,10 +1789,11 @@ impl<W: LayoutElement> Tile<W> {
         mut xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
-    ) -> RenderSnapshot<TileRenderElement<R>, TileRenderElement<R>>
+    ) -> Option<TileRenderSnapshot>
     where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Tile::render_snapshot");
 
@@ -1865,16 +1899,33 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        RenderSnapshot {
-            contents,
-            contents_with_blocked_out_bg,
-            blocked_out_contents,
+        // Bake the three captures into backend-agnostic textures now, while the renderer is
+        // available. On a Vulkan-only TTY session this is the only chance to render them; the
+        // closing animation later just rescales the baked textures.
+        let scale = Scale::from(self.scale);
+        let mut bake = |what: &str, contents: Vec<TileRenderElement<R>>| {
+            bake_snapshot_contents(renderer, scale, contents).map_err(|err| {
+                warn!("error baking unmap snapshot {what}: {err:?}");
+            })
+        };
+        let contents = bake("contents", contents).ok()?;
+        let contents_with_blocked_out_bg = match contents_with_blocked_out_bg {
+            Some(contents) => Some(bake("contents with blocked-out bg", contents).ok()?),
+            None => None,
+        };
+        let blocked_out_contents = bake("blocked-out contents", blocked_out_contents).ok()?;
+
+        Some(RenderSnapshot {
+            contents: vec![contents],
+            contents_with_blocked_out_bg: contents_with_blocked_out_bg
+                .map(|contents| vec![contents]),
+            blocked_out_contents: vec![blocked_out_contents],
             block_out_from: self.window.rules().block_out_from,
             size: self.animated_tile_size(),
             texture: Default::default(),
             texture_with_blocked_out_bg: Default::default(),
             blocked_out_texture: Default::default(),
-        }
+        })
     }
 
     pub fn take_unmap_snapshot(&mut self) -> Option<TileRenderSnapshot> {
@@ -1923,5 +1974,123 @@ impl<W: LayoutElement> Tile<W> {
         let rounded = size.to_physical_precise_round(scale).to_logical(scale);
         assert_abs_diff_eq!(size.w, rounded.w, epsilon = 1e-5);
         assert_abs_diff_eq!(size.h, rounded.h, epsilon = 1e-5);
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{
+        Bind, Color32F, ExportMem, Frame as _, Offscreen as _, Renderer as _, Texture as _,
+    };
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Buffer, Point, Rectangle, Scale, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::texture::TextureRenderElement;
+
+    /// Runs `test` on the first Vulkan device that can create a renderer, silently skipping when
+    /// there is no Vulkan loader/device/driver (CI without a GPU).
+    fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                test(&mut renderer);
+                return;
+            }
+        }
+    }
+
+    fn read_back(
+        renderer: &mut VulkanRenderer,
+        target: &mut smithay::backend::renderer::vulkan::VulkanTexture,
+        size: Size<i32, Buffer>,
+    ) -> Vec<u8> {
+        let format = target.format().expect("target texture has a format");
+        let fb = renderer.bind(target).expect("bind readback target");
+        let mapping = renderer
+            .copy_framebuffer(&fb, Rectangle::from_size(size), format)
+            .expect("copy framebuffer");
+        let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+        let bytes = pixels.to_vec();
+        drop(fb);
+        bytes
+    }
+
+    /// The generic tile-snapshot bake (the same helper used by `Tile::render_snapshot`) must
+    /// produce a Vulkan texture on the Vulkan backend, and drawing that baked snapshot back must
+    /// sample its contents. This is what makes unmap snapshots possible on a Vulkan-only session.
+    #[test]
+    fn vulkan_tile_snapshot_bake_reads_back_contents() {
+        for_each_vulkan_renderer(|renderer| {
+            let size = Size::<i32, Buffer>::from((4, 4));
+            let green = SolidColorBuffer::new((4., 4.), [0., 1., 0., 1.]);
+            let elem = SolidColorRenderElement::from_buffer(
+                &green,
+                Point::from((0., 0.)),
+                1.,
+                Kind::Unspecified,
+            );
+
+            let baked = bake_snapshot_contents(renderer, Scale::from(1.), vec![elem])
+                .expect("bake tile snapshot contents");
+            assert!(
+                matches!(baked.buffer.texture(), TtyOffscreen::Vulkan(_)),
+                "the tile snapshot must be baked into a Vulkan texture"
+            );
+
+            let element =
+                PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                    baked.buffer.clone(),
+                    baked.location,
+                    1.,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                ));
+
+            let physical = Size::<i32, smithay::utils::Physical>::from((4, 4));
+            let mut target = renderer
+                .create_buffer(Fourcc::Abgr8888, size)
+                .expect("readback target");
+            {
+                let mut fb = renderer.bind(&mut target).expect("bind target");
+                let mut frame = renderer
+                    .render(&mut fb, physical, Transform::Normal)
+                    .expect("begin frame");
+                let dst = Rectangle::from_size(physical);
+                frame
+                    .clear(Color32F::TRANSPARENT, &[dst])
+                    .expect("clear frame");
+                RenderElement::<VulkanRenderer>::draw(
+                    &element,
+                    &mut frame,
+                    element.src(),
+                    dst,
+                    &[dst],
+                    &[],
+                    None,
+                )
+                .expect("draw baked tile snapshot");
+                let _sync = frame.finish().expect("finish frame");
+            }
+
+            let pixels = read_back(renderer, &mut target, size);
+            assert_eq!(
+                &pixels[0..4],
+                &[0, 255, 0, 255],
+                "the baked tile snapshot did not reach the readback target"
+            );
+        });
     }
 }

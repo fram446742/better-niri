@@ -36,7 +36,7 @@ pub struct Transaction {
 }
 
 /// Blocker for a [`Transaction`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransactionBlocker(Weak<Inner>);
 
 #[derive(Debug)]

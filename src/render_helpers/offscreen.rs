@@ -584,8 +584,11 @@ mod vulkan_tests {
     use smithay::utils::{Point, Rectangle, Scale, Size, Transform};
 
     use super::*;
+    #[cfg(feature = "navigation")]
     use crate::render_helpers::panel::PanelRenderElement;
+    #[cfg(feature = "navigation")]
     use crate::render_helpers::panel_quad::tilted_panel_corners;
+    #[cfg(feature = "navigation")]
     use crate::render_helpers::shaders::init_vulkan;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
@@ -693,6 +696,7 @@ mod vulkan_tests {
     /// `OffscreenBuffer` (the panel prepass), then build a `PanelRenderElement` from that
     /// `TtyOffscreen::Vulkan` texture (the host-side retained element) and draw it. The centre of
     /// the quad must sample the baked red source.
+    #[cfg(feature = "navigation")]
     #[test]
     fn vulkan_panel_bake_then_draw_samples_baked_texture() {
         for_each_vulkan_renderer(|renderer| {

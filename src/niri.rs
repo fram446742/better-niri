@@ -3641,7 +3641,7 @@ impl State {
         // elements, so they need to be updated.
         self.niri.update_xray_render_elements(output);
 
-        self.backend.with_primary_renderer(|renderer| {
+        let stored = self.backend.with_primary_renderer(|renderer| {
             if let Some(output) = output {
                 let mut ctx = RenderCtx {
                     target: RenderTarget::Output,
@@ -3682,6 +3682,18 @@ impl State {
                     .store_unmap_snapshot(renderer, None, false, window);
             }
         });
+
+        if stored.is_some() {
+            return;
+        }
+
+        // On a Vulkan-only TTY session there is no GLES primary renderer. Bake the snapshot with
+        // the TTY renderer abstraction instead (xray is GLES-only, so it is skipped).
+        self.backend.with_primary_tty_renderer(|renderer| {
+            self.niri
+                .layout
+                .store_unmap_snapshot(renderer, None, false, window);
+        });
     }
 
     /// Minimizes a window, playing the window-close animation for the disappearing tile.
@@ -3702,11 +3714,19 @@ impl State {
 
         let transaction = crate::utils::transaction::Transaction::new();
         let blocker = transaction.blocker();
-        self.backend.with_primary_renderer(|renderer| {
+        let started = self.backend.with_primary_renderer(|renderer| {
             self.niri
                 .layout
-                .start_close_animation_for_window(renderer, window, blocker);
+                .start_close_animation_for_window(renderer, window, blocker.clone());
         });
+        if started.is_none() {
+            // Vulkan-only TTY session: no GLES primary renderer, animate through the TTY renderer.
+            self.backend.with_primary_tty_renderer(|renderer| {
+                self.niri
+                    .layout
+                    .start_close_animation_for_window(renderer, window, blocker);
+            });
+        }
 
         let active_window = self.niri.layout.focus().map(|m| &m.window);
         let was_active = active_window == Some(window);

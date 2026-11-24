@@ -9,7 +9,6 @@ use niri_config::{
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::element::{Kind, RenderElement};
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{Window, layer_map_for_output};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -4184,18 +4183,14 @@ impl<W: LayoutElement> Workspace<W> {
             let view_rect = Rectangle::new(Point::from((0., 0.)), self.view_size);
             if self.is_floating_visible() {
                 for closing in self.floating.closing_windows() {
-                    if let Some(gles) = ctx.as_gles()
-                        && let Some(elem) = closing.render(gles, view_rect, Scale::from(scale))
-                    {
+                    if let Some(elem) = closing.render(ctx.r(), view_rect, Scale::from(scale)) {
                         let elem: FloatingSpaceRenderElement<R> = elem.into();
                         push(elem.into());
                     }
                 }
             }
             for closing in self.scrolling.closing_windows() {
-                if let Some(gles) = ctx.as_gles()
-                    && let Some(elem) = closing.render(gles, view_rect, Scale::from(scale))
-                {
+                if let Some(elem) = closing.render(ctx.r(), view_rect, Scale::from(scale)) {
                     let elem: ScrollingSpaceRenderElement<R> = elem.into();
                     push(elem.into());
                 }
@@ -4240,14 +4235,18 @@ impl<W: LayoutElement> Workspace<W> {
         ) || self.fullscreen_window_above_top_layer().is_none()
     }
 
-    pub fn store_unmap_snapshot_if_empty(
+    pub fn store_unmap_snapshot_if_empty<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
         window: &W::Id,
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let view_size = self.view_size();
         for (tile, tile_pos) in self.tiles_with_render_positions_mut(false) {
             if tile.window().id() == window {
@@ -4275,12 +4274,14 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_window<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         window: &W::Id,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         #[cfg(feature = "navigation")]
         let grid_target = {
             let go = self.grid_overview.as_ref().filter(|go| go.open);
@@ -4339,14 +4340,16 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn start_close_animation_for_tile(
+    pub fn start_close_animation_for_tile<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         snapshot: TileRenderSnapshot,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         self.floating
             .start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
     }

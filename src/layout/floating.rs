@@ -5,7 +5,7 @@ use std::rc::Rc;
 use niri_config::utils::MergeWith as _;
 use niri_config::{PresetSize, RelativeTo};
 use niri_ipc::{PositionChange, SizeChange, WindowLayout};
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::element::RenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
@@ -578,14 +578,18 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.remove_tile_by_idx(idx)
     }
 
-    pub fn store_unmap_snapshot_if_empty(
+    pub fn store_unmap_snapshot_if_empty<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
         id: &W::Id,
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let view_size = self.view_size;
         for (tile, tile_pos) in self.tiles_with_render_positions_mut(false) {
             if tile.window().id() == id {
@@ -649,12 +653,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
         }
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_window<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         id: &W::Id,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let (tile, tile_pos) = self
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| tile.window().id() == id)
@@ -669,14 +675,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
     }
 
-    pub fn start_close_animation_for_window_at(
+    pub fn start_close_animation_for_window_at<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         id: &W::Id,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let Some(snapshot) = self
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| tile.window().id() == id)
@@ -718,14 +726,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.data.insert(to_idx, data);
     }
 
-    pub fn start_close_animation_for_tile(
+    pub fn start_close_animation_for_tile<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         snapshot: TileRenderSnapshot,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let anim = Animation::new(
             self.clock.clone(),
             0.,
@@ -1234,9 +1244,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         // FIXME: I guess this should rather preserve the stacking order when the window is closed.
         if layer.is_normal() {
             for closing in self.closing_windows.iter().rev() {
-                if let Some(gles) = ctx.as_gles()
-                    && let Some(elem) = closing.render(gles, view_rect, scale)
-                {
+                if let Some(elem) = closing.render(ctx.r(), view_rect, scale) {
                     push(elem.into());
                 }
             }
@@ -1277,9 +1285,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) {
         let scale = Scale::from(self.scale);
         for closing in self.closing_windows.iter().rev() {
-            if let Some(gles) = ctx.as_gles()
-                && let Some(elem) = closing.render(gles, view_rect, scale)
-            {
+            if let Some(elem) = closing.render(ctx.r(), view_rect, scale) {
                 push(elem.into());
             }
         }

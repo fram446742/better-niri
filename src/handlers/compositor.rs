@@ -329,11 +329,21 @@ impl CompositorHandler for State {
                 let transaction = Transaction::new();
                 if !is_mapped {
                     let blocker = transaction.blocker();
-                    self.backend.with_primary_renderer(|renderer| {
-                        self.niri
-                            .layout
-                            .start_close_animation_for_window(renderer, &window, blocker);
+                    let started = self.backend.with_primary_renderer(|renderer| {
+                        self.niri.layout.start_close_animation_for_window(
+                            renderer,
+                            &window,
+                            blocker.clone(),
+                        );
                     });
+                    if started.is_none() {
+                        // Vulkan-only TTY session: no GLES primary renderer.
+                        self.backend.with_primary_tty_renderer(|renderer| {
+                            self.niri
+                                .layout
+                                .start_close_animation_for_window(renderer, &window, blocker);
+                        });
+                    }
                 }
 
                 window.on_commit();
