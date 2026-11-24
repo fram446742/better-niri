@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use better_audio::backends::{self, BackendConfig, BackendKind, Selection};
 use better_audio::{
-    ChangeGate, DeviceSnapshot, FocusContext, HotplugWatcher, Rule, Store, apply_once_with_context,
-    config_path, execute, execute_profile, execute_restore, explain_stream, plan_profile,
-    plan_profile_restore, plan_restore, plan_signature, plan_with_context,
+    ChangeGate, DeviceKind, DeviceSnapshot, FocusContext, HotplugWatcher, Rule, Store,
+    apply_once_with_context, config_path, execute, execute_profile, execute_restore,
+    explain_stream, parse_mute, parse_volume, plan_profile, plan_profile_restore, plan_restore,
+    plan_signature, plan_with_context, set_mute, set_volume,
 };
 use serde_json::json;
 
@@ -21,12 +22,15 @@ fn usage() -> &'static str {
        --pw-cli PATH              pw-cli executable (default $BETTER_AUDIO_PW_CLI)\n\
        --focus-command CMD        Command printing focused-window JSON\n\
                                   (default $BETTER_AUDIO_FOCUS_COMMAND)\n\
+       --json                     Emit a `{command, ok, data}` envelope\n\
        --dry-run                  Print planned changes without applying them\n\n\
      Commands:\n\
        sinks                      List playback sinks\n\
        sources                    List capture sources (input devices)\n\
        streams                    List playback streams (app + current sink)\n\
        links                      List PipeWire links (diagnostics)\n\
+       volume <sink|source> <device> <0..1>   Set a device's linear volume\n\
+       mute <sink|source> <device> on|off     Mute or unmute a device\n\
        rules                      List rules\n\
        rules add <app> <sink> [--priority N] [--volume 0..1] [--mute on|off]\n\
        rules remove <index>       Remove the rule at that index\n\
@@ -52,20 +56,13 @@ struct Options {
     backend: BackendKind,
     backend_config: BackendConfig,
     dry_run: bool,
+    json: bool,
     priority: i32,
     volume: Option<f32>,
     mute: Option<bool>,
     interval: Duration,
     focus_command: Option<String>,
     args: Vec<String>,
-}
-
-fn parse_mute(value: &str) -> Result<bool, String> {
-    match value.to_lowercase().as_str() {
-        "1" | "true" | "on" | "yes" => Ok(true),
-        "0" | "false" | "off" | "no" => Ok(false),
-        other => Err(format!("invalid mute value `{other}` (expected on or off)")),
-    }
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -76,6 +73,7 @@ fn parse_options() -> Result<Options, String> {
         backend: BackendKind::Auto,
         backend_config: BackendConfig::default(),
         dry_run: false,
+        json: false,
         priority: 0,
         volume: None,
         mute: None,
@@ -130,6 +128,7 @@ fn parse_options() -> Result<Options, String> {
                 options.interval = Duration::from_millis(millis.max(100));
             }
             "--dry-run" => options.dry_run = true,
+            "--json" => options.json = true,
             "--help" | "-h" => {
                 print!("{}", usage());
                 std::process::exit(0);
@@ -141,6 +140,17 @@ fn parse_options() -> Result<Options, String> {
         }
     }
     Ok(options)
+}
+
+fn emit<T: serde::Serialize>(options: &Options, command: &str, data: &T) {
+    if options.json {
+        println!(
+            "{}",
+            json!({ "command": command, "ok": true, "data": data })
+        );
+    } else {
+        println!("{}", serde_json::to_string_pretty(data).unwrap());
+    }
 }
 
 fn main() -> ExitCode {
@@ -254,6 +264,60 @@ fn run() -> Result<(), String> {
                 }))
                 .unwrap()
             );
+        }
+        "mute" => {
+            let kind = DeviceKind::parse(
+                options
+                    .args
+                    .get(1)
+                    .ok_or_else(|| "mute needs <sink|source> <device> on|off".to_owned())?,
+            )?;
+            let reference = options
+                .args
+                .get(2)
+                .ok_or_else(|| "mute needs a device name".to_owned())?;
+            let mute = parse_mute(
+                options
+                    .args
+                    .get(3)
+                    .ok_or_else(|| "mute needs on or off".to_owned())?,
+            )?;
+            let selection = select(&options)?;
+            let report = set_mute(
+                selection.backend.as_ref(),
+                kind,
+                reference,
+                mute,
+                options.dry_run,
+            )?;
+            emit(&options, "mute", &report);
+        }
+        "volume" => {
+            let kind = DeviceKind::parse(
+                options
+                    .args
+                    .get(1)
+                    .ok_or_else(|| "volume needs <sink|source> <device> <0..1>".to_owned())?,
+            )?;
+            let reference = options
+                .args
+                .get(2)
+                .ok_or_else(|| "volume needs a device name".to_owned())?;
+            let volume = parse_volume(
+                options
+                    .args
+                    .get(3)
+                    .ok_or_else(|| "volume needs a level in 0..1".to_owned())?,
+            )?;
+            let selection = select(&options)?;
+            let report = set_volume(
+                selection.backend.as_ref(),
+                kind,
+                reference,
+                volume,
+                options.dry_run,
+            )?;
+            emit(&options, "volume", &report);
         }
         "rules" => match options.args.get(1).map(String::as_str) {
             None | Some("list") => {
@@ -620,7 +684,7 @@ fn run() -> Result<(), String> {
             }
         }
         "status" => {
-            let (active, description, degraded, reason, attempts, current_default) =
+            let (active, description, degraded, reason, attempts, current_default, sinks, sources) =
                 match select(&options) {
                     Ok(selection) => {
                         let current = selection.backend.default_sink().ok().flatten();
@@ -642,9 +706,20 @@ fn run() -> Result<(), String> {
                             selection.status.explanation(),
                             attempts,
                             current,
+                            selection.backend.sinks().unwrap_or_default(),
+                            selection.backend.sources().unwrap_or_default(),
                         )
                     }
-                    Err(err) => (None, None, false, err, Vec::new(), None),
+                    Err(err) => (
+                        None,
+                        None,
+                        false,
+                        err,
+                        Vec::new(),
+                        None,
+                        Vec::new(),
+                        Vec::new(),
+                    ),
                 };
             let restore_count = store.restore.len();
             println!(
@@ -659,6 +734,8 @@ fn run() -> Result<(), String> {
                     "config": options.config.display().to_string(),
                     "current_default": current_default,
                     "configured_default": store.default_sink,
+                    "sinks": sinks,
+                    "sources": sources,
                     "rules": store.rules,
                     "restore_entries": store.restore,
                     "restore_count": restore_count,

@@ -1,0 +1,67 @@
+{
+  "command": "arrange",
+  "ok": true,
+  "data": {
+    "profile": "arrange",
+    "status": "applied",
+    "dry_run": false,
+    "resolved": {},
+    "actions": [
+      {
+        "output": "DP-1",
+        "phase": "position",
+        "action": {
+          "Position": {
+            "Specific": {
+              "x": 1280,
+              "y": 0
+            }
+          }
+        }
+      }
+    ],
+    "applied": [
+      {
+        "output": "DP-1",
+        "phase": "position",
+        "action": {
+          "Position": {
+            "Specific": {
+              "x": 1280,
+              "y": 0
+            }
+          }
+        }
+      }
+    ],
+    "errors": [],
+    "warnings": [],
+    "config_only": [],
+    "previous_saved": true,
+    "failed_action": null,
+    "rollback_actions": [],
+    "rollback_errors": [],
+    "positions": [
+      {
+        "output": "DP-1",
+        "x": 1280,
+        "y": 0,
+        "width": 2560,
+        "height": 1440,
+        "scale": 1.0,
+        "transform": "Normal",
+        "enabled": true
+      },
+      {
+        "output": "eDP-1",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "scale": 1.5,
+        "transform": "Normal",
+        "enabled": true
+      }
+    ]
+  }
+}

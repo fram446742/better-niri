@@ -1,0 +1,28 @@
+{
+  "command": "position",
+  "ok": true,
+  "data": {
+    "positions": [
+      {
+        "output": "DP-1",
+        "x": 2560,
+        "y": 0,
+        "width": 2560,
+        "height": 1440,
+        "scale": 1.0,
+        "transform": "Normal",
+        "enabled": true
+      },
+      {
+        "output": "eDP-1",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "scale": 1.5,
+        "transform": "Normal",
+        "enabled": true
+      }
+    ]
+  }
+}

@@ -5,12 +5,16 @@
     {
       "id": 41,
       "name": "alsa_output.speakers",
-      "description": "Built-in Speakers"
+      "description": "Built-in Speakers",
+      "volume": 1.0,
+      "mute": false
     },
     {
       "id": 42,
       "name": "alsa_output.headphones",
-      "description": "Headphones"
+      "description": "Headphones",
+      "volume": 0.5,
+      "mute": true
     }
   ]
 }

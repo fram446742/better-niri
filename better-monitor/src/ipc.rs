@@ -62,6 +62,31 @@ pub struct ApplyReport {
 }
 
 impl ApplyReport {
+    /// Report for a plan that failed validation; nothing was sent.
+    pub fn refused(
+        profile: &str,
+        dry_run: bool,
+        errors: Vec<String>,
+        actions: Vec<PlannedAction>,
+    ) -> Self {
+        Self {
+            profile: profile.to_owned(),
+            status: ApplyStatus::Refused,
+            dry_run,
+            resolved: BTreeMap::new(),
+            actions,
+            applied: Vec::new(),
+            errors,
+            warnings: Vec::new(),
+            config_only: Vec::new(),
+            previous_saved: false,
+            failed_action: None,
+            rollback_actions: Vec::new(),
+            rollback_errors: Vec::new(),
+            confirmation: None,
+        }
+    }
+
     fn from_plan(profile: &str, dry_run: bool, plan: Plan) -> Self {
         let status = if plan.ok() {
             if dry_run {
@@ -174,6 +199,84 @@ pub fn apply_profile_object(
     report.previous_saved = true;
 
     match execute_actions(socket, &report.actions) {
+        Ok(applied) => {
+            report.applied = applied;
+            report.status = ApplyStatus::Applied;
+        }
+        Err((applied, failed, message)) => {
+            report.applied = applied;
+            report.errors.push(message);
+            report.failed_action = Some(failed);
+
+            let fallback = plan_snapshot(&previous);
+            match execute_actions(socket, &fallback) {
+                Ok(rollback_actions) => {
+                    report.rollback_actions = rollback_actions;
+                    report.status = ApplyStatus::RolledBack;
+                }
+                Err((_, failed_rollback, rollback_message)) => {
+                    report.rollback_actions = fallback;
+                    report.rollback_errors.push(rollback_message);
+                    report.rollback_errors.push(format!(
+                        "rollback stopped at `{}` {}",
+                        failed_rollback.output,
+                        failed_rollback.describe()
+                    ));
+                    report.status = ApplyStatus::RollbackFailed;
+                }
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+/// Applies an ordered action list with the same save/rollback contract as
+/// profile apply. Used by the runtime arrangement command, which builds its
+/// actions directly instead of going through a profile.
+pub fn apply_actions(
+    socket: &Path,
+    store: &mut Store,
+    path: &Path,
+    label: &str,
+    actions: &[PlannedAction],
+    dry_run: bool,
+) -> Result<ApplyReport, String> {
+    let current = query_outputs(socket)?;
+    let mut report = ApplyReport {
+        profile: label.to_owned(),
+        status: if dry_run {
+            ApplyStatus::Planned
+        } else {
+            ApplyStatus::Applied
+        },
+        dry_run,
+        resolved: BTreeMap::new(),
+        actions: actions.to_vec(),
+        applied: Vec::new(),
+        errors: Vec::new(),
+        warnings: Vec::new(),
+        config_only: Vec::new(),
+        previous_saved: false,
+        failed_action: None,
+        rollback_actions: Vec::new(),
+        rollback_errors: Vec::new(),
+        confirmation: None,
+    };
+
+    if dry_run {
+        return Ok(report);
+    }
+
+    let previous = snapshot(&current);
+    store.insert("__previous", previous.clone());
+    store.version = crate::schema::SCHEMA_VERSION;
+    store
+        .save(path)
+        .map_err(|err| format!("cannot save profiles: {err}"))?;
+    report.previous_saved = true;
+
+    match execute_actions(socket, actions) {
         Ok(applied) => {
             report.applied = applied;
             report.status = ApplyStatus::Applied;

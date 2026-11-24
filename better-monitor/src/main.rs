@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use better_monitor::{
     ApplyReport, ApplyStatus, OutputMatch, Rule, RuleStore, SCHEMA_VERSION, Store, WatchOptions,
-    apply_named, apply_profile_object, build_rules_profile, cancel, confirm, evaluate_rules,
-    pending_path, plan_profile, query_outputs, restore, run_watch, snapshot, state_path,
-    watch_once, watch_pending, write_pending,
+    apply_named, apply_profile_object, arrange, build_rules_profile, cancel, confirm,
+    current_positions, evaluate_rules, parse_plan, pending_path, plan_profile, query_outputs,
+    restore, run_watch, snapshot, state_path, watch_once, watch_pending, write_pending,
 };
 use serde_json::{Value, json};
 
@@ -22,6 +22,9 @@ fn usage() -> &'static str {
        save <name> [output...]      Snapshot current outputs into <name>\n\
        apply <name> [--dry-run]     Apply <name> (stores __previous first)\n\
        restore [--dry-run]          Re-apply __previous\n\
+       position                     Print current logical output geometry\n\
+       position <output> <x> <y>    Move one output (stores __previous first)\n\
+       arrange --plan JSON          Apply logical positions from a JSON plan\n\
        delete <name>                Delete a profile\n\
        migrate                      Rewrite all profiles in schema v2\n\
        rules list                   List rules\n\
@@ -34,6 +37,7 @@ fn usage() -> &'static str {
        --socket PATH                niri IPC socket (default $NIRI_SOCKET)\n\
        --state PATH                 profile store (default $BETTER_MONITOR_STATE)\n\
        --rules-file PATH            rules store (sibling rules.json by default)\n\
+       --plan JSON                  Position plan for `arrange` (`@file` or `-` for stdin)\n\
        --json                       Machine-readable JSON envelope output\n\
        --dry-run                    Plan without changing the compositor\n\
        --once                       Evaluate watch once and exit\n\
@@ -69,6 +73,7 @@ struct Cli {
     confirm_timeout: Option<Duration>,
     pending: PathBuf,
     watch_id: Option<String>,
+    plan: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -101,6 +106,7 @@ impl Cli {
             confirm_timeout: None,
             pending: PathBuf::new(),
             watch_id: None,
+            plan: None,
             positionals: Vec::new(),
         };
         cli.parse_args()
@@ -150,6 +156,7 @@ impl Cli {
                 }
                 "--pending" => self.pending = PathBuf::from(next_value(&mut iter, "--pending")?),
                 "--watch-id" => self.watch_id = Some(next_value(&mut iter, "--watch-id")?),
+                "--plan" => self.plan = Some(next_value(&mut iter, "--plan")?),
                 other if other.starts_with("--") => {
                     return Err(format!("unknown option `{other}`\n\n{}", usage()));
                 }
@@ -386,6 +393,8 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
             let report = restore(cli.socket()?, &store, cli.dry_run)?;
             Ok(emit_report(cli, "restore", &report))
         }
+        "position" => run_position(cli, &mut store),
+        "arrange" => run_arrange(cli, &mut store),
         "migrate" => {
             let migrated = store.migrate();
             store
@@ -409,6 +418,72 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
         "watch" => run_watch_command(cli, &mut store),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
+}
+
+fn run_position(cli: &Cli, store: &mut Store) -> Result<bool, String> {
+    let rest: Vec<String> = cli.positionals.iter().skip(1).cloned().collect();
+    if rest.is_empty() {
+        let outputs = query_outputs(cli.socket()?)?;
+        emit(
+            cli,
+            "position",
+            true,
+            json!({ "positions": current_positions(&outputs) }),
+        );
+        return Ok(true);
+    }
+    if rest.len() != 3 {
+        return Err("position needs `<output> <x> <y>` or no arguments to read".to_owned());
+    }
+    let output = rest[0].clone();
+    let x: i32 = rest[1]
+        .parse()
+        .map_err(|_| format!("position x `{}` is not an integer", rest[1]))?;
+    let y: i32 = rest[2]
+        .parse()
+        .map_err(|_| format!("position y `{}` is not an integer", rest[2]))?;
+    let wanted = std::collections::BTreeMap::from([(output, (x, y))]);
+    let report = arrange(cli.socket()?, store, &cli.state, &wanted, cli.dry_run)?;
+    let ok = report.report.status.is_ok();
+    if cli.json {
+        emit(cli, "position", ok, serde_json::to_value(&report).unwrap());
+    } else {
+        print_json(&report);
+    }
+    Ok(ok)
+}
+
+fn run_arrange(cli: &Cli, store: &mut Store) -> Result<bool, String> {
+    let plan_text = cli
+        .plan
+        .as_deref()
+        .ok_or_else(|| "arrange needs --plan JSON".to_owned())?;
+    let plan_text = load_plan(plan_text)?;
+    let wanted = parse_plan(&plan_text)?;
+    let report = arrange(cli.socket()?, store, &cli.state, &wanted, cli.dry_run)?;
+    let ok = report.report.status.is_ok();
+    if cli.json {
+        emit(cli, "arrange", ok, serde_json::to_value(&report).unwrap());
+    } else {
+        print_json(&report);
+    }
+    Ok(ok)
+}
+
+fn load_plan(value: &str) -> Result<String, String> {
+    if value == "-" {
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|err| format!("cannot read the plan from stdin: {err}"))?;
+        return Ok(text);
+    }
+    if let Some(path) = value.strip_prefix('@') {
+        return std::fs::read_to_string(path)
+            .map_err(|err| format!("cannot read plan file `{path}`: {err}"));
+    }
+    Ok(value.to_owned())
 }
 
 fn spawn_confirm_watcher(

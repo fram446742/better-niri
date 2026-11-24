@@ -10,6 +10,7 @@
 //! `$XDG_STATE_HOME/better-monitor/`. See `README.md` for the schema and for
 //! which fields are IPC-visible versus config-only.
 
+pub mod arrange;
 pub mod ipc;
 pub mod plan;
 pub mod rules;
@@ -17,9 +18,13 @@ pub mod safe;
 pub mod schema;
 pub mod watch;
 
+pub use arrange::{
+    ArrangeReport, MAX_COORDINATE, OutputPosition, PositionPlan, arrange, current_positions,
+    parse_plan, plan_positions,
+};
 pub use ipc::{
-    ApplyReport, ApplyStatus, apply_named, apply_profile_object, query_outputs, restore,
-    send_action,
+    ApplyReport, ApplyStatus, apply_actions, apply_named, apply_profile_object, query_outputs,
+    restore, send_action,
 };
 pub use plan::{
     ActionPhase, ConfigOnlyNote, Plan, PlannedAction, action_description, plan_profile,

@@ -208,6 +208,22 @@ impl AudioBackend for WpctlBackend {
         self.set_stream_props(stream_id, None, Some(mute))
     }
 
+    fn set_sink_volume(&self, sink: &str, volume: f32) -> Result<(), String> {
+        self.set_device_props(false, sink, Some(volume), None)
+    }
+
+    fn set_sink_mute(&self, sink: &str, mute: bool) -> Result<(), String> {
+        self.set_device_props(false, sink, None, Some(mute))
+    }
+
+    fn set_source_volume(&self, source: &str, volume: f32) -> Result<(), String> {
+        self.set_device_props(true, source, Some(volume), None)
+    }
+
+    fn set_source_mute(&self, source: &str, mute: bool) -> Result<(), String> {
+        self.set_device_props(true, source, None, Some(mute))
+    }
+
     fn probe(&self) -> Result<(), String> {
         self.dump()?;
         self.wpctl(&["status"]).map(|_| ())
@@ -225,10 +241,41 @@ impl WpctlBackend {
         mute: Option<bool>,
     ) -> Result<(), String> {
         let dump = self.dump()?;
+        self.set_node_props(&dump, stream_id, "out", volume, mute)
+    }
+
+    fn set_device_props(
+        &self,
+        source: bool,
+        reference: &str,
+        volume: Option<f32>,
+        mute: Option<bool>,
+    ) -> Result<(), String> {
+        let dump = self.dump()?;
+        let (node_id, direction) = if source {
+            let found = crate::resolve_source(&dump.sources, reference)
+                .ok_or_else(|| format!("source `{reference}` does not resolve"))?;
+            (found.id, "out")
+        } else {
+            let found = resolve_sink(&dump.sinks, reference)
+                .ok_or_else(|| format!("sink `{reference}` does not resolve"))?;
+            (found.id, "in")
+        };
+        self.set_node_props(&dump, node_id, direction, volume, mute)
+    }
+
+    fn set_node_props(
+        &self,
+        dump: &Dump,
+        node_id: u32,
+        direction: &str,
+        volume: Option<f32>,
+        mute: Option<bool>,
+    ) -> Result<(), String> {
         let channels = dump
             .ports
             .iter()
-            .filter(|port| port.node_id == stream_id && port.direction == "out")
+            .filter(|port| port.node_id == node_id && port.direction == direction)
             .count()
             .max(1);
         let mut props = serde_json::Map::new();
@@ -243,7 +290,7 @@ impl WpctlBackend {
             return Ok(());
         }
         let value = serde_json::Value::Object(props).to_string();
-        self.pw_cli(&["set-param", &stream_id.to_string(), "Props", &value])
+        self.pw_cli(&["set-param", &node_id.to_string(), "Props", &value])
             .map(|_| ())
     }
 }
@@ -368,6 +415,29 @@ mod tests {
             "{calls}"
         );
         assert!(!calls.contains("wpctl set-volume"), "{calls}");
+    }
+
+    #[test]
+    fn sets_sink_volume_and_mute_through_pw_cli() {
+        let dir = temp_dir("sink-profile");
+        let (backend, log) = fake_backend(&dir, DUMP);
+        backend.set_sink_volume("hdmi", 0.5).unwrap();
+        backend.set_sink_mute("hdmi", true).unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains(r#"pw-cli set-param 59 Props {"channelVolumes":[0.5,0.5]}"#),
+            "{calls}"
+        );
+        assert!(
+            calls.contains(r#"pw-cli set-param 59 Props {"mute":true}"#),
+            "{calls}"
+        );
+        assert!(
+            backend
+                .set_sink_volume("missing", 0.5)
+                .unwrap_err()
+                .contains("does not resolve")
+        );
     }
 
     #[test]

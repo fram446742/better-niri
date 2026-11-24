@@ -93,10 +93,13 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
                         .or_else(|| string_prop(props, "node.nick"))
                         .unwrap_or(&name)
                         .to_owned();
+                    let (volume, mute) = parse_props(info);
                     sink_nodes.push(Sink {
                         id,
                         name,
                         description,
+                        volume,
+                        mute,
                     });
                 } else if class == "Audio/Source" {
                     let name = string_prop(props, "node.name")
@@ -106,10 +109,13 @@ pub fn parse_dump(json: &str) -> Result<Dump, String> {
                         .or_else(|| string_prop(props, "node.nick"))
                         .unwrap_or(&name)
                         .to_owned();
+                    let (volume, mute) = parse_props(info);
                     source_nodes.push(Source {
                         id,
                         name,
                         description,
+                        volume,
+                        mute,
                     });
                 } else if class == "Stream/Output/Audio" {
                     let (volume, mute) = parse_props(info);
@@ -281,6 +287,13 @@ mod tests {
         assert_eq!(zen.media_name, "Song");
         assert_eq!(zen.volume, Some(0.5));
         assert_eq!(zen.mute, Some(false));
+        let hdmi = dump
+            .sinks
+            .iter()
+            .find(|sink| sink.name == "alsa_output.hdmi")
+            .unwrap();
+        assert_eq!(hdmi.volume, Some(1.0));
+        assert_eq!(hdmi.mute, Some(false));
 
         let cat = dump
             .streams
