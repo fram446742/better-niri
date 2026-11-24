@@ -250,9 +250,9 @@ picked up without re-auditing.
    `TtyRenderer`/`TtyFrame` enums, so `NIRI_RENDERER=vulkan` drives outputs with
    the Vulkan renderer (windows, layer surfaces, UI textures, screenshots'
    texture path). GLSL-only visuals keep their GLES path and are skipped on
-   Vulkan with a warning: window/global/scoped shaders, decoration light,
-   blur/xray background effects, liquid glass, carousel panels, rounded-corner
-   clipping, the magnified screenshot UI capture and screen transitions. Borders
+   Vulkan with a warning: decoration light, blur/xray background effects,
+   liquid glass, carousel panel contents, the magnified screenshot UI capture,
+   screen transitions and animated resize. Borders
    and shadows are compiled for Vulkan; resize animations render the window
    normally on Vulkan instead of the GLES stretch. The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
