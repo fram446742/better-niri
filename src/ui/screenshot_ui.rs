@@ -16,6 +16,9 @@ use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::gles::GlesTexture;
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::VulkanTexture;
 use smithay::backend::renderer::{
     ContextId, ErasedContextId, ImportMem as _, Renderer as _, Texture as _,
 };
@@ -1168,6 +1171,23 @@ impl OutputScreenshot {
         &self.texture
     }
 
+    /// The screenshot texture as a raw GLES texture, if it was captured by GLES.
+    pub fn texture_gles(&self) -> Option<&GlesTexture> {
+        match &self.texture {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            _ => None,
+        }
+    }
+
+    /// The screenshot texture as a raw Vulkan texture, if it was captured by Vulkan.
+    #[cfg(feature = "vulkan")]
+    pub fn texture_vulkan(&self) -> Option<&VulkanTexture> {
+        match &self.texture {
+            TtyOffscreen::Vulkan(texture) => Some(texture),
+            _ => None,
+        }
+    }
+
     /// The pre-built render element for this screenshot.
     pub fn render_element(&self) -> &PrimaryGpuTextureRenderElement {
         &self.buffer
@@ -1414,7 +1434,7 @@ mod vulkan_tests {
             let size = Size::<i32, Physical>::from((4, 4));
             let screenshot = red_screenshot(renderer, size);
             assert!(
-                matches!(screenshot.texture(), TtyOffscreen::Vulkan(_)),
+                screenshot.texture_vulkan().is_some(),
                 "the generic capture must produce a Vulkan texture"
             );
 
