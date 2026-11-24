@@ -56,6 +56,9 @@ pub struct ApplyReport {
     /// Recovery actions sent after a failure.
     pub rollback_actions: Vec<PlannedAction>,
     pub rollback_errors: Vec<String>,
+    /// Confirmation window for `apply --confirm-timeout`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<crate::safe::PendingConfirmation>,
 }
 
 impl ApplyReport {
@@ -83,6 +86,7 @@ impl ApplyReport {
             failed_action: None,
             rollback_actions: Vec::new(),
             rollback_errors: Vec::new(),
+            confirmation: None,
         }
     }
 }
@@ -232,6 +236,7 @@ pub fn restore(socket: &Path, store: &Store, dry_run: bool) -> Result<ApplyRepor
         failed_action: None,
         rollback_actions: Vec::new(),
         rollback_errors: Vec::new(),
+        confirmation: None,
     };
 
     if dry_run {

@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use better_monitor::{
     ApplyReport, ApplyStatus, OutputMatch, Rule, RuleStore, SCHEMA_VERSION, Store, WatchOptions,
-    apply_named, apply_profile_object, build_rules_profile, evaluate_rules, plan_profile,
-    query_outputs, restore, run_watch, snapshot, state_path, watch_once,
+    apply_named, apply_profile_object, build_rules_profile, cancel, confirm, evaluate_rules,
+    pending_path, plan_profile, query_outputs, restore, run_watch, snapshot, state_path,
+    watch_once, watch_pending, write_pending,
 };
 use serde_json::{Value, json};
 
@@ -65,6 +66,9 @@ struct Cli {
     debounce: Duration,
     poll: Duration,
     cooldown: Duration,
+    confirm_timeout: Option<Duration>,
+    pending: PathBuf,
+    watch_id: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -94,6 +98,9 @@ impl Cli {
             debounce: Duration::from_millis(DEFAULT_DEBOUNCE_MS),
             poll: Duration::from_millis(DEFAULT_POLL_MS),
             cooldown: Duration::from_millis(DEFAULT_COOLDOWN_MS),
+            confirm_timeout: None,
+            pending: PathBuf::new(),
+            watch_id: None,
             positionals: Vec::new(),
         };
         cli.parse_args()
@@ -132,6 +139,15 @@ impl Cli {
                 "--cooldown-ms" => {
                     self.cooldown = Duration::from_millis(parse_u64(&mut iter, "--cooldown-ms")?);
                 }
+                "--confirm-timeout" => {
+                    let secs = parse_u64(&mut iter, "--confirm-timeout")?;
+                    if secs == 0 {
+                        return Err("--confirm-timeout needs a positive number of seconds".to_owned());
+                    }
+                    self.confirm_timeout = Some(Duration::from_secs(secs));
+                }
+                "--pending" => self.pending = PathBuf::from(next_value(&mut iter, "--pending")?),
+                "--watch-id" => self.watch_id = Some(next_value(&mut iter, "--watch-id")?),
                 other if other.starts_with("--") => {
                     return Err(format!("unknown option `{other}`\n\n{}", usage()));
                 }
@@ -140,6 +156,9 @@ impl Cli {
         }
         if self.rules.as_os_str().is_empty() {
             self.rules = self.state.with_file_name("rules.json");
+        }
+        if self.pending.as_os_str().is_empty() {
+            self.pending = pending_path(&self.state);
         }
         self.lock = self.state.with_file_name("watch.lock");
         Ok(self)
@@ -305,8 +324,62 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
         }
         "apply" => {
             let name = positional(cli, 1, "apply needs a profile name")?.to_owned();
-            let report = apply_named(cli.socket()?, &mut store, &name, &cli.state, cli.dry_run)?;
+            let mut report =
+                apply_named(cli.socket()?, &mut store, &name, &cli.state, cli.dry_run)?;
+            if report.status == ApplyStatus::Applied
+                && let Some(timeout) = cli.confirm_timeout
+            {
+                let confirmation =
+                    write_pending(&cli.state, cli.socket()?, &name, timeout)?;
+                match spawn_confirm_watcher(cli, &confirmation) {
+                    Ok(()) => report.confirmation = Some(confirmation),
+                    Err(err) => {
+                        let _ = better_monitor::clear_pending(&confirmation.pending_path);
+                        report
+                            .warnings
+                            .push(format!("confirmation watcher did not start: {err}"));
+                    }
+                }
+            }
             Ok(emit_report(cli, "apply", &report))
+        }
+        "confirm" => {
+            let removed = confirm(&cli.pending)?;
+            emit(
+                cli,
+                "confirm",
+                true,
+                json!({ "confirmed": removed, "pending": cli.pending }),
+            );
+            Ok(true)
+        }
+        "cancel" => {
+            let restored = cancel(&cli.pending)?;
+            emit(
+                cli,
+                "cancel",
+                true,
+                json!({ "cancelled": restored, "pending": cli.pending }),
+            );
+            Ok(true)
+        }
+        "__confirm-watch" => {
+            let id = cli
+                .watch_id
+                .clone()
+                .ok_or_else(|| "__confirm-watch needs --watch-id".to_owned())?;
+            match watch_pending(&cli.pending, &id, cli.poll)? {
+                Some(report) => {
+                    emit_report(cli, "confirm-watch", &report);
+                }
+                None => emit(
+                    cli,
+                    "confirm-watch",
+                    true,
+                    json!({ "confirmed": true, "pending": cli.pending }),
+                ),
+            }
+            Ok(true)
         }
         "restore" => {
             let report = restore(cli.socket()?, &store, cli.dry_run)?;
@@ -335,6 +408,34 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
         "watch" => run_watch_command(cli, &mut store),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
+}
+
+fn spawn_confirm_watcher(
+    cli: &Cli,
+    confirmation: &better_monitor::PendingConfirmation,
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|err| format!("cannot find executable: {err}"))?;
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("__confirm-watch")
+        .arg("--pending")
+        .arg(&confirmation.pending_path)
+        .arg("--state")
+        .arg(&cli.state)
+        .arg("--watch-id")
+        .arg(&confirmation.id)
+        .arg("--poll-ms")
+        .arg(cli.poll.as_millis().to_string());
+    if let Some(socket) = &cli.socket {
+        command.arg("--socket").arg(socket);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_child| ())
+        .map_err(|err| format!("cannot spawn confirmation watcher: {err}"))
 }
 
 fn run_rules(cli: &Cli, store: &mut Store) -> Result<bool, String> {

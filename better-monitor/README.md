@@ -43,6 +43,9 @@ better-monitor save desk          # all outputs
 better-monitor save desk eDP-1    # just one output
 better-monitor apply desk --dry-run
 better-monitor apply desk
+better-monitor apply desk --confirm-timeout 20   # roll back unless `confirm`
+better-monitor confirm            # keep the profile applied
+better-monitor cancel             # restore __previous now
 better-monitor restore            # undo the last apply (keeps __previous)
 better-monitor list
 better-monitor show desk
@@ -170,6 +173,31 @@ output "DP-1" {
 `mirror` cannot be expressed in this tree's niri config either. A profile that
 mirrors an isolated output is refused; a valid mirror is recorded and reported
 as config-only rather than silently pretended to be applied.
+
+## Safe apply with a confirmation window
+
+A wrong mode or transform can leave the screen unreadable, so `apply` can run
+with a confirmation window:
+
+```sh
+better-monitor apply laptop --confirm-timeout 30
+# the screen changes; if it is still usable:
+better-monitor confirm
+# if you cannot see or the layout is wrong (run over SSH or a TTY):
+better-monitor cancel
+```
+
+`--confirm-timeout` stores `__previous` as usual, writes
+`$XDG_STATE_HOME/better-monitor/pending.json` and starts a detached
+`better-monitor __confirm-watch` process. The watcher restores `__previous`
+when the deadline passes unless `confirm` removed the record. `cancel` restores
+immediately. Each record carries a unique id, so a newer apply supersedes an
+older watcher instead of racing it; a failed restore is retried by the next
+manual `restore`. The JSON apply report includes a `confirmation` object with
+the id, pending path, deadline and timeout.
+
+The watcher is a normal child process, so it does not survive a reboot; the
+pending file is left in place and `better-monitor restore` still works.
 
 ## Safety
 
