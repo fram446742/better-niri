@@ -208,9 +208,8 @@ use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
     CaptureBuffer, RenderCtx, RenderIntent, RenderTarget, copy_tty_texture_to_vec,
-    encompassing_geo, render_and_download, render_to_dmabuf, render_to_encompassing_texture,
-    render_to_encompassing_tty_texture, render_to_shm, render_to_texture, render_to_tty_texture,
-    render_to_vec, shaders,
+    encompassing_geo, render_to_dmabuf, render_to_encompassing_tty_texture, render_to_shm,
+    render_to_texture, render_to_tty_texture, shaders,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
@@ -3286,14 +3285,13 @@ impl State {
         let side = half * 2 + 1;
 
         self.niri.update_render_elements(Some(&output));
-        let niri = &self.niri;
-        let Some(pixels) = self
-            .backend
-            .with_primary_renderer(|renderer| {
-                niri.capture_pick_color_region(renderer, &output, origin, side)
-            })
-            .flatten()
-        else {
+        let Some(pixels) = self.with_screenshot_renderer(
+            |niri, renderer| niri.capture_pick_color_region(renderer, &output, origin, side),
+            |niri, renderer| niri.capture_pick_color_region(renderer, &output, origin, side),
+        ) else {
+            return;
+        };
+        let Some(pixels) = pixels else {
             return;
         };
 
@@ -3306,10 +3304,24 @@ impl State {
             side,
             pixels,
         };
-        let ui = &mut self.niri.pick_color_ui;
+        // Only one of the two closures runs; the `RefCell` lets both capture the region without
+        // cloning the pixels.
+        let region = std::cell::RefCell::new(Some(region));
         let changed = self
-            .backend
-            .with_primary_renderer(|renderer| ui.set_region(renderer, region))
+            .with_screenshot_renderer(
+                |niri, renderer| {
+                    let Some(region) = region.borrow_mut().take() else {
+                        return false;
+                    };
+                    niri.pick_color_ui.set_region(renderer, region)
+                },
+                |niri, renderer| {
+                    let Some(region) = region.borrow_mut().take() else {
+                        return false;
+                    };
+                    niri.pick_color_ui.set_region(renderer, region)
+                },
+            )
             .unwrap_or(false);
         if changed {
             self.niri.queue_redraw(&output);
@@ -3776,10 +3788,11 @@ impl State {
     fn handle_take_screenshot(&mut self, reply: ScreenshotPathReplySender, include_cursor: bool) {
         let _span = tracy_client::span!("TakeScreenshot");
 
-        let rv = self.backend.with_primary_renderer(|renderer| {
-            self.niri
-                .screenshot_all_outputs(renderer, include_cursor, reply.clone())
-        });
+        let reply_fallback = reply.clone();
+        let rv = self.with_screenshot_renderer(
+            |niri, renderer| niri.screenshot_all_outputs(renderer, include_cursor, reply.clone()),
+            |niri, renderer| niri.screenshot_all_outputs(renderer, include_cursor, reply_fallback),
+        );
 
         match rv {
             None => {
@@ -3884,10 +3897,13 @@ impl State {
 
         let local_area = Rectangle::new(area.loc - output_geo.loc, area.size);
         let reply_on_error = reply.clone();
-        let result = self.backend.with_primary_renderer(|renderer| {
-            self.niri
-                .screenshot_area_with_reply(renderer, &output, local_area, reply)
-        });
+        let reply_fallback = reply.clone();
+        let result = self.with_screenshot_renderer(
+            |niri, renderer| niri.screenshot_area_with_reply(renderer, &output, local_area, reply),
+            |niri, renderer| {
+                niri.screenshot_area_with_reply(renderer, &output, local_area, reply_fallback)
+            },
+        );
 
         match result {
             None => {
@@ -10811,15 +10827,20 @@ impl Niri {
 
     /// Renders a square region of the output, without the color picker magnifier, and downloads
     /// its RGBA8 pixels.
-    pub fn capture_pick_color_region(
+    pub fn capture_pick_color_region<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         origin: Point<i32, Physical>,
         side: i32,
-    ) -> Option<Vec<u8>> {
-        use smithay::backend::renderer::ExportMem as _;
-
+    ) -> Option<Vec<u8>>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::capture_pick_color_region");
 
         let scale = Scale::from(output.current_scale().fractional_scale());
@@ -10835,23 +10856,20 @@ impl Niri {
         let elements = self.render_to_vec(ctx, output, false);
         self.pick_color_capture.set(was_capture);
 
-        let mapping = render_and_download(
+        let bounds = Rectangle::new(origin, Size::from((side, side)));
+        let (texture, _context_id, _sync) =
+            render_to_tty_texture(renderer, bounds, scale, &elements)
+                .map_err(|err| warn!("error capturing screen for color picking: {err:?}"))
+                .ok()?;
+        let pixels = copy_tty_texture_to_vec(
             renderer,
-            Size::from((side, side)),
-            scale,
-            Transform::Normal,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((side, side))),
             Fourcc::Abgr8888,
-            elements.iter().rev().map(|elem| {
-                RelocateRenderElement::from_element(elem, origin.upscale(-1), Relocate::Relative)
-            }),
         )
-        .map_err(|err| warn!("error capturing screen for color picking: {err:?}"))
+        .map_err(|err| warn!("error mapping color picker capture: {err:?}"))
         .ok()?;
-        let pixels = renderer
-            .map_texture(&mapping)
-            .map_err(|err| warn!("error mapping color picker capture: {err:?}"))
-            .ok()?;
-        Some(pixels.to_vec())
+        Some(pixels)
     }
 
     /// Renders and captures every output for the screenshot UI.
@@ -11191,13 +11209,20 @@ impl Niri {
     }
 
     #[cfg(feature = "dbus")]
-    pub fn screenshot_area_with_reply(
+    pub fn screenshot_area_with_reply<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         area: Rectangle<i32, Logical>,
         path_reply: ScreenshotPathReplySender,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::screenshot_area");
 
         ensure!(
@@ -11231,13 +11256,20 @@ impl Niri {
             shader_time: self.window_shader_start.elapsed().as_secs_f32(),
         };
         let elements = self.render_to_vec(ctx, output, false);
-        let pixels = render_to_vec(
+        let (texture, _context_id, _sync) = render_to_tty_texture(
             renderer,
-            output_size,
+            Rectangle::from_size(output_size),
             scale,
-            Transform::Normal,
+            &elements,
+        )?;
+        let pixels = copy_tty_texture_to_vec(
+            renderer,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((
+                output_size.w,
+                output_size.h,
+            ))),
             Fourcc::Abgr8888,
-            elements.iter().rev(),
         )?;
 
         let source_stride = output_size.w as usize * 4;
@@ -11421,17 +11453,20 @@ impl Niri {
     }
 
     #[cfg(feature = "dbus")]
-    pub fn screenshot_all_outputs(
+    pub fn screenshot_all_outputs<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         include_pointer: bool,
         path_reply: ScreenshotPathReplySender,
-    ) -> anyhow::Result<()> {
-        use smithay::backend::renderer::{Bind as _, ExportMem as _};
-
-        use crate::render_helpers::copy_framebuffer;
-        use crate::render_helpers::texture::TextureRenderElement;
-
+    ) -> anyhow::Result<()>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::screenshot_all_outputs");
 
         self.update_render_elements(None);
@@ -11467,56 +11502,50 @@ impl Niri {
             };
             let elements = self.render_to_vec(ctx, output, include_pointer);
 
-            let (texture, _sync) = render_to_texture(
+            let (texture, context_id, _sync) = render_to_tty_texture(
                 renderer,
-                size,
+                Rectangle::from_size(size),
                 Scale::from(scale),
-                Transform::Normal,
-                Fourcc::Abgr8888,
-                elements.iter().rev(),
+                &elements,
             )
             .context("error rendering")?;
 
-            set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
-            let buffer = TextureBuffer::from_texture(
-                renderer,
+            // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+            if let Some(gles) = renderer.as_gles_renderer() {
+                set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+            }
+            let buffer = TextureBuffer::from_tty_texture(
                 texture,
+                context_id,
                 scale,
                 Transform::Normal,
                 Vec::new(),
             );
-            let elem = TextureRenderElement::from_texture_buffer(
+            let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
                 buffer,
                 loc.to_f64(),
                 1.,
                 None,
                 None,
                 Kind::Unspecified,
-            );
+            ));
 
             textures.push(elem);
         }
 
         // Now combine everything together.
-        let (mut texture, _sync, geo) = render_to_encompassing_texture(
-            renderer,
-            Scale::from(screenshot_scale),
-            Transform::Normal,
-            Fourcc::Abgr8888,
-            &textures,
-        )
-        .context("error rendering")?;
+        let geo = encompassing_geo(Scale::from(screenshot_scale), textures.iter());
+        let (texture, _context_id, _offset) =
+            render_to_encompassing_tty_texture(renderer, Scale::from(screenshot_scale), &textures)
+                .context("error rendering")?;
 
-        // FIXME: unfortunate second bind.
-        let target = renderer
-            .bind(&mut texture)
-            .context("error binding texture")?;
-        let mapping = copy_framebuffer(renderer, &target, Fourcc::Abgr8888)
-            .context("error copying framebuffer")?;
-        let copy = renderer
-            .map_texture(&mapping)
-            .context("error mapping texture")?;
-        let pixels = copy.to_vec();
+        let pixels = copy_tty_texture_to_vec(
+            renderer,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((geo.size.w, geo.size.h))),
+            Fourcc::Abgr8888,
+        )
+        .context("error copying framebuffer")?;
 
         self.save_screenshot_with_replies(geo.size, pixels, true, None, None, Some(path_reply))
             .context("error saving screenshot")

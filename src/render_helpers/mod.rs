@@ -656,3 +656,163 @@ impl CaptureBuffer {
         }
     }
 }
+
+/// Real-renderer tests for the backend-agnostic screenshot/readback plumbing used by the
+/// portal's full-desktop and area captures. They skip silently on machines without a usable
+/// Vulkan device.
+#[cfg(all(test, feature = "vulkan"))]
+mod capture_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::Texture as _;
+    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{
+        Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Size, Transform,
+    };
+
+    use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+    use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+    use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
+    use crate::render_helpers::{
+        copy_tty_texture_to_vec, encompassing_geo, render_to_encompassing_tty_texture,
+        render_to_tty_texture,
+    };
+
+    fn vulkan_renderer() -> Option<VulkanRenderer> {
+        let instance = Instance::new(Version::VERSION_1_3, None).ok()?;
+        let devices = PhysicalDevice::enumerate(&instance).ok()?;
+        for device in devices {
+            if let Ok(renderer) = VulkanRenderer::new(&device) {
+                return Some(renderer);
+            }
+        }
+        None
+    }
+
+    /// Little-endian RGBA byte order for `Fourcc::Abgr8888`.
+    fn assert_rgba(pixels: &[u8], expected: [u8; 3], what: &str) {
+        assert!(!pixels.is_empty(), "{what}: empty readback");
+        assert_eq!(pixels.len() % 4, 0, "{what}: not RGBA8");
+        for px in pixels.chunks_exact(4) {
+            assert_eq!(&px[..3], &expected, "{what}: unexpected pixel {px:?}");
+        }
+    }
+
+    #[test]
+    fn vulkan_full_output_capture_readback() {
+        let Some(mut renderer) = vulkan_renderer() else {
+            return;
+        };
+
+        let size = Size::<i32, Physical>::from((8, 8));
+        let scale = Scale::<f64>::from(1.);
+        let rect = Rectangle::from_size(size);
+
+        let render_solid = |renderer: &mut VulkanRenderer, color: [f32; 4]| {
+            let buffer = SolidColorBuffer::new((8., 8.), color);
+            let elem =
+                SolidColorRenderElement::from_buffer(&buffer, (0., 0.), 1., Kind::Unspecified);
+            render_to_tty_texture(renderer, rect, scale, &[elem]).expect("render solid output")
+        };
+
+        let (red, red_ctx, _) = render_solid(&mut renderer, [1., 0., 0., 1.]);
+        let (blue, blue_ctx, _) = render_solid(&mut renderer, [0., 0., 1., 1.]);
+        assert_eq!(
+            red.size(),
+            Size::<i32, BufferCoords>::from((8, 8)),
+            "unexpected capture texture size"
+        );
+
+        // Mirror `Niri::screenshot_all_outputs`: place the per-output textures side by side and
+        // combine them into one encompassing texture.
+        let textures = vec![
+            PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                TextureBuffer::from_tty_texture(red, red_ctx, scale, Transform::Normal, Vec::new()),
+                (0., 0.),
+                1.,
+                None,
+                None,
+                Kind::Unspecified,
+            )),
+            PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                TextureBuffer::from_tty_texture(
+                    blue,
+                    blue_ctx,
+                    scale,
+                    Transform::Normal,
+                    Vec::new(),
+                ),
+                (8., 0.),
+                1.,
+                None,
+                None,
+                Kind::Unspecified,
+            )),
+        ];
+
+        let geo = encompassing_geo(scale, textures.iter());
+        assert_eq!(
+            geo,
+            Rectangle::new(Point::from((0, 0)), Size::from((16, 8)))
+        );
+
+        let (texture, _ctx, _offset) =
+            render_to_encompassing_tty_texture(&mut renderer, scale, &textures)
+                .expect("combine outputs");
+        let pixels = copy_tty_texture_to_vec(
+            &mut renderer,
+            &texture,
+            Rectangle::from_size(Size::<i32, BufferCoords>::from((16, 8))),
+            Fourcc::Abgr8888,
+        )
+        .expect("read back combined output");
+
+        assert_eq!(pixels.len(), 16 * 8 * 4);
+        let pixel = |x: usize, y: usize| &pixels[(y * 16 + x) * 4..][..4];
+        assert_eq!(pixel(0, 0), &[255, 0, 0, 255], "left output should be red");
+        assert_eq!(
+            pixel(15, 0),
+            &[0, 0, 255, 255],
+            "right output should be blue"
+        );
+    }
+
+    #[test]
+    fn vulkan_region_capture_readback() {
+        let Some(mut renderer) = vulkan_renderer() else {
+            return;
+        };
+
+        let scale = Scale::<f64>::from(1.);
+        let red = SolidColorBuffer::new((16., 16.), [1., 0., 0., 1.]);
+        let blue = SolidColorBuffer::new((8., 16.), [0., 0., 1., 1.]);
+        // Front-to-back order, as produced by `Niri::render_to_vec()`.
+        let elements = [
+            SolidColorRenderElement::from_buffer(&blue, (8., 0.), 1., Kind::Unspecified),
+            SolidColorRenderElement::from_buffer(&red, (0., 0.), 1., Kind::Unspecified),
+        ];
+
+        let read_region = |renderer: &mut VulkanRenderer, origin: Point<i32, Physical>| {
+            let bounds = Rectangle::new(origin, Size::from((8, 8)));
+            let (texture, _ctx, _sync) =
+                render_to_tty_texture(renderer, bounds, scale, &elements).expect("render region");
+            copy_tty_texture_to_vec(
+                renderer,
+                &texture,
+                Rectangle::from_size(Size::<i32, BufferCoords>::from((8, 8))),
+                Fourcc::Abgr8888,
+            )
+            .expect("read back region")
+        };
+
+        // The capture origin offsets the rendered elements; this is what
+        // `Niri::capture_pick_color_region` and the portal area crop rely on.
+        let left = read_region(&mut renderer, Point::from((0, 4)));
+        assert_rgba(&left, [255, 0, 0], "left region");
+
+        let right = read_region(&mut renderer, Point::from((8, 4)));
+        assert_rgba(&right, [0, 0, 255], "right region");
+    }
+}
