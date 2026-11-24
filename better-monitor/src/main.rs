@@ -1,124 +1,604 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
-use better_monitor::{Store, apply, query_outputs, restore, snapshot, state_path};
+use better_monitor::{
+    ApplyReport, ApplyStatus, OutputMatch, Rule, RuleStore, SCHEMA_VERSION, Store, WatchOptions,
+    apply_named, apply_profile_object, build_rules_profile, evaluate_rules, plan_profile,
+    query_outputs, restore, run_watch, snapshot, state_path, watch_once,
+};
+use serde_json::{Value, json};
+
+const DEFAULT_DEBOUNCE_MS: u64 = 500;
+const DEFAULT_POLL_MS: u64 = 1_000;
+const DEFAULT_COOLDOWN_MS: u64 = 3_000;
 
 fn usage() -> &'static str {
-    "better-monitor [--socket PATH] <command>\n\n\
+    "better-monitor [options] <command>\n\n\
      Commands:\n\
        list                         List saved profiles\n\
        show <name>                  Print a profile\n\
        save <name> [output...]      Snapshot current outputs into <name>\n\
        apply <name> [--dry-run]     Apply <name> (stores __previous first)\n\
        restore [--dry-run]          Re-apply __previous\n\
-       delete <name>                Delete a profile\n\n\
-     Socket defaults to $NIRI_SOCKET; state to $BETTER_MONITOR_STATE or\n\
-     $XDG_STATE_HOME/better-monitor/profiles.json."
+       delete <name>                Delete a profile\n\
+       migrate                      Rewrite all profiles in schema v2\n\
+       rules list                   List rules\n\
+       rules add <name> --profile P [--priority N] [match flags]\n\
+       rules remove <name>          Delete a rule\n\
+       rules explain [--output O]   Explain which rule wins and the planned actions\n\
+       rules apply [--dry-run]      Apply the winning rule for each output\n\
+       watch [--once]               Watch outputs, apply --profile or the rules\n\n\
+     Options:\n\
+       --socket PATH                niri IPC socket (default $NIRI_SOCKET)\n\
+       --state PATH                 profile store (default $BETTER_MONITOR_STATE)\n\
+       --rules-file PATH            rules store (sibling rules.json by default)\n\
+       --json                       Machine-readable JSON envelope output\n\
+       --dry-run                    Plan without changing the compositor\n\
+       --once                       Evaluate watch once and exit\n\
+       --profile NAME               Profile for watch or rules add\n\
+       --priority N                 Rule priority (higher wins)\n\
+       --match-name NAME            Rule/profile output connector match\n\
+       --make NAME --model NAME --serial NAME   Rule output matches\n\
+       --output NAME                Filter rules explain\n\
+       --debounce-ms N --poll-ms N --cooldown-ms N   Watch timings\n\n\
+     Socket defaults to $NIRI_SOCKET; state to $XDG_STATE_HOME/better-monitor/."
+}
+
+#[derive(Debug)]
+struct Cli {
+    socket: Option<PathBuf>,
+    json: bool,
+    dry_run: bool,
+    once: bool,
+    help: bool,
+    state: PathBuf,
+    rules: PathBuf,
+    lock: PathBuf,
+    profile: Option<String>,
+    priority: i32,
+    match_name: Option<String>,
+    make: Option<String>,
+    model: Option<String>,
+    serial: Option<String>,
+    output: Option<String>,
+    debounce: Duration,
+    poll: Duration,
+    cooldown: Duration,
+    positionals: Vec<String>,
+}
+
+impl Cli {
+    fn parse() -> Result<Self, String> {
+        let state = std::env::var_os("BETTER_MONITOR_STATE")
+            .map(PathBuf::from)
+            .unwrap_or_else(state_path);
+        let cli = Self {
+            socket: std::env::var_os("NIRI_SOCKET").map(PathBuf::from),
+            json: false,
+            dry_run: false,
+            once: false,
+            help: false,
+            rules: std::env::var_os("BETTER_MONITOR_RULES")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            lock: state.with_file_name("watch.lock"),
+            state,
+            profile: None,
+            priority: 0,
+            match_name: None,
+            make: None,
+            model: None,
+            serial: None,
+            output: None,
+            debounce: Duration::from_millis(DEFAULT_DEBOUNCE_MS),
+            poll: Duration::from_millis(DEFAULT_POLL_MS),
+            cooldown: Duration::from_millis(DEFAULT_COOLDOWN_MS),
+            positionals: Vec::new(),
+        };
+        cli.parse_args()
+    }
+
+    fn parse_args(mut self) -> Result<Self, String> {
+        let mut iter = std::env::args().skip(1);
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--socket" => self.socket = Some(PathBuf::from(next_value(&mut iter, "--socket")?)),
+                "--state" => self.state = PathBuf::from(next_value(&mut iter, "--state")?),
+                "--rules-file" => {
+                    self.rules = PathBuf::from(next_value(&mut iter, "--rules-file")?)
+                }
+                "--json" => self.json = true,
+                "--dry-run" => self.dry_run = true,
+                "--once" => self.once = true,
+                "--help" | "-h" => self.help = true,
+                "--profile" => self.profile = Some(next_value(&mut iter, "--profile")?),
+                "--priority" => {
+                    self.priority = next_value(&mut iter, "--priority")?
+                        .parse()
+                        .map_err(|_| "--priority needs an integer".to_owned())?;
+                }
+                "--match-name" => self.match_name = Some(next_value(&mut iter, "--match-name")?),
+                "--make" => self.make = Some(next_value(&mut iter, "--make")?),
+                "--model" => self.model = Some(next_value(&mut iter, "--model")?),
+                "--serial" => self.serial = Some(next_value(&mut iter, "--serial")?),
+                "--output" => self.output = Some(next_value(&mut iter, "--output")?),
+                "--debounce-ms" => {
+                    self.debounce = Duration::from_millis(parse_u64(&mut iter, "--debounce-ms")?);
+                }
+                "--poll-ms" => {
+                    self.poll = Duration::from_millis(parse_u64(&mut iter, "--poll-ms")?);
+                }
+                "--cooldown-ms" => {
+                    self.cooldown = Duration::from_millis(parse_u64(&mut iter, "--cooldown-ms")?);
+                }
+                other if other.starts_with("--") => {
+                    return Err(format!("unknown option `{other}`\n\n{}", usage()));
+                }
+                _ => self.positionals.push(arg),
+            }
+        }
+        if self.rules.as_os_str().is_empty() {
+            self.rules = self.state.with_file_name("rules.json");
+        }
+        self.lock = self.state.with_file_name("watch.lock");
+        Ok(self)
+    }
+
+    fn socket(&self) -> Result<&std::path::Path, String> {
+        self.socket
+            .as_deref()
+            .ok_or_else(|| "NIRI_SOCKET is not set; run inside niri or pass --socket".to_owned())
+    }
+
+    fn match_(&self) -> OutputMatch {
+        OutputMatch {
+            name: self.match_name.clone(),
+            make: self.make.clone(),
+            model: self.model.clone(),
+            serial: self.serial.clone(),
+        }
+    }
+}
+
+fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    iter.next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{flag} needs a value"))
+}
+
+fn parse_u64(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<u64, String> {
+    next_value(iter, flag)?
+        .parse()
+        .map_err(|_| format!("{flag} needs an integer"))
 }
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
+    let mut json = std::env::args().any(|arg| arg == "--json");
+    let mut command = std::env::args()
+        .skip(1)
+        .find(|arg| !arg.starts_with('-'))
+        .unwrap_or_default();
+
+    let mut cli = match Cli::parse() {
+        Ok(cli) => cli,
         Err(err) => {
-            eprintln!("better-monitor: {err}");
+            if json {
+                println!(
+                    "{}",
+                    json!({ "command": command, "ok": false, "error": err })
+                );
+            } else {
+                eprintln!("better-monitor: {err}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    json = cli.json;
+    if let Some(first) = cli.positionals.first() {
+        command = first.clone();
+    }
+
+    if cli.help || command == "help" {
+        print!("{}", usage());
+        return ExitCode::SUCCESS;
+    }
+
+    match run(&mut cli) {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(err) => {
+            if json {
+                println!(
+                    "{}",
+                    json!({ "command": command, "ok": false, "error": err })
+                );
+            } else {
+                eprintln!("better-monitor: {err}");
+            }
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), String> {
-    let mut socket = std::env::var_os("NIRI_SOCKET").map(PathBuf::from);
-    let mut args = Vec::new();
-    let mut iter = std::env::args().skip(1);
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--socket" => {
-                socket = Some(PathBuf::from(
-                    iter.next()
-                        .ok_or_else(|| "--socket needs a path".to_owned())?,
-                ))
-            }
-            "--help" | "-h" => {
-                print!("{}", usage());
-                return Ok(());
-            }
-            _ => args.push(arg),
-        }
-    }
-    let Some(command) = args.first().cloned() else {
+fn run(cli: &mut Cli) -> Result<bool, String> {
+    let Some(command) = cli.positionals.first().cloned() else {
         return Err(format!("missing command\n\n{}", usage()));
     };
 
-    let state = std::env::var_os("BETTER_MONITOR_STATE")
-        .map(PathBuf::from)
-        .unwrap_or_else(state_path);
-    let mut store = Store::load(&state).map_err(|err| format!("cannot load state: {err}"))?;
-
-    let socket = || {
-        socket
-            .clone()
-            .ok_or_else(|| "NIRI_SOCKET is not set; run inside niri or pass --socket".to_owned())
-    };
+    let mut store = Store::load(&cli.state).map_err(|err| format!("cannot load state: {err}"))?;
 
     match command.as_str() {
         "list" => {
             let names: Vec<_> = store.profiles.keys().cloned().collect();
-            println!("{}", serde_json::to_string_pretty(&names).unwrap());
+            if cli.json {
+                emit(
+                    cli,
+                    "list",
+                    true,
+                    json!({ "version": store.version, "profiles": names }),
+                );
+            } else {
+                print_json(&names);
+            }
+            Ok(true)
         }
         "show" => {
-            let name = args
-                .get(1)
-                .ok_or_else(|| "show needs a profile name".to_owned())?;
+            let name = positional(cli, 1, "show needs a profile name")?;
             let profile = store
                 .get(name)
                 .ok_or_else(|| format!("unknown profile `{name}`"))?;
-            println!("{}", serde_json::to_string_pretty(profile).unwrap());
+            if cli.json {
+                emit(
+                    cli,
+                    "show",
+                    true,
+                    json!({ "name": name, "profile": profile }),
+                );
+            } else {
+                print_json(profile);
+            }
+            Ok(true)
         }
         "delete" => {
-            let name = args
-                .get(1)
-                .ok_or_else(|| "delete needs a profile name".to_owned())?;
+            let name = positional(cli, 1, "delete needs a profile name")?;
             if !store.remove(name) {
                 return Err(format!("unknown profile `{name}`"));
             }
+            store.version = SCHEMA_VERSION;
             store
-                .save(&state)
+                .save(&cli.state)
                 .map_err(|err| format!("cannot save state: {err}"))?;
-            println!("{}", serde_json::json!({ "deleted": name }));
+            emit(cli, "delete", true, json!({ "deleted": name }));
+            Ok(true)
         }
         "save" => {
-            let name = args
-                .get(1)
-                .ok_or_else(|| "save needs a profile name".to_owned())?;
-            let outputs = query_outputs(&socket()?)?;
+            let name = positional(cli, 1, "save needs a profile name")?.to_owned();
+            reject_reserved(&name)?;
+            let outputs = query_outputs(cli.socket()?)?;
             let mut profile = snapshot(&outputs);
-            let only: Vec<String> = args.iter().skip(2).cloned().collect();
+            let only: Vec<String> = cli.positionals.iter().skip(2).cloned().collect();
             if !only.is_empty() {
-                profile.outputs.retain(|name, _| only.contains(name));
+                profile
+                    .outputs
+                    .retain(|output, _| only.iter().any(|name| name == output));
             }
             if profile.outputs.is_empty() {
                 return Err("no matching outputs to save".to_owned());
             }
             store.insert(name.clone(), profile.clone());
+            store.version = SCHEMA_VERSION;
             store
-                .save(&state)
+                .save(&cli.state)
                 .map_err(|err| format!("cannot save state: {err}"))?;
-            println!("{}", serde_json::to_string_pretty(&profile).unwrap());
+            if cli.json {
+                emit(
+                    cli,
+                    "save",
+                    true,
+                    json!({ "name": name, "profile": profile }),
+                );
+            } else {
+                print_json(&profile);
+            }
+            Ok(true)
         }
         "apply" => {
-            let name = args
-                .get(1)
-                .ok_or_else(|| "apply needs a profile name".to_owned())?;
-            let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            let planned = apply(&socket()?, &mut store, name, &state, dry_run)?;
-            println!("{}", serde_json::to_string_pretty(&planned).unwrap());
+            let name = positional(cli, 1, "apply needs a profile name")?.to_owned();
+            let report = apply_named(cli.socket()?, &mut store, &name, &cli.state, cli.dry_run)?;
+            Ok(emit_report(cli, "apply", &report))
         }
         "restore" => {
-            let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            let planned = restore(&socket()?, &mut store, &state, dry_run)?;
-            println!("{}", serde_json::to_string_pretty(&planned).unwrap());
+            let report = restore(cli.socket()?, &store, cli.dry_run)?;
+            Ok(emit_report(cli, "restore", &report))
         }
-        other => return Err(format!("unknown command `{other}`\n\n{}", usage())),
+        "migrate" => {
+            let migrated = store.migrate();
+            store
+                .save(&cli.state)
+                .map_err(|err| format!("cannot save state: {err}"))?;
+            let mut rules =
+                RuleStore::load(&cli.rules).map_err(|err| format!("cannot load rules: {err}"))?;
+            rules.version = SCHEMA_VERSION;
+            rules
+                .save(&cli.rules)
+                .map_err(|err| format!("cannot save rules: {err}"))?;
+            emit(
+                cli,
+                "migrate",
+                true,
+                json!({ "migrated_profiles": migrated, "version": SCHEMA_VERSION }),
+            );
+            Ok(true)
+        }
+        "rules" => run_rules(cli, &mut store),
+        "watch" => run_watch_command(cli, &mut store),
+        other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
-    Ok(())
+}
+
+fn run_rules(cli: &Cli, store: &mut Store) -> Result<bool, String> {
+    let mut rules =
+        RuleStore::load(&cli.rules).map_err(|err| format!("cannot load rules: {err}"))?;
+    let sub = cli.positionals.get(1).map(String::as_str).unwrap_or("list");
+
+    match sub {
+        "list" => {
+            if cli.json {
+                emit(
+                    cli,
+                    "rules list",
+                    true,
+                    json!({ "version": rules.version, "rules": rules.rules }),
+                );
+            } else {
+                print_json(&rules.rules);
+            }
+            Ok(true)
+        }
+        "add" => {
+            let name = positional(cli, 2, "rules add needs a rule name")?.to_owned();
+            let profile = cli
+                .profile
+                .clone()
+                .ok_or_else(|| "rules add needs --profile".to_owned())?;
+            if store.get(&profile).is_none() {
+                return Err(format!("unknown profile `{profile}`"));
+            }
+            if rules.get(&name).is_some() {
+                return Err(format!("rule `{name}` already exists"));
+            }
+            let rule = Rule {
+                name: name.clone(),
+                profile,
+                priority: cli.priority,
+                match_: cli.match_(),
+            };
+            let data = json!({ "rule": rule });
+            rules.insert(rule);
+            rules.version = SCHEMA_VERSION;
+            rules
+                .save(&cli.rules)
+                .map_err(|err| format!("cannot save rules: {err}"))?;
+            emit(cli, "rules add", true, data);
+            Ok(true)
+        }
+        "remove" => {
+            let name = positional(cli, 2, "rules remove needs a rule name")?;
+            if !rules.remove(name) {
+                return Err(format!("unknown rule `{name}`"));
+            }
+            rules.version = SCHEMA_VERSION;
+            rules
+                .save(&cli.rules)
+                .map_err(|err| format!("cannot save rules: {err}"))?;
+            emit(cli, "rules remove", true, json!({ "deleted": name }));
+            Ok(true)
+        }
+        "explain" => {
+            let outputs = query_outputs(cli.socket()?)?;
+            let decisions = evaluate_rules(&rules.rules, &outputs);
+            let (profile, _, warnings) = build_rules_profile(&rules.rules, &outputs, store);
+            let plan = plan_profile(&profile, &outputs, None);
+            let decisions: Vec<_> = decisions
+                .into_iter()
+                .filter(|decision| {
+                    cli.output
+                        .as_ref()
+                        .is_none_or(|output| &decision.output == output)
+                })
+                .collect();
+            let ok = if profile.outputs.is_empty() {
+                warnings.is_empty()
+            } else {
+                plan.ok()
+            };
+            emit(
+                cli,
+                "rules explain",
+                ok,
+                json!({
+                    "decisions": decisions,
+                    "warnings": warnings,
+                    "profile": profile,
+                    "plan": plan,
+                }),
+            );
+            Ok(ok)
+        }
+        "apply" => {
+            let outputs = query_outputs(cli.socket()?)?;
+            let (profile, decisions, warnings) = build_rules_profile(&rules.rules, &outputs, store);
+            if profile.outputs.is_empty() {
+                let ok = warnings.is_empty();
+                emit(
+                    cli,
+                    "rules apply",
+                    ok,
+                    json!({
+                        "decision": "no_matching_rules",
+                        "report": Value::Null,
+                        "decisions": decisions,
+                        "warnings": warnings,
+                    }),
+                );
+                return Ok(ok);
+            }
+            let report = apply_profile_object(
+                cli.socket()?,
+                store,
+                &profile,
+                "rules",
+                &cli.state,
+                cli.dry_run,
+                None,
+            )?;
+            let ok = report.status.is_ok() && warnings.is_empty();
+            if cli.json {
+                emit(
+                    cli,
+                    "rules apply",
+                    ok,
+                    json!({
+                        "report": report,
+                        "decisions": decisions,
+                        "warnings": warnings,
+                    }),
+                );
+            } else {
+                print_report_default(&report);
+                for warning in &warnings {
+                    eprintln!("warning: {warning}");
+                }
+            }
+            Ok(ok)
+        }
+        other => Err(format!("unknown rules command `{other}`\n\n{}", usage())),
+    }
+}
+
+fn run_watch_command(cli: &Cli, store: &mut Store) -> Result<bool, String> {
+    let rules = if cli.profile.is_some() {
+        RuleStore::default()
+    } else {
+        RuleStore::load(&cli.rules).map_err(|err| format!("cannot load rules: {err}"))?
+    };
+    let options = WatchOptions {
+        profile: cli.profile.clone(),
+        debounce: cli.debounce,
+        poll: cli.poll,
+        cooldown: cli.cooldown,
+        once: cli.once,
+        dry_run: cli.dry_run,
+    };
+    let socket = cli.socket()?;
+
+    if cli.once {
+        let cycle = watch_once(socket, store, &rules, &cli.state, &options)?;
+        emit(cli, "watch", true, serde_json::to_value(&cycle).unwrap());
+        return Ok(cycle.reports.iter().all(|report| report.status.is_ok()));
+    }
+
+    run_watch(
+        socket,
+        store,
+        &rules,
+        &cli.state,
+        &options,
+        &cli.lock,
+        |cycle| {
+            if cli.json {
+                emit(cli, "watch", true, serde_json::to_value(cycle).unwrap());
+            } else {
+                println!(
+                    "[watch] decision={} changed={} outputs={}",
+                    cycle.decision,
+                    cycle.changed,
+                    cycle.outputs.len()
+                );
+                for report in &cycle.reports {
+                    print_report_default(report);
+                }
+            }
+        },
+    )?;
+    Ok(true)
+}
+
+fn positional<'a>(cli: &'a Cli, index: usize, message: &str) -> Result<&'a str, String> {
+    cli.positionals
+        .get(index)
+        .map(String::as_str)
+        .ok_or_else(|| message.to_owned())
+}
+
+fn reject_reserved(name: &str) -> Result<(), String> {
+    if name.starts_with("__") {
+        Err(format!(
+            "profile name `{name}` is reserved for better-monitor state"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn print_json(value: &impl serde::Serialize) {
+    println!("{}", serde_json::to_string_pretty(value).unwrap());
+}
+
+fn emit(cli: &Cli, command: &str, ok: bool, data: Value) {
+    if cli.json {
+        println!("{}", json!({ "command": command, "ok": ok, "data": data }));
+    } else {
+        print_json(&data);
+    }
+}
+
+fn emit_report(cli: &Cli, command: &str, report: &ApplyReport) -> bool {
+    let ok = report.status.is_ok();
+    if cli.json {
+        emit(cli, command, ok, serde_json::to_value(report).unwrap());
+    } else {
+        print_report_default(report);
+    }
+    ok
+}
+
+fn print_report_default(report: &ApplyReport) {
+    let actions: Vec<Value> = report
+        .actions
+        .iter()
+        .map(|action| json!([action.output, action.action]))
+        .collect();
+    print_json(&actions);
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    for note in &report.config_only {
+        eprintln!(
+            "config-only: {} `{}`: {}",
+            note.output, note.field, note.detail
+        );
+    }
+    for error in &report.errors {
+        eprintln!("error: {error}");
+    }
+    if report.status == ApplyStatus::RolledBack {
+        eprintln!(
+            "rolled back: {} action(s) sent to restore the previous layout",
+            report.rollback_actions.len()
+        );
+    }
+    for error in &report.rollback_errors {
+        eprintln!("rollback error: {error}");
+    }
+    match report.status {
+        ApplyStatus::Refused => eprintln!("refused: nothing was sent to niri"),
+        ApplyStatus::RolledBack | ApplyStatus::RollbackFailed => {
+            eprintln!("apply failed; previous layout restore was attempted")
+        }
+        ApplyStatus::Planned => eprintln!("dry run: {} action(s) planned", report.actions.len()),
+        ApplyStatus::Applied => eprintln!("applied {} action(s)", report.applied.len()),
+        ApplyStatus::Restored => eprintln!("restored {} action(s)", report.applied.len()),
+    }
 }
