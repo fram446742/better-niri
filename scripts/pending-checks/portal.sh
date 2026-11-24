@@ -20,22 +20,20 @@ PID=$!
 trap 'kill $PID 2>/dev/null' EXIT
 sleep 1
 
-say "Screenshot"
-gdbus call --session --dest org.freedesktop.impl.portal.desktop.better \
-  --object-path /org/freedesktop/portal/desktop \
-  --method org.freedesktop.impl.portal.Screenshot.Screenshot \
-  "" "" "file://$OUT" 2>&1 || echo "Screenshot call failed (check /tmp/better-portal.log)"
+say "interface introspection"
+gdbus introspect --session --dest org.freedesktop.impl.portal.desktop.better \
+  --object-path /org/freedesktop/portal/desktop 2>&1 | \
+  grep -E 'Screenshot|PickColor|CreateSession|SelectSources|Start' | head -20
 
-say "PickColor"
-gdbus call --session --dest org.freedesktop.impl.portal.desktop.better \
-  --object-path /org/freedesktop/portal/desktop \
-  --method org.freedesktop.impl.portal.Screenshot.PickColor "" "" 2>&1 || true
+# The impl methods take an exported Request object path as the first argument
+# and deliver results through the Request.Response signal. Driving that from a
+# shell needs a client that exports the Request; use a real portal client or
+# the portal's own integration tests instead of hand-written gdbus calls.
+say "portal integration tests"
+if [ -f better-portal/Cargo.toml ]; then
+  cargo test --manifest-path better-portal/Cargo.toml --quiet 2>&1 | tail -5
+fi
 
-say "ScreenCast (create -> select sources -> start -> close)"
-gdbus call --session --dest org.freedesktop.impl.portal.desktop.better \
-  --object-path /org/freedesktop/portal/desktop \
-  --method org.freedesktop.impl.portal.ScreenCast.CreateSession \
-  "" "" "" 2>&1 || true
-
-if [ -f "$OUT" ]; then echo "PASS: screenshot at $OUT"; else echo "SKIP/FAIL: no screenshot written"; fi
-echo "ScreenCast needs a real PipeWire client (e.g. OBS or xdg-desktop-portal test app) for a full Start; the portal proxies niri."
+echo "Screenshot/PickColor/ScreenCast need a portal client that exports a Request object;"
+echo "use a real app (screenshot keybind in a portal-aware app, OBS for ScreenCast) or the tests above."
+echo "The full ScreenCast stream needs PipeWire and niri running in this session; the portal proxies niri."
