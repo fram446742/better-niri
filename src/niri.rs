@@ -77,13 +77,16 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{
     Buffer as BufferCoords, ClockSource, IsAlive as _, Logical, Monotonic, Physical, Point,
-    Rectangle, SERIAL_COUNTER, Scale, Size, Transform,
+    Rectangle, SERIAL_COUNTER, Scale, Size, Time, Transform,
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::color::management::{
     ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
     Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
     TransferFunction as CmTransferFunction,
+};
+use smithay::wayland::commit_timing::{
+    CommitTimerBarrierStateUserData, CommitTimingManagerState, Timestamp,
 };
 use smithay::wayland::compositor::{
     Barrier, CompositorClientState, CompositorHandler, CompositorState, HookId, SurfaceData,
@@ -226,6 +229,7 @@ use crate::ui::screenshot_ui::{
     OutputScreenshot, ScreenshotPathReplySender, ScreenshotPortalError, ScreenshotReplySender,
     ScreenshotSelectionReplySender, ScreenshotUi, ScreenshotUiRenderElement,
 };
+use crate::utils::commit_timing::next_wakeup_time;
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
@@ -458,6 +462,7 @@ pub struct Niri {
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
     pub fifo_manager_state: FifoManagerState,
+    pub commit_timing_manager_state: CommitTimingManagerState,
     #[cfg(feature = "kde")]
     pub kde_output_order_v1_state: KdeOutputOrderV1State,
     /// Capability flags for the active global shader, cached per config load.
@@ -486,6 +491,10 @@ pub struct Niri {
     pub pending_tablet_release_binds: HashMap<u32, Bind>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<RegistrationToken>,
+    /// Timer waking up the event loop at the refresh cycle whose target presentation time the
+    /// earliest pending commit-timer deadline falls on, so queued commit timers are signalled even
+    /// when nothing else wakes the loop.
+    pub commit_timing_wakeup_timer: Option<RegistrationToken>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub grid_mouse_focus: GridMouseFocus,
@@ -1343,6 +1352,59 @@ impl State {
 
     pub fn refresh_and_flush_clients(&mut self) {
         let _span = tracy_client::span!("State::refresh_and_flush_clients");
+
+        // Disarm the previous commit-timing wakeup timer; it is re-armed below if any deadline
+        // remains pending.
+        if let Some(token) = self.niri.commit_timing_wakeup_timer.take() {
+            self.niri.event_loop.remove(token);
+        }
+
+        // Signal commit timers that are due at each output's next target presentation time. This
+        // happens before refresh() so that the unblocked commits are handled by layout.refresh()
+        // within this same cycle. Also collect the earliest still-pending deadline to schedule a
+        // wakeup for it.
+        let outputs: Vec<Output> = self.niri.output_state.keys().cloned().collect();
+        let mut min_next_schedule: Option<Duration> = None;
+        for output in outputs {
+            let (target_presentation_time, refresh_interval) = {
+                let Some(output_state) = self.niri.output_state.get(&output) else {
+                    continue;
+                };
+                (
+                    output_state.frame_clock.next_presentation_time(),
+                    output_state.frame_clock.refresh_interval(),
+                )
+            };
+
+            if let Some(next_deadline) = self
+                .niri
+                .signal_commit_timing(&output, target_presentation_time)
+            {
+                let next_schedule = next_wakeup_time(
+                    target_presentation_time,
+                    refresh_interval,
+                    next_deadline,
+                    get_monotonic_time(),
+                );
+                min_next_schedule = min_next_schedule
+                    .filter(|min| *min <= next_schedule)
+                    .or(Some(next_schedule));
+            }
+        }
+
+        if let Some(min_next_schedule) = min_next_schedule {
+            let duration = min_next_schedule.saturating_sub(get_monotonic_time());
+            let token = self
+                .niri
+                .event_loop
+                .insert_source(Timer::from_duration(duration), |_, _, _| {
+                    // Waking up the event loop is enough: refresh_and_flush_clients() runs after
+                    // dispatch and signals the due commit timers.
+                    TimeoutAction::Drop
+                })
+                .unwrap();
+            self.niri.commit_timing_wakeup_timer = Some(token);
+        }
 
         self.refresh();
 
@@ -4547,6 +4609,7 @@ impl Niri {
         let mutter_x11_interop_state =
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
         let fifo_manager_state = FifoManagerState::new::<State>(&display_handle);
+        let commit_timing_manager_state = CommitTimingManagerState::new::<State>(&display_handle);
 
         #[cfg(feature = "kde")]
         let kde_output_order_v1_state =
@@ -4816,6 +4879,7 @@ impl Niri {
             pending_tablet_release_binds: HashMap::new(),
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
+            commit_timing_wakeup_timer: None,
             presentation_state,
             tearing_control_state,
             content_type_state,
@@ -4825,6 +4889,7 @@ impl Niri {
             activation_state,
             mutter_x11_interop_state,
             fifo_manager_state,
+            commit_timing_manager_state,
             #[cfg(feature = "kde")]
             kde_output_order_v1_state,
             #[cfg(feature = "effects")]
@@ -6206,6 +6271,79 @@ impl Niri {
         });
 
         barriers
+    }
+
+    /// Signals all commit timers on this output that are due at `target_presentation_time`.
+    ///
+    /// Returns the earliest still-pending commit-timer deadline for this output, if any.
+    pub fn signal_commit_timing(
+        &self,
+        output: &Output,
+        target_presentation_time: Duration,
+    ) -> Option<Duration> {
+        let target: Timestamp = Time::<Monotonic>::from(target_presentation_time).into();
+        let tx = self.blocker_cleared_tx.clone();
+        let mut min_next_deadline: Option<Timestamp> = None;
+
+        self.for_each_output_surface(output, |surface, states| {
+            let primary_scanout_output = surface_primary_scanout_output(surface, states);
+            if primary_scanout_output.as_ref().is_some_and(|o| o != output) {
+                return;
+            }
+
+            Self::signal_commit_timing_surface(
+                surface,
+                states,
+                target,
+                &mut min_next_deadline,
+                &tx,
+            );
+        });
+
+        // Unmapped windows are signalled too, so they cannot get stuck waiting for a commit that
+        // will never be presented on an output.
+        for unmapped in self.unmapped_windows.values() {
+            unmapped.window.with_surfaces(|surface, states| {
+                Self::signal_commit_timing_surface(
+                    surface,
+                    states,
+                    target,
+                    &mut min_next_deadline,
+                    &tx,
+                );
+            });
+        }
+
+        min_next_deadline.map(|timestamp| Time::<Monotonic>::from(timestamp).into())
+    }
+
+    fn signal_commit_timing_surface(
+        surface: &WlSurface,
+        states: &SurfaceData,
+        target: Timestamp,
+        min_next_deadline: &mut Option<Timestamp>,
+        tx: &Sender<Client>,
+    ) {
+        let Some(mut commit_timer_state) = states
+            .data_map
+            .get::<CommitTimerBarrierStateUserData>()
+            .map(|commit_timer| commit_timer.lock().unwrap())
+        else {
+            return;
+        };
+
+        if commit_timer_state.signal_until(target)
+            && let Some(client) = surface.client()
+        {
+            let _ = tx.send(client);
+        }
+
+        if let Some(next_deadline) = commit_timer_state.next_deadline() {
+            *min_next_deadline = Some(match min_next_deadline.take() {
+                Some(min) if min <= next_deadline => min,
+                _ => next_deadline,
+            });
+        }
     }
 
     pub fn signal_fifo(&self, output: &Output) {
