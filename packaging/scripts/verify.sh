@@ -212,6 +212,12 @@ EOF
             ;;
         better-portal)
             cat <<'EOF'
+usr/share/bash-completion/completions/better-portal
+usr/share/fish/vendor_completions.d/better-portal.fish
+usr/share/zsh/site-functions/_better-portal
+usr/share/bash-completion/completions/better-portal-picker
+usr/share/fish/vendor_completions.d/better-portal-picker.fish
+usr/share/zsh/site-functions/_better-portal-picker
 usr/bin/better-portal
 usr/bin/better-portal-picker
 usr/share/xdg-desktop-portal/portals/better.portal
@@ -224,6 +230,12 @@ EOF
             ;;
         better-settings)
             cat <<'EOF'
+usr/share/bash-completion/completions/better-settings
+usr/share/fish/vendor_completions.d/better-settings.fish
+usr/share/zsh/site-functions/_better-settings
+usr/share/bash-completion/completions/better-settingsctl
+usr/share/fish/vendor_completions.d/better-settingsctl.fish
+usr/share/zsh/site-functions/_better-settingsctl
 usr/bin/better-settings
 usr/bin/better-settingsctl
 usr/share/applications/better-settings.desktop
@@ -264,6 +276,12 @@ EOF
             ;;
         better-companion)
             cat <<'EOF'
+usr/share/bash-completion/completions/better-companion
+usr/share/fish/vendor_completions.d/better-companion.fish
+usr/share/zsh/site-functions/_better-companion
+usr/share/bash-completion/completions/companionctl
+usr/share/fish/vendor_completions.d/companionctl.fish
+usr/share/zsh/site-functions/_companionctl
 usr/bin/better-companion
 usr/bin/companionctl
 usr/lib/systemd/user/better-companion.service
@@ -273,6 +291,31 @@ EOF
             ;;
         better-monitor|better-session|better-shot|better-wallpaper|better-audio|better-sidepanels)
             cat <<EOF
+usr/share/bash-completion/completions/${pkg}
+usr/share/fish/vendor_completions.d/${pkg}.fish
+usr/share/zsh/site-functions/_${pkg}
+usr/bin/${pkg}
+usr/share/doc/${pkg}/README.md
+usr/share/licenses/${pkg}/LICENSE
+EOF
+usr/share/bash-completion/completions/better-monitor
+usr/share/fish/vendor_completions.d/better-monitor.fish
+usr/share/zsh/site-functions/_better-monitor
+usr/share/bash-completion/completions/better-session
+usr/share/fish/vendor_completions.d/better-session.fish
+usr/share/zsh/site-functions/_better-session
+usr/share/bash-completion/completions/better-shot
+usr/share/fish/vendor_completions.d/better-shot.fish
+usr/share/zsh/site-functions/_better-shot
+usr/share/bash-completion/completions/better-wallpaper
+usr/share/fish/vendor_completions.d/better-wallpaper.fish
+usr/share/zsh/site-functions/_better-wallpaper
+usr/share/bash-completion/completions/better-audio
+usr/share/fish/vendor_completions.d/better-audio.fish
+usr/share/zsh/site-functions/_better-audio
+usr/share/bash-completion/completions/better-sidepanels
+usr/share/fish/vendor_completions.d/better-sidepanels.fish
+usr/share/zsh/site-functions/_better-sidepanels
 usr/bin/${pkg}
 usr/share/doc/${pkg}/README.md
 usr/share/licenses/${pkg}/LICENSE
@@ -717,7 +760,7 @@ for file in packaging/scripts/*.sh; do
 done
 
 printf '==> docs\n'
-for section in 'Compatibility matrix' 'Installation profiles' 'Split packages' 'Portal setup' 'Vulkan' 'AUR'; do
+for section in 'Compatibility matrix' 'Installation profiles' 'Split packages' 'Shell completions' 'Portal setup' 'Vulkan' 'AUR'; do
     if grep -qF "$section" docs/PACKAGING.md; then
         pass "docs/PACKAGING.md has '$section'"
     else
