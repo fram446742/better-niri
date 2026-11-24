@@ -122,6 +122,7 @@ jobs:
       PROPTEST_MAX_LOCAL_REJECTS: 200000
       PROPTEST_MAX_GLOBAL_REJECTS: 200000
       PROPTEST_MAX_SHRINK_ITERS: 200000
+      RUST_MIN_STACK: "8388608"
 
     steps:
       - uses: actions/checkout@v6
