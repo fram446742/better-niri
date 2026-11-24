@@ -77,6 +77,7 @@ split_packages=(
     better-settings
     better-audio
     better-sidepanels
+    better-noctalia-plugins
     better-desktop
 )
 
@@ -132,6 +133,7 @@ known_official_packages=(
     mako
     mesa
     nvidia-utils
+    noctalia
     pango
     pixman
     playerctl
@@ -162,6 +164,7 @@ expects_binaries() {
     local component
     case $1 in
         niri-better) printf '%s\n' niri niri-session ;;
+        better-noctalia-plugins) return 0 ;;
         *)
             component=$(package_component "$1") || return 1
             component_binaries "$component"
@@ -226,6 +229,31 @@ usr/bin/better-settingsctl
 usr/share/applications/better-settings.desktop
 usr/share/doc/better-settings/README.md
 usr/share/licenses/better-settings/LICENSE
+EOF
+            ;;
+        better-noctalia-plugins)
+            cat <<'EOF'
+usr/share/better-desktop/noctalia-plugins/better-audio/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-audio/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-companion/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-companion/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-monitor/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-monitor/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-session/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-session/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-shot/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-shot/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-sidepanels/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-sidepanels/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-sticky/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-sticky/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-sticky/translations/en.json
+usr/share/better-desktop/noctalia-plugins/better-wallpaper/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-wallpaper/widget.luau
+usr/share/better-desktop/noctalia-plugins/README.md
+usr/share/better-desktop/noctalia-plugins/verify.sh
+usr/share/doc/better-noctalia-plugins/README.md
+usr/share/licenses/better-noctalia-plugins/LICENSE
 EOF
             ;;
         better-desktop)

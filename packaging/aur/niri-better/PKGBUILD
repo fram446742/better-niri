@@ -14,6 +14,7 @@
 #   better-settings   GTK4 settings UI and better-settingsctl
 #   better-audio      rule-based PipeWire audio routing
 #   better-sidepanels layer-shell panels
+#   better-noctalia-plugins  Noctalia plugin source (Luau widgets)
 #   better-desktop    meta package depending on every package above
 #
 # niri-better installs the same `niri` binary and niri-session as the official
@@ -40,6 +41,7 @@ pkgname=(
   better-settings
   better-audio
   better-sidepanels
+  better-noctalia-plugins
   better-desktop
 )
 _pkgname=better-niri
@@ -371,6 +373,31 @@ package_better-sidepanels() {
   _install_license better-sidepanels
 }
 
+package_better-noctalia-plugins() {
+  pkgdesc="Noctalia bar plugins for the Better Desktop companion apps"
+  arch=(any)
+  depends=()
+  optdepends=(
+    'noctalia: shell that loads these Luau plugins'
+    'better-companion: status and action widgets'
+    'better-monitor: output profile widget'
+    'better-session: context switcher widget'
+    'better-shot: screenshot widget'
+    'better-audio: default sink widget'
+    'better-wallpaper: scene widget'
+    'better-sidepanels: panel reload widget'
+  )
+
+  cd "${_pkgname}"
+  install -d "${pkgdir}/usr/share/better-desktop/noctalia-plugins"
+  cp -a "${srcdir}/${_pkgname}/better-noctalia-plugins/." \
+    "${pkgdir}/usr/share/better-desktop/noctalia-plugins/"
+  find "${pkgdir}/usr/share/better-desktop/noctalia-plugins" -name verify.sh \
+    -exec chmod 755 {} +
+  _install_doc better-noctalia-plugins better-noctalia-plugins/README.md
+  _install_license better-noctalia-plugins
+}
+
 package_better-desktop() {
   pkgdesc="Meta package for the Better Niri desktop: compositor, portal and companion apps"
   depends=(
@@ -384,6 +411,7 @@ package_better-desktop() {
     better-settings
     better-audio
     better-sidepanels
+    better-noctalia-plugins
   )
   optdepends=(
     'xdg-desktop-portal: portal broker for niri.portal and better.portal'
