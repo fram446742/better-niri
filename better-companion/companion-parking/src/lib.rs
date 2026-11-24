@@ -71,6 +71,29 @@ impl Parking {
             .unwrap_or_default()
     }
 
+    /// Atomically removes and returns `id` from `lot`.
+    ///
+    /// Unlike `unpark`, a missing entry is `Ok(None)`, which lets callers make
+    /// restore operations idempotent under concurrent requests.
+    pub fn take(&self, lot: &str, id: &str) -> Result<Option<Value>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "parking state lock poisoned".to_owned())?;
+        let Some(value) = state
+            .lots
+            .get_mut(lot)
+            .and_then(|entries| entries.remove(id))
+        else {
+            return Ok(None);
+        };
+        if state.lots.get(lot).is_some_and(Lot::is_empty) {
+            state.lots.remove(lot);
+        }
+        self.save(&state)?;
+        Ok(Some(value))
+    }
+
     fn lot_name(params: &Value) -> String {
         params
             .get("lot")
@@ -211,6 +234,18 @@ mod tests {
 
         let missing = reloaded.call("unpark", &json!({ "lot": "main", "id": "win-1" }));
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn take_removes_atomically_and_reports_missing() {
+        let path = temp_path("take");
+        let parking = Parking::load(&path).unwrap();
+        parking
+            .call("park", &json!({ "lot": "main", "id": "a", "value": 1 }))
+            .unwrap();
+        assert_eq!(parking.take("main", "a").unwrap(), Some(json!(1)));
+        assert_eq!(parking.take("main", "a").unwrap(), None);
+        assert!(parking.lot("main").is_empty());
     }
 
     #[test]

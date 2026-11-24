@@ -1,12 +1,21 @@
 //! The `better-companion` daemon: one Unix-socket server over the bounded
 //! contexts.
+//!
+//! One JSON request per line and one response per line. Malformed or unknown
+//! requests produce an error response and keep the connection alive; request
+//! lines are capped and drained so a client cannot allocate without bound.
+//! A failing connection never stops the accept loop.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 use companion_core::{Registry, Request, Response};
+
+/// Largest accepted request line. Larger lines are drained and rejected so one
+/// client cannot make the daemon allocate without bound.
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 pub fn build_registry(socket: &Path) -> io::Result<Registry> {
     Ok(build_registry_with_parking(socket)?.0)
@@ -54,25 +63,54 @@ pub fn bind(socket: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
+/// Reads one request line, bounding the amount of memory a single line can
+/// allocate.
+fn read_request_line(reader: &mut BufReader<UnixStream>, line: &mut String) -> io::Result<usize> {
+    line.clear();
+    let read = {
+        let mut limited = reader.by_ref().take(MAX_REQUEST_BYTES as u64 + 1);
+        limited.read_line(line)?
+    };
+    if read > MAX_REQUEST_BYTES && !line.ends_with('\n') {
+        discard_line(reader)?;
+    }
+    Ok(read)
+}
+
+/// Drops the remainder of an oversized line in fixed-size chunks.
+fn discard_line(reader: &mut BufReader<UnixStream>) -> io::Result<()> {
+    let mut buf = [0u8; 4096];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 || buf[..read].contains(&b'\n') {
+            return Ok(());
+        }
+    }
+}
+
 /// Serves one connection to completion.
 pub fn serve_stream(stream: UnixStream, registry: &Registry) -> io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
     let mut line = String::new();
     loop {
-        line.clear();
-        let read = reader.read_line(&mut line)?;
+        let read = read_request_line(&mut reader, &mut line)?;
         if read == 0 {
             return Ok(());
         }
-        if line.trim().is_empty() {
+        let response = if read > MAX_REQUEST_BYTES {
+            Response::Error {
+                message: format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+            }
+        } else if line.trim().is_empty() {
             continue;
-        }
-        let response = match serde_json::from_str::<Request>(line.trim()) {
-            Ok(request) => registry.handle(request),
-            Err(err) => Response::Error {
-                message: format!("invalid request: {err}"),
-            },
+        } else {
+            match serde_json::from_str::<Request>(line.trim()) {
+                Ok(request) => registry.handle(request),
+                Err(err) => Response::Error {
+                    message: format!("invalid request: {err}"),
+                },
+            }
         };
         let body = serde_json::to_string(&response)
             .unwrap_or_else(|err| format!("{{\"kind\":\"error\",\"message\":\"{err}\"}}"));
@@ -194,5 +232,96 @@ mod tests {
     fn default_socket_is_under_runtime_dir_or_temp() {
         let path = socket_default();
         assert!(path.ends_with("better-companion.sock"));
+    }
+
+    fn read_response(reader: &mut BufReader<UnixStream>) -> Response {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        serde_json::from_str(line.trim()).unwrap()
+    }
+
+    #[test]
+    fn malformed_and_unknown_requests_do_not_close_the_connection() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let registry = build_registry(&temp_socket("bad-lines")).unwrap();
+        let handle = std::thread::spawn(move || serve_stream(server, &registry));
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let mut reader = BufReader::new(client);
+
+        writer.write_all(b"this is not json\n").unwrap();
+        assert!(matches!(read_response(&mut reader), Response::Error { .. }));
+
+        writer
+            .write_all(b"{\"kind\":\"no_such_request\"}\n")
+            .unwrap();
+        assert!(matches!(read_response(&mut reader), Response::Error { .. }));
+
+        // The connection still serves valid requests after both failures.
+        writer.write_all(b"{\"kind\":\"list\"}\n").unwrap();
+        assert!(matches!(
+            read_response(&mut reader),
+            Response::Contexts { .. }
+        ));
+
+        drop(writer);
+        drop(reader);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn oversized_request_is_drained_and_rejected() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let registry = build_registry(&temp_socket("oversized")).unwrap();
+        let handle = std::thread::spawn(move || serve_stream(server, &registry));
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let mut reader = BufReader::new(client);
+
+        let oversized = format!("{}\n", "x".repeat(MAX_REQUEST_BYTES + 128));
+        writer.write_all(oversized.as_bytes()).unwrap();
+        match read_response(&mut reader) {
+            Response::Error { message } => assert!(message.contains("exceeds"), "{message}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // The rest of the line was discarded, so the next request is clean.
+        writer.write_all(b"{\"kind\":\"list\"}\n").unwrap();
+        assert!(matches!(
+            read_response(&mut reader),
+            Response::Contexts { .. }
+        ));
+
+        drop(writer);
+        drop(reader);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn partial_request_without_a_newline_is_processed() {
+        use std::net::Shutdown;
+
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let registry = build_registry(&temp_socket("partial")).unwrap();
+        let handle = std::thread::spawn(move || serve_stream(server, &registry));
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(b"{\"kind\":\"status\"}").unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+
+        let mut reader = BufReader::new(client);
+        assert!(matches!(
+            read_response(&mut reader),
+            Response::Status { .. }
+        ));
+        handle.join().unwrap().unwrap();
     }
 }
