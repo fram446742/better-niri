@@ -270,9 +270,13 @@ picked up without re-auditing.
    battery, cpu, memory, network, volume, custom), safe click/scroll actions,
    panels on all four edges (several per output), config v2 with per-output
    overrides, validation and file-watch reload. Remaining in the `better-*`
-   family: full config coverage in `better-settings`, native PipeWire backends
-   in `better-audio`/`better-wallpaper`, cross-app adapters wired to events,
-   Phase 8 packaging (Arch/AUR/profiles) and hardware validation.
+   family: native PipeWire backends in `better-audio`/`better-wallpaper`,
+   cross-app adapters wired to events, Phase 8 packaging (Arch/AUR/profiles)
+   and hardware validation. `better-settings/` now covers layout, input
+   (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
+   binds with flags and multi-action, window/layer rules, startup, environment,
+   animations, gestures, overview, cursor, clipboard and screenshot path, with
+   byte-preserving edits, dry-run diffs, export/import and a sectioned GTK UI.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
