@@ -1326,8 +1326,9 @@ impl<W: LayoutElement> Tile<W> {
                             clip_to_geometry
                         };
 
-                    if let Some((elem_current, _sync_point, mut data)) = current {
-                        let texture_current = elem_current.texture().clone();
+                    if let Some((elem_current, _sync_point, mut data)) = current
+                        && let Some(texture_current) = elem_current.texture_gles().cloned()
+                    {
                         // The offset and size are computed in physical pixels and converted to
                         // logical with the same `scale`, so converting them back with rounding
                         // inside the geometry() call gives us the same physical result back.

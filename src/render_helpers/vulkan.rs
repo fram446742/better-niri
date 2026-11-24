@@ -31,9 +31,10 @@ pub const ENV_RENDERER: &str = "NIRI_RENDERER";
 ///
 /// The TTY backend renders through `TtyRenderer`, an enum over the GLES and
 /// Vulkan multi-GPU renderers, so core output rendering (windows, layers, UI
-/// textures) works on Vulkan. GLSL-only visuals (niri shader programs, blur,
-/// xray, decoration light, carousel panels) are skipped on Vulkan and keep
-/// their GLES path; see `docs/MODULES.md`.
+/// textures) works on Vulkan, including carousel panel contents (their source
+/// bake goes through the backend-agnostic `OffscreenBuffer`). GLSL-only
+/// visuals (blur, xray, decoration light) are skipped on Vulkan and keep their
+/// GLES path; see `docs/MODULES.md`.
 pub const RENDER_TREE_SUPPORTS_VULKAN: bool = true;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

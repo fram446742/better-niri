@@ -752,7 +752,7 @@ impl Drop for InRenderInnerGuard {
 /// The two backing [`OffscreenBuffer`]s live in [`OutputState::panel_offscreen`], OUTSIDE this
 /// struct's `RefCell`, so the GPU render call is never made while a `panel_source` borrow is held
 /// (`OffscreenBuffer::render` takes `&self`). `OffscreenBuffer::render` recreates its texture
-/// whenever the previously-returned `GlesTexture` is not `is_unique_reference()` (a plain
+/// whenever the previously-returned offscreen texture is not `is_unique_reference()` (a plain
 /// `Arc::get_mut` check — see `render_helpers/offscreen.rs` and the identical reasoning at
 /// `layout/tile.rs:1175` and `render_helpers/global_shader_element.rs:241`), so a buffer whose
 /// texture clone is retained across frames gets a full recreate + full redraw on its next render,
@@ -7184,7 +7184,10 @@ impl Niri {
         ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
-    ) -> Vec<OutputRenderElements<R>> {
+    ) -> Vec<OutputRenderElements<R>>
+    where
+        OutputRenderElements<R>: RenderElement<R>,
+    {
         let mut elements = Vec::new();
         self.render(ctx, output, include_pointer, &mut |elem| {
             elements.push(elem)
@@ -7401,7 +7404,12 @@ impl Niri {
         output: &Output,
         include_pointer: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
-    ) {
+    ) where
+        // Needed by the carousel panel prepass, which bakes a homogeneous slice of these into an
+        // `OffscreenBuffer`. The element enum implements `RenderElement` only for the concrete
+        // backends (GLES and the TTY renderer), not for every `NiriRenderer`.
+        OutputRenderElements<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render");
 
         let rendering_output = ctx.target == RenderTarget::Output;
@@ -7431,14 +7439,10 @@ impl Niri {
         #[cfg(feature = "navigation")]
         if self.layout.active_output() == Some(output) {
             if self.carousel_panels_needed() {
-                // Panel contents are baked through `OffscreenBuffer`, which owns a `GlesTexture`
-                // and takes `&mut GlesRenderer` (see `update_panel_sources`), so there is no
-                // Vulkan producer yet. The `ShaderRenderElement`/`PanelRenderElement` draw path
-                // itself accepts `TtyOffscreen::Vulkan` textures (see
-                // `render_helpers/shader_element.rs`), so only this producer is missing.
-                if let Some(mut gles) = ctx.as_gles() {
-                    self.update_panel_sources(&mut gles, output, self.panel_frame.get());
-                }
+                // `OffscreenBuffer` is backend-agnostic (it stores a `TtyOffscreen` and renders
+                // through any `NiriRenderer`), so the bake runs on the active renderer: GLES on
+                // the GLES path, Vulkan on the TTY Vulkan path.
+                self.update_panel_sources(&mut ctx, output, self.panel_frame.get());
                 let ring: Vec<Output> = self
                     .layout
                     .carousel_outputs()
@@ -8368,7 +8372,14 @@ impl Niri {
     /// the Task 5 review). There is deliberately no re-entrancy guard for this beyond the
     /// call-site gate: the fix belongs at the one call site, not scattered defensive checks here.
     #[cfg(feature = "navigation")]
-    fn update_panel_sources(&self, ctx: &mut RenderCtx<GlesRenderer>, host: &Output, frame: u64) {
+    fn update_panel_sources<R: NiriRenderer>(
+        &self,
+        ctx: &mut RenderCtx<R>,
+        host: &Output,
+        frame: u64,
+    ) where
+        OutputRenderElements<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::update_panel_sources");
         debug_assert!(
             !IN_RENDER_INNER.with(Cell::get),
@@ -8437,7 +8448,7 @@ impl Niri {
                 }
             }
 
-            let mut elements: Vec<OutputRenderElements<GlesRenderer>> = Vec::new();
+            let mut elements: Vec<OutputRenderElements<R>> = Vec::new();
             m.render_overview_at_zoom(ctx.r(), bake_zoom, false, &mut |elem| {
                 elements.push(OutputRenderElements::PanelMonitor(elem));
             });
@@ -8503,10 +8514,11 @@ impl Niri {
             // buffers live outside the `RefCell`, directly on `OutputState`.
             let idx = usize::from(state.panel_source.borrow().flip);
 
-            // Same GLES context as the eventual panel draw (single-GPU primary render path), and
-            // command ordering within one context is guaranteed, so the `SyncPoint` this returns
-            // is deliberately not threaded through. Revisit only if panels ever need to render
-            // cross-context (e.g. multi-GPU screencast of panel content).
+            // Same renderer (and thus context) as the eventual panel draw (single-GPU primary
+            // render path), and command ordering within one context is guaranteed, so the
+            // `SyncPoint` this returns is deliberately not threaded through. Revisit only if
+            // panels ever need to render cross-context (e.g. multi-GPU screencast of panel
+            // content).
             let result =
                 state.panel_offscreen[idx].render(ctx.renderer, target_output_scale, &elements);
 
@@ -8583,7 +8595,7 @@ impl Niri {
 
             // This output is no longer a carousel ring member (or the carousel closed
             // entirely, `keep` == `[]`): release any panel elements it retained while acting as
-            // a HOST, so their `GlesTexture` clones don't stay pinned after close. See
+            // a HOST, so their offscreen-texture clones don't stay pinned after close. See
             // `OutputState::panel_elems`'s doc.
             state.panel_elems.borrow_mut().clear();
             // Stale hit geometry would otherwise let a click land on where a panel used to be

@@ -186,13 +186,14 @@ picked up without re-auditing.
    path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
    and desktop content look rougher/differently antialiased than the SDR
    session, because the SDR-to-HDR blend is not applied there yet. Still open:
-   HDR compositing, decoration light, xray backdrops, carousel panel contents,
-   magnified screenshot capture and screen transitions. Textured
-   `ShaderRenderElement`s now draw on Vulkan: the panel and decoration-light
-   programs are compiled to SPIR-V and their sampler maps resolve
-   `TtyOffscreen::Vulkan` textures, but the producers that would feed them
-   (panel-source bakes, decoration-light emission/blur) are still GLES-only, so
-   those visuals stay skipped. The per-window background effect does draw on
+   HDR compositing, decoration light, xray backdrops, magnified screenshot
+   capture and screen transitions. Textured `ShaderRenderElement`s now draw on
+   Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
+   their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
+   is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
+   bake now runs on the active renderer and carousel panels draw on Vulkan; the
+   decoration-light producer remains GLES-only because its dual-Kawase blur has
+   no Vulkan counterpart. The per-window background effect does draw on
    Vulkan: `blur_down`/`blur_up` and the background composite
    (`clipped_surface.frag` + `postprocess.frag`, including the liquid-glass
    uniforms) are compiled for Vulkan and run through `render_custom_passes`

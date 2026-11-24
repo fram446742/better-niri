@@ -340,9 +340,11 @@ compositor IPC fallback.
   and configured decoration shaders (content-addressed at init); a test
   compiles all of them on a real `VulkanRenderer`. Global and scoped/window
   shader passes also draw on Vulkan (capture + per-pass ping-pong textures +
-  `render_custom`). The remaining GLSL-only visuals (decoration light,
-  blur/xray, liquid glass, carousel panel contents, magnified screenshot
-  capture, screen transitions) keep their GLES path and skip on Vulkan;
+  `render_custom`). Carousel panel contents are baked through the
+  backend-agnostic `OffscreenBuffer` on the active renderer, so they draw on
+  Vulkan too. The remaining GLSL-only visuals (decoration light, blur/xray,
+  liquid glass, magnified screenshot capture, screen transitions) keep their
+  GLES path and skip on Vulkan;
   animated resize stretches also stay GLES-only, with the window drawing
   normally on Vulkan during a resize.
 - `agent` (off by default): the automation seat.

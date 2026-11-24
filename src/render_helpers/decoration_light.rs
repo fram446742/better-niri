@@ -118,6 +118,12 @@ impl DecorationLight {
             let passes = ((radius / 3. + 1.).log2().ceil() as u8).clamp(1, 6);
             let offset = radius / (3. * (2_f64.powi(passes as i32) - 1.));
             let options = BlurOptions { passes, offset };
+            // Decoration light stays GLES-only: the emission prepass now goes through the
+            // backend-agnostic `OffscreenBuffer`, but the dual-Kawase `Blur` below is a raw GLES
+            // implementation with no Vulkan counterpart yet.
+            let emission_texture = emission.texture_gles().ok_or_else(|| {
+                anyhow::anyhow!("decoration light emission is not a GLES texture")
+            })?;
             blur.prepare_textures(
                 |_, size| {
                     if let Some(format) = self.blur_format {
@@ -136,10 +142,10 @@ impl DecorationLight {
                     self.blur_format = Some(Fourcc::Abgr8888);
                     renderer.create_buffer(Fourcc::Abgr8888, size)
                 },
-                emission.texture(),
+                emission_texture,
                 options,
             )?;
-            let texture = blur.render(renderer, emission.texture(), options)?;
+            let texture = blur.render(renderer, emission_texture, options)?;
             let texture_size = texture.size();
             let logical_size = emission.logical_size();
             // OffscreenBuffer may reuse a larger allocation; use its source rectangle only.

@@ -265,7 +265,13 @@ impl RenderElement<GlesRenderer> for GlobalShaderElement {
                     .render(renderer, Scale::from(self.scale as f64), &[buf_element])
                 {
                     Ok((off_elem, _sync, _data)) => {
-                        let next = off_elem.texture().clone();
+                        let next = match off_elem.texture_gles() {
+                            Some(texture) => texture.clone(),
+                            None => {
+                                warn!("global_buffer pass {i} produced a non-GLES texture");
+                                prev_tex.clone()
+                            }
+                        };
                         drop(guard);
                         // DO NOT remove this retained clone. It forces OffscreenBuffer to allocate
                         // a distinct write texture next frame (its
@@ -317,7 +323,13 @@ impl RenderElement<GlesRenderer> for GlobalShaderElement {
                     &[element],
                 ) {
                     Ok((off_elem, _sync, _data)) => {
-                        let next = off_elem.texture().clone();
+                        let next = match off_elem.texture_gles() {
+                            Some(texture) => texture.clone(),
+                            None => {
+                                warn!("global pass {i} produced a non-GLES texture");
+                                input.clone()
+                            }
+                        };
                         drop(guard);
                         *pass.result.borrow_mut() = Some(next.clone());
                         input = next;
