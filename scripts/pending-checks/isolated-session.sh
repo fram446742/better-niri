@@ -16,11 +16,11 @@ mkdir -p "$DIR"
 cp -a "$SRC/." "$DIR/"
 echo "cloned $SRC -> $DIR"
 
-# Optional HDR override: HDR_OUTPUT=DP-1 adds an hdr node if none exists.
-if [ -n "${HDR_OUTPUT:-}" ] && ! grep -qE 'hdr([[:space:]]|$)' "$DIR/config.kdl"; then
-  printf '\noutput "%s" {\n    hdr mode="on" {\n        reference-luminance 203\n    }\n}\n' \
-    "$HDR_OUTPUT" >> "$DIR/config.kdl"
-  echo "added hdr mode=on for $HDR_OUTPUT"
+# Optional HDR override: HDR_OUTPUT=DP-1 inserts an hdr node into the existing
+# output block (niri uses the first matching block, so appending a second one
+# has no effect).
+if [ -n "${HDR_OUTPUT:-}" ]; then
+  python3 "$(dirname "$0")/hdr-config.py" "$HDR_OUTPUT" "$DIR"
 fi
 
 if [ -n "$NIRI_BIN" ] && [ -x "$NIRI_BIN" ]; then

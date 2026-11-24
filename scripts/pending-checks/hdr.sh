@@ -64,6 +64,11 @@ RC=$?
   grep -iE 'hdr|pq|bt\.?2020|tone.?map|primaries|transfer' "$MPV_LOG" 2>/dev/null | tail -40
   echo "--- niri HDR/colour lines ($NIRI_LOG_FILE) ---"
   grep -iE 'hdr|bt2020|pq|color' "$NIRI_LOG_FILE" 2>/dev/null | tail -40
+  echo "--- niri HDR state ---"
+  if grep -q 'hdr=false' "$NIRI_LOG_FILE" 2>/dev/null; then
+    echo "WARNING: niri created the DRM compositor with hdr=false (no hdr output node applied)"
+  fi
+  grep -q 'hdr=true' "$NIRI_LOG_FILE" 2>/dev/null && echo "niri: hdr=true seen"
   echo "--- niri border/shadow/clipping shader init ---"
   grep -E 'compiled border|Vulkan renderer|renderer plan' "$NIRI_LOG_FILE" 2>/dev/null | tail -5
 } > "$SUMMARY"
