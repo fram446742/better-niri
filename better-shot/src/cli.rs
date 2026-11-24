@@ -6,9 +6,11 @@ use std::path::PathBuf;
 use crate::annotate::Annotation;
 use crate::hdr::HdrRequest;
 use crate::output::OutputFormat;
+use crate::record::RecordOptions;
 use crate::{Mode, Options};
 
 pub const USAGE: &str = r#"better-shot [--socket PATH] <ui|screen|window> [options]
+better-shot record [options]        (see `better-shot record --help`)
 
   Options:
     --path PATH         Save here (default: Screenshots/better-shot-<epoch>.<ext>)
@@ -39,6 +41,7 @@ pub struct ParsedCli {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     Run(ParsedCli),
+    Record(RecordOptions),
     Help,
 }
 
@@ -48,7 +51,20 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut iter = args.into_iter().map(Into::into).peekable();
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
+    if let Some(index) = record_mode_index(&args) {
+        let remaining = args
+            .iter()
+            .enumerate()
+            .filter(|(candidate, _)| *candidate != index)
+            .map(|(_, arg)| arg.clone())
+            .collect::<Vec<_>>();
+        return Ok(match crate::record::parse_cli(remaining)? {
+            crate::record::RecordCli::Run(options) => CliAction::Record(options),
+            crate::record::RecordCli::Help => CliAction::Help,
+        });
+    }
+    let mut iter = args.into_iter().peekable();
     let mut socket = None;
     let mut options = Options::default();
     let mut mode = None;
@@ -159,6 +175,42 @@ where
     Ok(CliAction::Run(ParsedCli { socket, options }))
 }
 
+fn record_mode_index(args: &[String]) -> Option<usize> {
+    let takes_value = |flag: &str| {
+        matches!(
+            flag,
+            "--socket"
+                | "--path"
+                | "--id"
+                | "--hdr"
+                | "--format"
+                | "--quality"
+                | "--output"
+                | "--region"
+                | "--window"
+                | "--fps"
+                | "--codec"
+                | "--audio"
+                | "--duration"
+                | "--backend"
+                | "--command"
+        )
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg.starts_with('-') {
+            index += 1;
+            if !arg.contains('=') && takes_value(arg) {
+                index += 1;
+            }
+            continue;
+        }
+        return (arg == "record").then_some(index);
+    }
+    None
+}
+
 fn value<I>(
     flag: &str,
     inline: Option<String>,
@@ -194,6 +246,7 @@ mod tests {
     fn run(args: &[&str]) -> ParsedCli {
         match parse(args.iter().copied()).unwrap() {
             CliAction::Run(cli) => cli,
+            CliAction::Record(_) => panic!("expected a screenshot run, got a recording"),
             CliAction::Help => panic!("expected a run, got help"),
         }
     }
@@ -315,5 +368,58 @@ mod tests {
         assert_eq!(cli.options.hdr, HdrRequest::Tonemap);
         assert_eq!(cli.options.format, Some(OutputFormat::Jpeg));
         assert_eq!(cli.options.window_id, Some(3));
+    }
+
+    #[test]
+    fn delegates_record_mode_after_options() {
+        let CliAction::Record(options) = parse([
+            "--socket",
+            "/run/niri.sock",
+            "record",
+            "--output",
+            "DP-1",
+            "--json",
+        ])
+        .unwrap() else {
+            panic!("expected a record action");
+        };
+        assert_eq!(
+            options.target,
+            crate::record::Target::Output("DP-1".to_owned())
+        );
+        assert!(options.json);
+        assert_eq!(
+            options.socket.as_deref(),
+            Some(std::path::Path::new("/run/niri.sock"))
+        );
+
+        let CliAction::Record(options) =
+            parse(["record", "--region=0,0,64,64", "--codec=av1"]).unwrap()
+        else {
+            panic!("expected a record action");
+        };
+        assert_eq!(
+            options.target,
+            crate::record::Target::Region(crate::record::Region {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64
+            })
+        );
+        assert_eq!(options.codec, crate::record::Codec::Av1);
+
+        assert_eq!(parse(["record", "--help"]).unwrap(), CliAction::Help);
+    }
+
+    #[test]
+    fn record_word_as_an_option_value_is_not_a_mode() {
+        // `--path record` must stay a screenshot invocation, not switch modes.
+        let cli = run(&["--path", "record", "screen"]);
+        assert_eq!(cli.options.mode, Mode::Screen);
+        assert_eq!(
+            cli.options.path.as_deref(),
+            Some(std::path::Path::new("record"))
+        );
     }
 }

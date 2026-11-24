@@ -19,6 +19,7 @@ pub mod cli;
 pub mod hdr;
 pub mod metadata;
 pub mod output;
+pub mod record;
 
 use annotate::Annotation;
 use hdr::{DEFAULT_REFERENCE_LUMINANCE, HdrDetection, HdrRequest};
@@ -139,7 +140,7 @@ pub fn build_action(options: &Options, path: &Path) -> Action {
     }
 }
 
-fn send(socket: &Path, request: Request) -> Result<Response, String> {
+pub(crate) fn send(socket: &Path, request: Request) -> Result<Response, String> {
     use niri_ipc::socket::Socket;
     let mut socket =
         Socket::connect_to(socket).map_err(|err| format!("cannot connect to niri IPC: {err}"))?;

@@ -1,20 +1,149 @@
 # better-shot
 
-Screenshot capture for niri with optional clipboard, non-interactive
-annotations, HDR handling, multiple output formats and JSON metadata. Part of
-the Better Desktop ecosystem; lives inside this repository so no new repository
-is created (excluded from niri's Cargo workspace).
+Screenshot capture and screen recording for niri with optional clipboard,
+non-interactive annotations, HDR handling, multiple output formats and JSON
+metadata. Part of the Better Desktop ecosystem; lives inside this repository so
+no new repository is created (excluded from niri's Cargo workspace).
 
 ## Modes
 
 - `ui` — open niri's interactive screenshot UI (the path is used by the UI).
 - `screen` — capture the focused output.
 - `window` — capture a window (`--id`, default focused).
+- `record` — record an output, region or (via a generic backend) a window.
+  See [Recording](#recording).
 
 Screenshots go to `$XDG_PICTURES_DIR/Screenshots` (or
 `$HOME/Pictures/Screenshots`) as `better-shot-<epoch>.<ext>`, or `--path`.
 `--copy`, annotations, `--metadata`, `--format` and `--hdr` are rejected with
 `ui` because that mode saves asynchronously and cannot be post-processed.
+
+## Recording
+
+`better-shot record` delegates recording to an existing tool instead of linking
+a capture or PipeWire stack. Backend selection is automatic unless overridden
+with `--backend`:
+
+| Backend | Capture source | Output | Region | Window | Audio | HDR tone-map | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `wf-recorder` | wlr-screencopy | `-o NAME` | `-g x,y WxH` | ✗ | `-a` / `--audio=DEV` | ✗ | Preferred when installed. |
+| `command` | user template | placeholders | placeholders | placeholders | placeholder | placeholder | Escape hatch for portal recorders. |
+| `portal` | xdg-desktop-portal ScreenCast | — | — | — | — | — | Probed via `gdbus`; **not implemented** (needs PipeWire fd negotiation). |
+
+`auto` picks `wf-recorder` when it is in `PATH` (or `BETTER_SHOT_WF_RECORDER`
+points at it), otherwise a configured command template. If neither is usable,
+the error lists every backend and why it is unavailable. `--backend=portal`
+always explains that better-shot does not hand-roll a PipeWire client.
+
+### Targets
+
+| Flag | Behaviour |
+| --- | --- |
+| *(none)* | Record niri's focused output (queried through `FocusedOutput` IPC). |
+| `--output=DP-1` | Record a named output. |
+| `--region=x,y,w,h` | Record a rectangle in compositor/physical pixels. Passed to wf-recorder as `x,y WxH`. |
+| `--window=ID` | Record one window. `wf-recorder` has no per-window wlr-screencopy target, so this requires `--backend=command`. `--window=focused` (or a bare `--window`) asks niri for the focused window. niri's own screenshot/screencast UI window is refused. |
+
+Target flags are mutually exclusive. `--region` needs a positive width and
+height. The default target requires `NIRI_SOCKET` (or `--socket`); pass
+`--output` to record without niri IPC.
+
+### Codecs, containers and audio
+
+| `--codec` | ffmpeg encoder | mp4 | mkv | webm |
+| --- | --- | --- | --- | --- |
+| `h264` | `libx264` | ✓ | ✓ | ✗ |
+| `hevc` | `libx265` | ✓ | ✓ | ✗ |
+| `av1` | `libaom-av1` | ✓ | ✓ | ✓ |
+| `auto` | `libx264`, or `libaom-av1` for webm | ✓ | ✓ | ✓ |
+
+`--format=mp4|mkv|webm` selects the container; without it the format comes from
+`--path` (`.mp4`, `.mkv`, `.webm`) and defaults to MP4. A path without an
+extension gets the format's extension appended. Paths and formats that
+disagree are rejected, and WebM with h264/hevc is rejected before starting a
+recorder.
+
+`--audio`:
+
+- `none` (default) — no audio.
+- `default` — the recorder's default input (`wf-recorder -a`).
+- `DEVICE` — a specific source name, e.g. `alsa_input.usb-mic`.
+- `sink:SINK` — record a sink monitor; `.monitor` is appended when absent.
+- `source:SOURCE` — explicit source; the prefix is stripped.
+
+### HDR
+
+Recording HDR is not the screenshot tone mapper. `--hdr=keep` (default) leaves
+capture to the backend. `wf-recorder`/wlr-screencopy has no HDR or tone-map
+switch, so `--hdr=tonemap` is rejected for it with a pointer to the command
+backend. On HDR-enabled outputs, `keep` records whatever the compositor hands
+to wlr-screencopy (often SDR-clipped); use a command backend with an ffmpeg
+`zscale`/`tonemap` filter if a real HDR-to-SDR conversion is required.
+
+Command templates receive the requested mode as `{hdr}` and
+`BETTER_SHOT_RECORD_HDR` (`keep` or `tonemap`).
+
+### Generic command backend
+
+`--command` (or `BETTER_SHOT_RECORD_COMMAND`) runs a shell command with `sh -c`.
+It must contain `{path}`; known placeholders are replaced with shell-quoted
+values, and unknown braces (such as `${HOME}`) are left untouched:
+
+```
+{path} {output} {region} {geometry} {window} {fps} {codec} {encoder}
+{format} {audio} {hdr} {backend}
+```
+
+The same values are exported as `BETTER_SHOT_RECORD_PATH`, `_OUTPUT`,
+`_REGION`, `_GEOMETRY`, `_WINDOW`, `_FPS`, `_CODEC`, `_ENCODER`, `_FORMAT`,
+`_AUDIO`, `_HDR` and `_BACKEND`. This backend is the only one that can record a
+window or perform HDR conversion, because the external recorder decides what it
+supports.
+
+Example with a portal-capable recorder:
+
+```sh
+better-shot record --backend=command --window=42 \
+  --command='my-portal-recorder --window {window} --output {path}'
+```
+
+### Lifecycle, state files and stopping
+
+Recordings default to
+`$XDG_VIDEOS_DIR/Recordings/better-shot-<epoch>.<ext>` (then
+`$HOME/Videos/Recordings`, then the temp dir). Override with `--path`.
+
+While a recording runs, better-shot writes
+`$XDG_STATE_HOME/better-shot/recordings/record-<pid>.json` (falling back to
+`~/.local/state/better-shot/recordings/`). The file records the PID, output
+path, target, backend, codec/format, start time, command line and log path. It
+is the PID file used by `--stop`:
+
+```sh
+better-shot record --output=DP-1 --duration=30 --json
+better-shot record --stop --json
+```
+
+- `--duration=SECONDS` stops the recorder gracefully: SIGINT first, then
+  SIGTERM and SIGKILL if it does not exit. `--fps=auto` (or `0`) leaves the
+  frame rate to the backend (wf-recorder then uses damage-driven frames).
+- SIGINT/SIGTERM sent to `better-shot` are forwarded to the recorder, and the
+  child gets `PR_SET_PDEATHSIG` so a killed parent does not normally leave an
+  orphan.
+- `--stop` finds the newest live state file, signals that PID, waits, and
+  removes the state and log. `--stop --dry-run` reports what it would stop
+  without signalling. Stale state files (dead PIDs) are pruned automatically.
+- A non-zero recorder exit is reported with a mapped reason (compositor
+  connection failure, denied/portal permission, missing dependency) plus the
+  last stderr lines and the preserved log path. A recorder that exits before
+  `--duration`, or exits successfully without writing a non-empty file, is
+  also an error.
+- `--json` prints the final path, backend, target, codec/encoder, format, fps,
+  audio, HDR mode, PID, wall-clock duration, how it stopped (`duration`,
+  `signal` or `backend`), the command and `dry_run`.
+
+`--dry-run` prints the resolved recorder command and output path without
+starting a process or touching the state directory.
 
 ## Output formats
 
@@ -143,17 +272,47 @@ better-shot window --id 42 --no-pointer --annotate
 better-shot screen --format webp --copy --metadata
 better-shot screen --path /tmp/shot.jpg --quality 92 --hdr=sdr
 better-shot screen --path /tmp/shot.png --dry-run
+
+better-shot record --output=DP-1 --duration=10
+better-shot record --region=100,200,1280,720 --fps=30 --codec=hevc --json
+better-shot record --output=DP-1 --format=mkv --audio=sink:speakers
+better-shot record --output=DP-1 --dry-run
+better-shot record --stop
+better-shot record --stop --json --dry-run
 ```
 
 `--socket PATH` overrides `$NIRI_SOCKET`. `--dry-run` prints the planned niri
 action without contacting niri, capturing, or writing metadata; HDR detection is
-therefore empty in dry runs.
+therefore empty in dry runs. For `record`, `--dry-run` prints the resolved
+recorder command instead of starting it.
 
 ## Limitations
 
+- The xdg-desktop-portal `ScreenCast` backend is detected and reported but not
+  implemented. Consuming its PipeWire stream needs file-descriptor negotiation;
+  use `wf-recorder` or a `--command` template for portal-capable recorders.
+- `wf-recorder` cannot record a single window and has no HDR tone-map option.
+  better-shot rejects those combinations rather than silently changing them.
+- HDR recording is compositor-defined. There is no recording-side tone map and
+  no HDR metadata validation; on HDR outputs `keep` usually captures clipped
+  SDR pixels.
+- Container validation only enforces WebM's AV1 requirement. Encoder names
+  (`libx264`, `libx265`, `libaom-av1`) must exist in the local ffmpeg/wf-recorder
+  build; otherwise the recorder's error is surfaced.
+- `--stop` stops the newest live recording. Several concurrent recordings are
+  possible, but older ones need to be stopped with a signal to their PID from
+  their state file. PID liveness checks cannot detect all PID reuse.
+- `--duration` is wall-clock time from spawn to exit. Shutdown latency and the
+  20 ms supervision poll make it approximate; encoded frame counts can differ.
+- The generic command backend runs through `sh -c`. Placeholders are safely
+  quoted, but the rest of the template is the user's responsibility and must
+  write to `{path}` itself.
+- niri currently renders its screenshot UI as an internal overlay rather than
+  an IPC-visible window. The refusal of `--window` targets that look like
+  niri's screenshot/screencast UI is therefore defence in depth.
 - HDR state is configured-mode detection plus `max_bpc`; niri IPC does not
   expose whether HDR is currently engaged.
-- niri always captures SDR, so `--hdr=tonemap` rejects current captures. The
+- niri always captures SDR, so `--hdr=tonemap` rejects current screenshots. The
   tone mapper is ready for high-bit-depth captures (and is unit-tested), but
   producing such a capture currently requires a niri change outside this app.
 - niri config `include` files are not scanned for `output`/`hdr` blocks.
@@ -171,5 +330,9 @@ cargo fmt --check
 cargo clippy --all-targets
 ```
 
-Tests are display-free and use synthetic images for HDR tone mapping, annotation
-geometry/pixels, format encoding, path generation, metadata and CLI parsing.
+Tests are display-free, GPU-free and compositor-free. Screenshot tests use
+synthetic images for HDR tone mapping, annotation geometry/pixels, format
+encoding, path generation, metadata and CLI parsing. Recording tests put fake
+`wf-recorder`/recorder scripts on a temporary `PATH`, and drive state-file
+start/stop, duration stops, early exits, JSON reports, backend selection and
+argument mapping without touching the real session.
