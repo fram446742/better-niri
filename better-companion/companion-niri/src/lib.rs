@@ -89,6 +89,15 @@ impl Compositor {
         reply.map_err(|err| format!("niri returned an error: {err}"))
     }
 
+    /// Sends one raw IPC request.
+    ///
+    /// Output configuration (`Request::Output`) is not an `Action`, so contexts
+    /// such as `idle.*` and `rotate.*` need a request-level entry point instead
+    /// of `compositor.action`.
+    pub fn request(&self, request: Request) -> Result<Response, String> {
+        self.send(request)
+    }
+
     fn to_value<T: serde::Serialize>(value: T) -> Result<Value, String> {
         serde_json::to_value(value).map_err(|err| format!("cannot encode niri response: {err}"))
     }

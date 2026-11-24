@@ -1,0 +1,13 @@
+[package]
+name = "companion-rotate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+companion-core.workspace = true
+companion-niri.workspace = true
+niri-ipc = { path = "../../niri-ipc" }
+serde.workspace = true
+serde_json.workspace = true

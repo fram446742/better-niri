@@ -2,7 +2,8 @@
 
 One daemon with bounded-context crates, reachable over a Unix socket. This is
 the first slice of the Better Desktop companion plan: the shared protocol, the
-parking/automation/hooks/system contexts, the daemon and `companionctl`.
+parking/automation/hooks/system/idle/rotate contexts, the daemon and
+`companionctl`.
 
 The workspace lives inside `better-niri` so no new repositories are created; it
 is excluded from the niri Cargo workspace and keeps its own lockfile/build.
@@ -18,6 +19,8 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-system` | `system.*` | Ping, status and paths |
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
 | `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` | Optional Phase C ecosystem adapters (commands + event hooks) |
+| `companion-idle` | `idle.*` | Activity clock, idle/suspend policy, inhibitors, logind and DPMS actions |
+| `companion-rotate` | `rotate.*` | Orientation source, hysteresis and niri output transform/position |
 | `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
 | `companion-niri` | `compositor.*`, `parker.*`, `windows.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement and native sticky |
 | `companion-niri` | `stage.*`, `scratchpad.*` | Staged windows and named scratchpads on the shared parking store |
@@ -426,6 +429,111 @@ Every config mutation and `swallow.reload` (which re-reads `swallow.json`)
 enforces the bound immediately. `swallow.status` reports the allowlist, ignore
 list, age window, restore preference, `max_pairs`, rules and live pairs.
 
+## Idle and suspend (`idle.*`)
+
+`idle` is a companion module, not a separate service. It owns a timeout policy,
+inhibitors and a pluggable activity clock; it does not require a display, and
+the default policy is disabled with no timeouts.
+
+```sh
+# Configure once; flat fields or a nested `policy` object both work.
+companionctl call idle configure '{
+  "policy": {
+    "enabled": true,
+    "timeouts": [
+      {"after_secs": 300, "action": "lock"},
+      {"after_secs": 600, "action": "dpms-off"},
+      {"after_secs": 1800, "action": "suspend"}
+    ],
+    "audio_inhibitor": true,
+    "fullscreen_inhibitor": true
+  }
+}'
+
+companionctl call idle status
+companionctl call idle explain '{"idle_secs": 700}'   # simulate, never executes
+companionctl call idle tick                           # run due steps once
+companionctl call idle inhibit '{"reason":"meeting","duration_secs":3600}'
+companionctl call idle uninhibit
+companionctl call idle reset                          # activity now
+```
+
+`idle.tick` is the only action that executes a timeout. It runs a due step only
+when the policy is enabled, not in `dry_run`, and no inhibitor is active; fired
+steps are remembered by `(after_secs, action)` so a repeated tick is
+idempotent. `idle.reset` clears that set, resets the activity clock and powers
+monitors back on if `dpms-off` had fired. `idle.status`/`idle.explain` never
+execute and report each timeout as `pending`, `due`, `inhibited` or `fired`.
+
+- **Activity**: the daemon marks every niri focus/window/workspace event as
+  activity and `idle.reset` does so explicitly. The clock starts at daemon
+  start; it is deliberately not persisted across restarts.
+- **Inhibitors**: audio (a non-corked PulseAudio/PipeWire sink input via
+  `pactl`), fullscreen (a focused window covering an output) and user-requested
+  (persisted, optionally timed). niri IPC has no `is_fullscreen` flag, so the
+  fullscreen check is a tile/output-size heuristic. A probe that cannot run is
+  `unavailable` and does **not** block the policy; `audio_command` and
+  `fullscreen_command` replace the built-ins (exit 0 active, 1 free, other
+  unavailable).
+- **Actions**: `lock` and `suspend` shell out to logind (`busctl` first, then
+  `loginctl lock-sessions`/`systemctl suspend`). `dpms-off` uses niri's
+  `PowerOffMonitors`; resuming sends `PowerOnMonitors`. `command` runs its own
+  timeout command only when that timeout is configured.
+- **Dry run**: set `"dry_run": true` or call `idle.tick` on a disabled policy;
+  it reports the due steps and `skipped` reason without touching the session.
+  `logind_idle_hint` adds logind's boolean `IdleHint` to status; it never resets
+  the local idle clock.
+
+The D-Bus integration is a shell-out on purpose: the cached `dbus` crate needs
+libdbus at build time. If `busctl`, `loginctl`, `systemctl` or `pactl` is
+missing, the corresponding step/probe degrades to an error or `unavailable`
+instead of failing the daemon.
+
+The daemon calls `idle.tick` every 5 seconds (`--once` skips timers). Policy is
+stored in `$XDG_STATE_HOME/better-companion/idle.json`; only the policy, user
+inhibitor, fired set and DPMS flag are persisted. `--no-track` disables niri
+events, so only `idle.reset` marks activity in that mode.
+
+## Auto-rotation (`rotate.*`)
+
+`rotate` maps an accelerometer orientation to a niri output transform (and an
+optional position). It is disabled by default and never applies anything until
+`tick` runs on an enabled, unlocked policy.
+
+```sh
+companionctl call rotate configure '{
+  "enabled": true,
+  "output": "eDP-1",
+  "hysteresis_ms": 1000,
+  "position": [0, 0]
+}'
+companionctl call rotate status
+companionctl call rotate explain
+companionctl call rotate tick
+companionctl call rotate lock            # pause auto-rotation
+companionctl call rotate unlock
+companionctl call rotate set '{"orientation":"left-up"}'
+companionctl call rotate set '{"transform":"270","output":"DP-2"}'
+```
+
+The orientation source is `sensor_command` when configured; otherwise
+`iio-sensor-proxy` is read through `busctl`. A missing command/proxy reports
+`source-unavailable` in status/tick instead of failing the daemon. Orientation
+values are `normal`, `left-up`, `right-up`, `bottom-up`, `left-down` and
+`right-down`; the mapping is fixed (`normal`→`normal`, `left-up`→`90`,
+`bottom-up`→`180`, `right-up`→`270`, `left-down`→`flipped-90`,
+`right-down`→`flipped-270`). Use `rotate.set` with a raw transform for a
+different convention.
+
+`rotate.tick` debounces: a new orientation must stay stable for `hysteresis_ms`
+before it is applied, and a change inside the window restarts the timer.
+Status/explain only observe and never mutate the debounce state. Auto-apply
+requires `enabled`, `lock` off, a configured `output` and a stable orientation;
+manual `rotate.set` bypasses `enabled`/`lock` but not `dry_run`. The last applied
+transform is persisted in `rotate.json`; the debounce timer is process-local.
+The daemon calls `rotate.tick` every second (`--once` skips timers), so the
+configured hysteresis is evaluated without a separate service.
+
 ## Daemon robustness
 
 The socket server keeps serving after bad input. Malformed JSON, unknown request
@@ -462,11 +570,13 @@ deterministic order.
 - `swallow.enable|disable|status|list|restore|add-terminal|remove-terminal|
   add-rule|remove-rule|set-ignore|configure|reconcile|reload`.
 - `rules.set|remove|list|explain|apply|run`.
+- `idle.status|explain|tick|configure|enable|disable|inhibit|uninhibit|reset`.
+- `rotate.status|explain|tick|configure|enable|disable|lock|unlock|set|reset`.
 
 ## Development
 
 ```sh
 cd better-companion
 cargo test --workspace
-cargo clippy --workspace --all-targets
+cargo clippy --all-targets
 ```

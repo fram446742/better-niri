@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 
-use companion_daemon::{bind, build_registry_with_parking, serve_stream, socket_default};
+use companion_core::{Registry, Request, Response};
+use companion_daemon::{bind, build_registry_with_activity, serve_stream, socket_default};
 
 fn usage() -> &'static str {
     "better-companion [--socket PATH] [--once] [--help]\n\n\
-     One daemon serving the parking, automation, hooks and system namespaces over a Unix socket.\n\
+     One daemon serving parking, automation, hooks, system, windows, idle and rotate over a Unix socket.\n\
      --socket PATH  Override the socket path (default: $XDG_RUNTIME_DIR/better-companion.sock)\n\
      --once         Serve a single connection and exit (useful for tests)\n\
      --no-track     Do not subscribe to the niri event stream\n"
@@ -50,14 +53,21 @@ fn main() -> ExitCode {
 }
 
 fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()> {
-    let (registry, parking) = build_registry_with_parking(socket)?;
+    let activity = companion_idle::ActivityClock::new();
+    let (registry, parking) = build_registry_with_activity(socket, activity.clone())?;
     if track && let Some(niri_socket) = companion_niri::socket_from_env() {
         let parking = parking.clone();
         let swallow = companion_niri::Swallow::from_state_dir(
             parking.clone(),
             companion_niri::Compositor::from_env(),
         )?;
-        std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking, swallow));
+        let tracker_socket = niri_socket.clone();
+        std::thread::spawn(move || {
+            companion_niri::run_tracker(tracker_socket, parking, swallow);
+        });
+        // A second, read-only subscription marks focus/window/workspace events
+        // as idle activity. niri serves each connection independently.
+        std::thread::spawn(move || companion_idle::run_activity_stream(niri_socket, activity));
     }
     let registry = std::sync::Arc::new(registry);
     let listener = bind(socket)?;
@@ -71,6 +81,12 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
         let (stream, _) = listener.accept()?;
         return serve_stream(stream, &registry);
     }
+
+    // Timer loops make idle timeouts and auto-rotation autonomous. Both
+    // contexts are inert until configured; a disabled policy returns before
+    // probing, so these loops stay cheap.
+    spawn_ticker(registry.clone(), "idle", "tick", Duration::from_secs(5));
+    spawn_ticker(registry.clone(), "rotate", "tick", Duration::from_secs(1));
 
     for stream in listener.incoming() {
         match stream {
@@ -86,4 +102,26 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
         }
     }
     Ok(())
+}
+
+/// Calls one namespace action on an interval, logging only errors.
+fn spawn_ticker(
+    registry: Arc<Registry>,
+    namespace: &'static str,
+    action: &'static str,
+    interval: Duration,
+) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(interval);
+            let response = registry.handle(Request::Call {
+                namespace: namespace.to_owned(),
+                action: action.to_owned(),
+                params: serde_json::json!({}),
+            });
+            if let Response::Error { message } = response {
+                eprintln!("better-companion: {namespace}.{action}: {message}");
+            }
+        }
+    });
 }
