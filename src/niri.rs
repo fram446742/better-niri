@@ -7418,9 +7418,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let mut elements = Vec::new();
         self.render(ctx, output, include_pointer, &mut |elem| {
@@ -7464,11 +7467,20 @@ impl Niri {
     }
 
     #[cfg(feature = "xdp-gnome-screencast")]
-    fn refresh_screen_cast_picker_display_previews(
+    fn refresh_screen_cast_picker_display_previews<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         host_output: &Output,
-    ) {
+    ) where
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+    {
         if !self.screen_cast_picker.is_host_output(host_output) {
             return;
         }
@@ -7644,9 +7656,12 @@ impl Niri {
         // backends (GLES and the TTY renderer), not for every `NiriRenderer`.
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::render");
 
@@ -7659,11 +7674,8 @@ impl Niri {
         }
 
         #[cfg(feature = "xdp-gnome-screencast")]
-        if rendering_output
-            && self.screen_cast_picker.is_visible()
-            && let Some(renderer) = ctx.renderer.as_gles_renderer()
-        {
-            self.refresh_screen_cast_picker_display_previews(renderer, output);
+        if rendering_output && self.screen_cast_picker.is_visible() {
+            self.refresh_screen_cast_picker_display_previews(ctx.renderer, output);
         }
 
         // Single-host gating: only the active output's own render ever refreshes panel sources
@@ -7775,9 +7787,12 @@ impl Niri {
     ) where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         // See `IN_RENDER_INNER` / `update_panel_sources`: panel content prepasses must run before
         // this, never nested inside it.
@@ -8663,6 +8678,7 @@ impl Niri {
     ) where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
@@ -10192,9 +10208,12 @@ impl Niri {
         R: NiriRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
         WindowCastRenderElements<R>: RenderElement<R>,
         WindowCaptureRenderElement<R>: RenderElement<R>,
@@ -10250,9 +10269,12 @@ impl Niri {
         R: NiriRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let _span = tracy_client::span!("Niri::render_for_screencopy_with_damage");
@@ -10336,9 +10358,12 @@ impl Niri {
         R: NiriRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let _span = tracy_client::span!("Niri::render_for_screencopy");
@@ -10447,9 +10472,12 @@ impl Niri {
         R: NiriRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let Some(mode) = output.current_mode() else {
@@ -10981,9 +11009,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::capture_pick_color_region");
 
@@ -11028,9 +11059,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
     {
         self.global_space.outputs().cloned().filter_map(|output| {
@@ -11112,9 +11146,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         self.screenshot_with_reply(renderer, output, write_to_disk, include_pointer, path, None)
     }
@@ -11131,9 +11168,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         self.screenshot_with_replies(
             renderer,
@@ -11159,9 +11199,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot");
 
@@ -11216,6 +11259,7 @@ impl Niri {
     ) -> anyhow::Result<()>
     where
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         WindowScreenshotRenderElement<R>: RenderElement<R>,
@@ -11245,6 +11289,7 @@ impl Niri {
     ) -> anyhow::Result<()>
     where
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         WindowScreenshotRenderElement<R>: RenderElement<R>,
@@ -11275,6 +11320,7 @@ impl Niri {
     ) -> anyhow::Result<()>
     where
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         WindowScreenshotRenderElement<R>: RenderElement<R>,
@@ -11379,9 +11425,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot_area");
 
@@ -11622,9 +11671,12 @@ impl Niri {
     where
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot_all_outputs");
@@ -12299,9 +12351,12 @@ impl Niri {
         R: NiriRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::do_screen_transition_vulkan");
 

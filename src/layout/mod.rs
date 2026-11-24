@@ -7984,6 +7984,7 @@ impl<W: LayoutElement> Layout<W> {
     ) where
         LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
         PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+        TileRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
     {
         if self.update_render_elements_time != self.clock.now() {
             error!("clock moved between updating render elements and rendering");

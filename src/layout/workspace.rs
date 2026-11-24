@@ -3547,6 +3547,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         // The tiles above the floating windows may have rendered already.
         let part = if layer.is_normal() && self.tiles_above_floating() {
@@ -3576,6 +3577,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         if !self.tiles_above_floating() {
             return;
@@ -3607,6 +3609,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         let base_visible = self.is_floating_visible();
 
@@ -3670,6 +3673,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) where
         LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
         PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         let scale = self.scale.fractional_scale();
         let overview_zoom = base_xray_pos.zoom;
