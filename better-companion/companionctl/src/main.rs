@@ -11,6 +11,7 @@ fn usage() -> &'static str {
     "companionctl [--socket PATH] <command>\n\n\
      Commands:\n\
        list                                   List namespaces and actions\n\
+       describe                               Protocol version and full action schema\n\
        status                                 Daemon status\n\
        call <namespace> <action> [json]       Call an action (json defaults to {{}})\n"
 }
@@ -18,6 +19,7 @@ fn usage() -> &'static str {
 fn build_request(args: &[String]) -> Result<Request, String> {
     match args {
         [command] if command == "list" => Ok(Request::List),
+        [command] if command == "describe" => Ok(Request::Describe),
         [command] if command == "status" => Ok(Request::Status),
         [command, namespace, action] if command == "call" => Ok(Request::Call {
             namespace: namespace.clone(),

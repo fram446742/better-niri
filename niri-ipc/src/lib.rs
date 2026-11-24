@@ -68,6 +68,12 @@ pub mod state;
 pub enum Request {
     /// Request the version string for the running niri instance.
     Version,
+    /// Request the compositor capabilities for feature detection.
+    ///
+    /// Companions should use this instead of probing individual actions: each field reports
+    /// whether the running build supports that feature. Fields may be added in the future and
+    /// older clients ignore unknown ones.
+    Capabilities,
     /// Request information about connected outputs.
     Outputs,
     /// Request information about workspaces.
@@ -171,6 +177,8 @@ pub enum Response {
     Handled,
     /// The version string for the running niri instance.
     Version(String),
+    /// Compositor capabilities for feature detection.
+    Capabilities(Capabilities),
     /// Information about connected outputs.
     ///
     /// Map from output name to output info.
@@ -220,6 +228,87 @@ pub enum Response {
 pub struct Overview {
     /// Whether the overview is currently open.
     pub is_open: bool,
+}
+
+/// Features the running compositor build supports.
+///
+/// This is the capability query companions use to degrade gracefully on a stock niri. Every field
+/// reports support for the running build (feature flags and always-on core features), not whether
+/// a particular output or session currently uses it.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct Capabilities {
+    /// Native sticky windows (`open-sticky`, `toggle-window-sticky`, ...).
+    pub sticky: bool,
+    /// Runtime-created virtual outputs.
+    pub virtual_outputs: bool,
+    /// Isolated outputs (compositor chrome kept off them).
+    pub isolated_outputs: bool,
+    /// Hidden workspaces.
+    pub hidden_workspaces: bool,
+    /// Window minimisation.
+    pub window_minimize: bool,
+    /// Grid overview.
+    pub grid_overview: bool,
+    /// Screen magnifier.
+    pub magnifier: bool,
+    /// Carousel overview.
+    pub carousel: bool,
+    /// Vertical main axis.
+    pub vertical_axis: bool,
+    /// Multi-action binds and `Request::Actions`.
+    pub multi_action_binds: bool,
+    /// Per-keyboard configuration blocks.
+    pub per_keyboard_config: bool,
+    /// Floating windows above fullscreen.
+    pub float_above_fullscreen: bool,
+    /// SVG/scalable cursor rendering.
+    pub svg_cursors: bool,
+    /// Shake-to-enlarge cursor effect.
+    pub shake_to_enlarge: bool,
+    /// Global/region/output/window post-processing shaders.
+    pub shaders: bool,
+    /// Decoration light.
+    pub decoration_light: bool,
+    /// Liquid-glass background effect.
+    pub liquid_glass: bool,
+    /// HDR output signalling and colour management.
+    pub hdr: bool,
+    /// Vulkan renderer support in this build.
+    pub vulkan: bool,
+    /// Tearing control (`wp_tearing_control_v1`).
+    pub tearing: bool,
+    /// FIFO (`wp_fifo_v1`).
+    pub fifo: bool,
+    /// Explicit sync (`linux-drm-syncobj-v1`).
+    pub explicit_sync: bool,
+    /// Pointer warp (`wp_pointer_warp_v1`).
+    pub pointer_warp: bool,
+    /// Asynchronous page flips.
+    pub async_flips: bool,
+    /// wlr-screencopy.
+    pub screencopy: bool,
+    /// ext-image-copy-capture.
+    pub ext_image_copy_capture: bool,
+    /// PipeWire screencasting.
+    pub screencast: bool,
+    /// Interactive and IPC screenshots.
+    pub screenshot: bool,
+    /// Pick-colour overlay and IPC.
+    pub pick_color: bool,
+    /// Agent seat for automation.
+    pub agent_seat: bool,
+    /// KDE blur protocol (`org_kde_kwin_blur`).
+    pub kde_blur: bool,
+    /// KDE screenshot D-Bus interface.
+    pub kde_screenshot: bool,
+    /// KDE output-order interface.
+    pub kde_output_order: bool,
+    /// GNOME screencast D-Bus path.
+    pub xdp_gnome_screencast: bool,
+    /// `org.better.portal.ScreenCastSelection` handshake used by better-portal.
+    pub portal_screencast_selection: bool,
 }
 
 /// Color picked from the screen.
@@ -2661,6 +2750,43 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::FocusColumnRight {}));
         assert!(matches!(actions[1], Action::CloseWindow { id: None }));
+    }
+
+    #[test]
+    fn capabilities_request_and_response_round_trip() {
+        let request = Request::Capabilities;
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(json, "\"Capabilities\"");
+        assert!(matches!(
+            serde_json::from_str::<Request>(&json).unwrap(),
+            Request::Capabilities
+        ));
+
+        let capabilities = Capabilities {
+            sticky: true,
+            vulkan: true,
+            agent_seat: false,
+            ..Capabilities::default()
+        };
+        let response = Response::Capabilities(capabilities);
+        let json = serde_json::to_string(&response).unwrap();
+        let back: Response = serde_json::from_str(&json).unwrap();
+        let Response::Capabilities(back) = back else {
+            panic!("expected Capabilities, got {back:?}");
+        };
+        assert!(back.sticky);
+        assert!(back.vulkan);
+        assert!(!back.agent_seat);
+    }
+
+    #[test]
+    fn capabilities_default_when_fields_are_missing() {
+        // Older clients must keep working when the compositor adds fields; the struct-level
+        // `serde(default)` fills them from `Default`.
+        let back: Capabilities = serde_json::from_str("{\"sticky\": true}").unwrap();
+        assert!(back.sticky);
+        assert!(!back.vulkan);
+        assert!(!back.portal_screencast_selection);
     }
 
     #[test]

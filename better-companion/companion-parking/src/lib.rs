@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use companion_core::{ActionInfo, Context, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, load_json, save_json};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -111,11 +111,21 @@ impl Context for Parking {
 
     fn actions(&self) -> Vec<ActionInfo> {
         vec![
-            ActionInfo::new("park", "Park `value` under `id` in `lot`"),
-            ActionInfo::new("unpark", "Remove and return `id` from `lot`"),
-            ActionInfo::new("list", "List parked entries, optionally for one `lot`"),
+            ActionInfo::new("park", "Park `value` under `id` in `lot`").with_params([
+                ParamInfo::string("id", true, "entry key"),
+                ParamInfo::object("value", false, "JSON value to store (defaults to null)"),
+                ParamInfo::string("lot", false, "lot name (defaults to `default`)"),
+            ]),
+            ActionInfo::new("unpark", "Remove and return `id` from `lot`").with_params([
+                ParamInfo::string("id", true, "entry key"),
+                ParamInfo::string("lot", false, "lot name (defaults to `default`)"),
+            ]),
+            ActionInfo::new("list", "List parked entries, optionally for one `lot`")
+                .with_params([ParamInfo::string("lot", false, "filter by lot name")]),
             ActionInfo::new("lots", "List lot names"),
-            ActionInfo::new("clear", "Clear one `lot`, or every lot when absent"),
+            ActionInfo::new("clear", "Clear one `lot`, or every lot when absent").with_params([
+                ParamInfo::string("lot", false, "lot to clear; all when absent"),
+            ]),
         ]
     }
 

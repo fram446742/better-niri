@@ -283,10 +283,53 @@ async fn handle_client(ctx: ClientCtx, stream: Async<'static, UnixStream>) -> an
     }
 }
 
+/// Reports the features this build supports. Companions query this once instead of probing
+/// actions, so they can degrade gracefully on a stock niri or a reduced build.
+pub fn capabilities() -> niri_ipc::Capabilities {
+    niri_ipc::Capabilities {
+        sticky: true,
+        virtual_outputs: true,
+        isolated_outputs: true,
+        hidden_workspaces: true,
+        window_minimize: true,
+        grid_overview: cfg!(feature = "navigation"),
+        magnifier: cfg!(feature = "navigation"),
+        carousel: cfg!(feature = "navigation"),
+        vertical_axis: true,
+        multi_action_binds: true,
+        per_keyboard_config: true,
+        float_above_fullscreen: true,
+        svg_cursors: cfg!(feature = "cursor"),
+        shake_to_enlarge: cfg!(feature = "cursor"),
+        shaders: cfg!(feature = "effects"),
+        decoration_light: cfg!(feature = "effects"),
+        liquid_glass: cfg!(feature = "effects"),
+        hdr: true,
+        vulkan: cfg!(feature = "vulkan"),
+        tearing: true,
+        fifo: true,
+        explicit_sync: true,
+        pointer_warp: true,
+        async_flips: true,
+        screencopy: true,
+        ext_image_copy_capture: true,
+        screencast: true,
+        screenshot: true,
+        pick_color: true,
+        agent_seat: cfg!(feature = "agent"),
+        kde_blur: cfg!(feature = "kde"),
+        kde_screenshot: cfg!(feature = "kde"),
+        kde_output_order: cfg!(feature = "kde"),
+        xdp_gnome_screencast: cfg!(feature = "xdp-gnome-screencast"),
+        portal_screencast_selection: cfg!(feature = "dbus"),
+    }
+}
+
 async fn process(ctx: &ClientCtx, request: Request) -> Reply {
     let response = match request {
         Request::ReturnError => return Err(String::from("example compositor error")),
         Request::Version => Response::Version(version()),
+        Request::Capabilities => Response::Capabilities(capabilities()),
         Request::Outputs => {
             let ipc_outputs = ctx.ipc_outputs.lock().unwrap().clone();
             let outputs = ipc_outputs.values().cloned().map(|o| (o.name.clone(), o));
@@ -1281,6 +1324,20 @@ fn ipc_active_window_id(ws: &crate::layout::workspace::Workspace<Mapped>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capabilities_report_the_compiled_modules() {
+        let capabilities = capabilities();
+        assert!(capabilities.sticky);
+        assert!(capabilities.hdr);
+        assert!(capabilities.tearing);
+        assert!(capabilities.explicit_sync);
+        assert!(capabilities.screenshot);
+        assert_eq!(capabilities.agent_seat, cfg!(feature = "agent"));
+        assert_eq!(capabilities.shaders, cfg!(feature = "effects"));
+        assert_eq!(capabilities.vulkan, cfg!(feature = "vulkan"));
+        assert_eq!(capabilities.svg_cursors, cfg!(feature = "cursor"));
+    }
 
     #[test]
     fn valid_action_passes_validation() {

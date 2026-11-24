@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use companion_core::{
-    AUTO_WINDOWS, AUTO_WORKSPACES, ActionInfo, Context, Step, load_json, save_json,
+    AUTO_WINDOWS, AUTO_WORKSPACES, ActionInfo, Context, ParamInfo, Step, load_json, save_json,
 };
 use companion_parking::Parking;
 use regex::RegexBuilder;
@@ -382,18 +382,44 @@ impl Context for Rules {
 
     fn actions(&self) -> Vec<ActionInfo> {
         vec![
-            ActionInfo::new("set", "Define/replace `name` with `match` and `steps`"),
-            ActionInfo::new("remove", "Delete rule `name`"),
+            ActionInfo::new("set", "Define/replace `name` with `match` and `steps`")
+                .with_params([
+                    ParamInfo::string("name", true, "rule name"),
+                    ParamInfo::object("match", false, "window/workspace matcher"),
+                    ParamInfo::array("steps", true, "actions to run: {namespace, action, params}"),
+                ])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("remove", "Delete rule `name`").with_params([ParamInfo::string(
+                "name",
+                true,
+                "rule name",
+            )]),
             ActionInfo::new("list", "List rules"),
             ActionInfo::new(
                 "explain",
                 "Matching rules for `window`, with matcher and window state",
-            ),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to all",
+            )]),
             ActionInfo::new(
                 "apply",
                 "Show which rules match and their step counts (no execution)",
-            ),
-            ActionInfo::new("run", "Execute the steps of matching rules"),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to all",
+            )]),
+            ActionInfo::new("run", "Execute the steps of matching rules")
+                .with_params([ParamInfo::integer(
+                    "window",
+                    false,
+                    "window id, defaults to all",
+                )])
+                .with_permissions(&["niri", "shell"]),
         ]
     }
 

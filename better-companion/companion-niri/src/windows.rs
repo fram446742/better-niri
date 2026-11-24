@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use niri_ipc::{Action, Request, Response, Window, Workspace, WorkspaceReferenceArg};
 use serde_json::{Value, json};
 
@@ -312,45 +312,126 @@ impl Context for Windows {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
+        let matchers = || {
+            [
+                ParamInfo::string("app_id", false, "case-insensitive app-id substring"),
+                ParamInfo::string("title", false, "case-insensitive title substring"),
+                ParamInfo::integer("workspace", false, "workspace id"),
+                ParamInfo::string("workspace_name", false, "workspace name"),
+                ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
+                ParamInfo::string("output", false, "output name"),
+            ]
+        };
+        let mut run_or_raise = matchers().to_vec();
+        run_or_raise.push(ParamInfo::array(
+            "spawn",
+            false,
+            "command to spawn when no match",
+        ));
+        run_or_raise.push(ParamInfo::string(
+            "spawn_sh",
+            false,
+            "shell command to spawn when no match",
+        ));
+
+        let mut find = matchers().to_vec();
+        find.retain(|param| param.name != "workspace" && param.name != "output");
+        find.push(ParamInfo::integer("workspace", false, "workspace id"));
+        find.push(ParamInfo::string("output", false, "output name"));
+
+        let mut move_to_workspace = vec![
+            ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+            ParamInfo::string(
+                "workspace",
+                false,
+                "workspace id as a number, name, or `name:INDEX`",
+            ),
+            ParamInfo::string("workspace_name", false, "workspace name"),
+            ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
+        ];
+        move_to_workspace.push(ParamInfo::boolean(
+            "focus",
+            false,
+            "focus the target workspace (follow always does)",
+        ));
+
+        let target = || {
+            [
+                ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+                ParamInfo::string("output", true, "output name"),
+            ]
+        };
+
         vec![
             ActionInfo::new(
                 "run-or-raise",
                 "Focus a matching window or spawn `spawn`/`spawn_sh`",
-            ),
+            )
+            .with_params(run_or_raise)
+            .with_permissions(&["niri", "shell"]),
             ActionInfo::new(
                 "singleton",
                 "Alias of run-or-raise for single-instance apps",
-            ),
+            )
+            .with_params(matchers())
+            .with_permissions(&["niri", "shell"]),
             ActionInfo::new(
                 "find",
                 "Return matching windows without acting; supports `workspace_name`, \
                  `workspace_idx` and `output`",
-            ),
+            )
+            .with_params(find)
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "move-to-workspace",
                 "Move `window` (or the focused window) to a workspace id, name or index",
-            ),
+            )
+            .with_params(move_to_workspace)
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "follow-to-workspace",
                 "Move a window and focus its target workspace",
-            ),
+            )
+            .with_params([
+                ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+                ParamInfo::string("workspace", false, "workspace id, name or `name:INDEX`"),
+                ParamInfo::string("workspace_name", false, "workspace name"),
+                ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "move-to-output",
                 "Move `window` (or the focused window) to output `output`",
-            ),
-            ActionInfo::new("focus-output", "Focus output `output`"),
+            )
+            .with_params(target())
+            .with_permissions(&["niri"]),
+            ActionInfo::new("focus-output", "Focus output `output`")
+                .with_params([ParamInfo::string("output", true, "output name")])
+                .with_permissions(&["niri"]),
             ActionInfo::new(
                 "toggle-sticky",
                 "Toggle niri's native sticky flag on `window` (or the focused window)",
-            ),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "set-sticky",
                 "Set the native sticky flag on a window to `sticky`; no action when unchanged",
-            ),
+            )
+            .with_params([
+                ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+                ParamInfo::boolean("sticky", true, "desired sticky state"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "list-sticky",
                 "List windows with the native sticky flag in numeric id order",
-            ),
+            )
+            .with_permissions(&["niri"]),
         ]
     }
 

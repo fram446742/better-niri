@@ -34,11 +34,23 @@ One JSON request per line, one JSON response per line:
 
 ```json
 {"kind":"list"}
+{"kind":"describe"}
 {"kind":"call","namespace":"parking","action":"park","params":{"id":"win-1","value":{"title":"editor"}}}
 {"kind":"status"}
 ```
 
-Responses are tagged the same way: `contexts`, `value`, `status` or `error`.
+Responses are tagged the same way: `contexts`, `value`, `status`, `description`
+or `error`. `describe` reports the protocol name (`better-companion`), its
+version and every action with:
+
+- `owner`: the namespace that owns it;
+- `params`: argument names, JSON kinds, required flags and descriptions;
+- `permissions`: `niri`, `shell` or empty, so clients can gate automation;
+- `available`: false when the context cannot work in this build or host.
+
+Companions use `compositor.capabilities` to read the compositor's feature
+report (`sticky`, `virtual_outputs`, `shaders`, `hdr`, `vulkan`, ...), which is
+the same data as `niri msg capabilities --json`.
 The default socket is `$XDG_RUNTIME_DIR/better-companion.sock` (mode `0600`).
 State is persisted under `$XDG_STATE_HOME/better-companion/`.
 
@@ -50,6 +62,7 @@ better-companion --socket PATH   # serve on PATH
 better-companion --once          # serve one connection, for tests
 
 companionctl list
+companionctl describe
 companionctl status
 companionctl call system ping
 companionctl call parking park '{"id":"win-1","value":{"title":"editor"}}'
