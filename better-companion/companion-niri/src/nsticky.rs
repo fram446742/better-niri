@@ -10,7 +10,7 @@
 //! better-companion uses named slots and explicit window ids. Unsupported verbs
 //! return the usual unknown-action error instead of pretending to work.
 
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use serde_json::Value;
 
 use crate::{Scratchpad, Stage, Windows};
@@ -39,31 +39,71 @@ impl Context for Nsticky {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
-        vec![
+        let mut actions = vec![
             ActionInfo::new(
                 "sticky.add",
                 "Alias of `windows.set-sticky` with `sticky: true`",
-            ),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "sticky.remove",
                 "Alias of `windows.set-sticky` with `sticky: false`",
-            ),
-            ActionInfo::new("sticky.toggle-active", "Alias of `windows.toggle-sticky`"),
-            ActionInfo::new("sticky.list", "Alias of `windows.list-sticky`"),
-            ActionInfo::new("stage.add", "Alias of `stage.stage`"),
-            ActionInfo::new("stage.remove", "Alias of `stage.activate`"),
-            ActionInfo::new("stage.restore", "Alias of `stage.activate`"),
-            ActionInfo::new("stage.toggle-active", "Alias of `stage.toggle`"),
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
+            ActionInfo::new("sticky.toggle-active", "Alias of `windows.toggle-sticky`")
+                .with_params([ParamInfo::integer("window", false, "window id")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("sticky.list", "Alias of `windows.list-sticky`")
+                .with_permissions(&["niri"]),
+            ActionInfo::new("stage.add", "Alias of `stage.stage`")
+                .with_params([ParamInfo::integer("window", false, "window id")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("stage.remove", "Alias of `stage.activate`")
+                .with_params([ParamInfo::integer("window", true, "staged window id")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("stage.restore", "Alias of `stage.activate`")
+                .with_params([ParamInfo::integer("window", true, "staged window id")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("stage.toggle-active", "Alias of `stage.toggle`")
+                .with_params([ParamInfo::integer("window", false, "window id")])
+                .with_permissions(&["niri"]),
             ActionInfo::new("stage.list", "Alias of `stage.list`"),
             ActionInfo::new(
                 "scratchpad.add",
                 "Alias of `scratchpad.assign` (named slots, not a LIFO stack)",
-            ),
-            ActionInfo::new("scratchpad.restore", "Alias of `scratchpad.show`"),
-            ActionInfo::new("scratchpad.toggle", "Alias of `scratchpad.toggle`"),
+            )
+            .with_params([
+                ParamInfo::string("name", false, "slot name"),
+                ParamInfo::integer("window", false, "window id"),
+            ])
+            .with_permissions(&["niri"]),
+            ActionInfo::new("scratchpad.restore", "Alias of `scratchpad.show`")
+                .with_params([ParamInfo::string("name", false, "slot name")])
+                .with_permissions(&["niri"]),
+            ActionInfo::new("scratchpad.toggle", "Alias of `scratchpad.toggle`")
+                .with_params([ParamInfo::string("name", false, "slot name")])
+                .with_permissions(&["niri"]),
             ActionInfo::new("scratchpad.list", "Alias of `scratchpad.list`"),
-            ActionInfo::new("scratchpad.remove", "Alias of `scratchpad.remove`"),
-        ]
+            ActionInfo::new("scratchpad.remove", "Alias of `scratchpad.remove`")
+                .with_params([ParamInfo::string("name", false, "slot name")])
+                .with_permissions(&["niri"]),
+        ];
+        if !self.windows.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {

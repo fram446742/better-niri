@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use companion_core::{ActionInfo, Context, Step, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, Step, load_json, save_json};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -40,6 +40,36 @@ impl Automation {
     fn save(&self, state: &State) -> Result<(), String> {
         save_json(&self.path, state).map_err(|err| format!("cannot save automation state: {err}"))
     }
+
+    /// Merges config-file sequences into stored state.
+    pub fn apply_config(&self, sequences: &BTreeMap<String, Vec<Step>>) -> Result<usize, String> {
+        for (name, steps) in sequences {
+            if name.trim().is_empty() {
+                return Err("automation sequence needs a non-empty name".to_owned());
+            }
+            if steps.is_empty() {
+                return Err(format!(
+                    "automation sequence `{name}` needs at least one step"
+                ));
+            }
+            for step in steps {
+                if step.namespace.trim().is_empty() || step.action.trim().is_empty() {
+                    return Err(format!(
+                        "automation sequence `{name}` has a step without namespace/action"
+                    ));
+                }
+            }
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "automation state lock poisoned".to_owned())?;
+        for (name, steps) in sequences {
+            state.sequences.insert(name.clone(), steps.clone());
+        }
+        self.save(&state)?;
+        Ok(sequences.len())
+    }
 }
 
 fn steps_from(params: &Value) -> Result<Vec<Step>, String> {
@@ -63,11 +93,24 @@ impl Context for Automation {
 
     fn actions(&self) -> Vec<ActionInfo> {
         vec![
-            ActionInfo::new("set", "Define/replace `name` with a `steps` array"),
-            ActionInfo::new("remove", "Delete sequence `name`"),
+            ActionInfo::new("set", "Define/replace `name` with a `steps` array").with_params([
+                ParamInfo::string("name", true, "sequence name"),
+                ParamInfo::array("steps", true, "ordered {namespace, action, params} steps"),
+            ]),
+            ActionInfo::new("remove", "Delete sequence `name`").with_params([ParamInfo::string(
+                "name",
+                true,
+                "sequence name",
+            )]),
             ActionInfo::new("list", "List sequence names"),
-            ActionInfo::new("get", "Return the steps of `name`"),
-            ActionInfo::new("run", "Execute sequence `name` through the registry"),
+            ActionInfo::new("get", "Return the steps of `name`").with_params([ParamInfo::string(
+                "name",
+                true,
+                "sequence name",
+            )]),
+            ActionInfo::new("run", "Execute sequence `name` through the registry")
+                .with_params([ParamInfo::string("name", true, "sequence name")])
+                .with_permissions(&["niri", "shell"]),
         ]
     }
 
@@ -188,12 +231,14 @@ mod tests {
                     { "namespace": "counter", "action": "push", "params": { "value": "two" } }
                 ]
             }),
+            id: None,
         });
 
         let response = registry.handle(Request::Call {
             namespace: "automation".into(),
             action: "run".into(),
             params: json!({ "name": "greet" }),
+            id: None,
         });
         assert!(matches!(response, Response::Value { .. }), "{response:?}");
         assert_eq!(*log.lock().unwrap(), ["one", "two"]);
@@ -212,11 +257,13 @@ mod tests {
                     { "namespace": "automation", "action": "run", "params": { "name": "loop" } }
                 ]
             }),
+            id: None,
         });
         let response = registry.handle(Request::Call {
             namespace: "automation".into(),
             action: "run".into(),
             params: json!({ "name": "loop" }),
+            id: None,
         });
         assert!(matches!(response, Response::Error { .. }));
     }

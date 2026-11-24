@@ -50,7 +50,7 @@ mod outputs;
 mod policy;
 mod source;
 
-use companion_core::{ActionInfo, Context, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, load_json, save_json};
 use niri_ipc::Transform;
 pub use orientation::Orientation;
 pub use outputs::{NiriOutputs, OutputController, transform_name};
@@ -596,11 +596,25 @@ impl Context for Rotate {
         vec![
             ActionInfo::new("status", "Policy, source, orientation and output state"),
             ActionInfo::new("explain", "Explain what auto-rotation would do"),
-            ActionInfo::new("tick", "Debounce the source and apply a stable orientation"),
+            ActionInfo::new("tick", "Debounce the source and apply a stable orientation")
+                .with_params([ParamInfo::boolean(
+                    "dry_run",
+                    false,
+                    "report the decision without applying",
+                )])
+                .with_permissions(&["niri"]),
             ActionInfo::new(
                 "configure",
                 "Update policy fields (`output`, `sensor_command`, hysteresis, position)",
-            ),
+            )
+            .with_params([
+                ParamInfo::boolean("enabled", false, "enable auto-rotation"),
+                ParamInfo::string("output", false, "target output name"),
+                ParamInfo::string("sensor_command", false, "orientation source command"),
+                ParamInfo::integer("hysteresis_ms", false, "stable-orientation debounce"),
+                ParamInfo::array("position", false, "optional output position [x, y]"),
+                ParamInfo::boolean("dry_run", false, "force a dry-run result"),
+            ]),
             ActionInfo::new("enable", "Enable auto-rotation"),
             ActionInfo::new("disable", "Disable auto-rotation"),
             ActionInfo::new("lock", "Pause auto-rotation (manual set still works)"),
@@ -608,7 +622,14 @@ impl Context for Rotate {
             ActionInfo::new(
                 "set",
                 "Apply an explicit `orientation` or `transform` to an output",
-            ),
+            )
+            .with_params([
+                ParamInfo::string("orientation", false, "orientation name"),
+                ParamInfo::string("transform", false, "niri transform name or degrees"),
+                ParamInfo::string("output", false, "target output name"),
+                ParamInfo::boolean("dry_run", false, "report without applying"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new("reset", "Forget the last applied transform and debounce"),
         ]
     }

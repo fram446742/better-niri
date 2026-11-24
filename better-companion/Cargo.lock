@@ -33,6 +33,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "companion-config"
+version = "0.1.0"
+dependencies = [
+ "companion-adapters",
+ "companion-automation",
+ "companion-core",
+ "companion-hooks",
+ "companion-parking",
+ "companion-rules",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "companion-core"
 version = "0.1.0"
 dependencies = [
@@ -46,7 +60,9 @@ version = "0.1.0"
 dependencies = [
  "companion-adapters",
  "companion-automation",
+ "companion-config",
  "companion-core",
+ "companion-history",
  "companion-hooks",
  "companion-idle",
  "companion-niri",
@@ -54,6 +70,15 @@ dependencies = [
  "companion-rotate",
  "companion-rules",
  "companion-system",
+ "serde_json",
+]
+
+[[package]]
+name = "companion-history"
+version = "0.1.0"
+dependencies = [
+ "companion-core",
+ "serde",
  "serde_json",
 ]
 
@@ -114,6 +139,7 @@ name = "companion-rules"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "companion-niri",
  "companion-parking",
  "regex",
  "serde",

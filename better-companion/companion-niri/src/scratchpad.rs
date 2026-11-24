@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use companion_parking::Parking;
 use niri_ipc::{Action, WorkspaceReferenceArg};
 use serde_json::{Value, json};
@@ -314,30 +314,57 @@ impl Context for Scratchpad {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
-        vec![
+        let mut actions = vec![
             ActionInfo::new(
                 "assign",
                 "Assign `window` (or the focused window) to scratchpad `name` and hide it; alias `add`",
-            ),
+            )
+            .with_params([
+                ParamInfo::string("name", false, "slot name (default `default`)"),
+                ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+                ParamInfo::boolean("replace", false, "replace an occupied slot (restores its window)"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "toggle",
                 "Hide or show scratchpad `name`; assigns the focused window when the slot is empty",
-            ),
+            )
+            .with_params([
+                ParamInfo::string("name", false, "slot name (default `default`)"),
+                ParamInfo::integer("window", false, "window to assign when the slot is empty"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "show",
                 "Show scratchpad `name` on the focused workspace; alias `restore`",
-            ),
-            ActionInfo::new("hide", "Hide scratchpad `name`"),
+            )
+            .with_params([
+                ParamInfo::string("name", false, "slot name (default `default`)"),
+                ParamInfo::boolean("focus", false, "focus the shown window (default true)"),
+            ])
+            .with_permissions(&["niri"]),
+            ActionInfo::new("hide", "Hide scratchpad `name`")
+                .with_params([ParamInfo::string("name", false, "slot name (default `default`)")])
+                .with_permissions(&["niri"]),
             ActionInfo::new("list", "List scratchpad slots ordered by name"),
             ActionInfo::new(
                 "remove",
                 "Drop scratchpad `name`, restoring its window when it was hidden",
-            ),
+            )
+            .with_params([ParamInfo::string("name", false, "slot name (default `default`)")])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "reconcile",
                 "Drop slots whose windows no longer exist, leaving state untouched if niri is unreachable",
-            ),
-        ]
+            )
+            .with_permissions(&["niri"]),
+        ];
+        if !self.compositor.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {

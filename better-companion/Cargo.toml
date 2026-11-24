@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "companion-config",
     "companion-core",
     "companion-parking",
     "companion-automation",
     "companion-hooks",
+    "companion-history",
     "companion-system",
     "companion-niri",
     "companion-rules",
@@ -25,10 +27,12 @@ rust-version = "1.95"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
+companion-config = { path = "companion-config" }
 companion-core = { path = "companion-core" }
 companion-parking = { path = "companion-parking" }
 companion-automation = { path = "companion-automation" }
 companion-hooks = { path = "companion-hooks" }
+companion-history = { path = "companion-history" }
 companion-system = { path = "companion-system" }
 companion-niri = { path = "companion-niri" }
 companion-rules = { path = "companion-rules" }

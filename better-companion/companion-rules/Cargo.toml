@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 companion-core.workspace = true
+companion-niri.workspace = true
 companion-parking.workspace = true
 serde.workspace = true
 serde_json.workspace = true

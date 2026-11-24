@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use companion_core::{Registry, Request, Response};
-use companion_daemon::{bind, build_registry_with_adapters, serve_stream, socket_default};
+use companion_daemon::{bind, build_runtime, serve_stream_with_events, socket_default};
 
-const USAGE: &str = "better-companion [--socket PATH] [--once] [--help]\n\n\
+const USAGE: &str = "better-companion [--socket PATH] [--config PATH] [--once] [--no-track] [--help]\n\n\
      One daemon serving parking, automation, hooks, system, windows, idle, rotate and optional adapters over a Unix socket.\n\
      --socket PATH  Override the socket path (default: $XDG_RUNTIME_DIR/better-companion.sock)\n\
+     --config PATH  Config file (default: $XDG_CONFIG_HOME/better-companion/config.json)\n\
      --once         Serve a single connection and exit (useful for tests)\n\
      --no-track     Do not subscribe to the niri event stream\n";
 
@@ -18,6 +19,7 @@ fn usage() -> &'static str {
 
 fn main() -> ExitCode {
     let mut socket: Option<PathBuf> = None;
+    let mut config: Option<PathBuf> = None;
     let mut once = false;
     let mut track = true;
 
@@ -28,6 +30,13 @@ fn main() -> ExitCode {
                 Some(path) => socket = Some(PathBuf::from(path)),
                 None => {
                     eprintln!("--socket needs a path");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--config" => match args.next() {
+                Some(path) => config = Some(PathBuf::from(path)),
+                None => {
+                    eprintln!("--config needs a path");
                     return ExitCode::FAILURE;
                 }
             },
@@ -45,7 +54,8 @@ fn main() -> ExitCode {
     }
 
     let socket = socket.unwrap_or_else(socket_default);
-    match run(&socket, once, track) {
+    let config = config.unwrap_or_else(companion_core::config_path);
+    match run(&socket, &config, once, track) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("better-companion: {err}");
@@ -54,9 +64,24 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()> {
+fn run(
+    socket: &std::path::Path,
+    config_path: &std::path::Path,
+    once: bool,
+    track: bool,
+) -> std::io::Result<()> {
     let activity = companion_idle::ActivityClock::new();
-    let (registry, parking, adapters) = build_registry_with_adapters(socket, activity.clone())?;
+    let mut runtime = build_runtime(socket, activity.clone())?;
+    runtime
+        .apply_config(config_path)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let companion_daemon::Runtime {
+        registry,
+        parking,
+        adapters,
+        bus,
+        ..
+    } = runtime;
     adapters.start_worker();
     if track && let Some(niri_socket) = companion_niri::socket_from_env() {
         let parking = parking.clone();
@@ -89,7 +114,7 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
 
     if once {
         let (stream, _) = listener.accept()?;
-        return serve_stream(stream, &registry);
+        return serve_stream_with_events(stream, &registry, Some(&bus));
     }
 
     // Timer loops make idle timeouts and auto-rotation autonomous. Both
@@ -102,8 +127,9 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
         match stream {
             Ok(stream) => {
                 let registry = registry.clone();
+                let bus = bus.clone();
                 std::thread::spawn(move || {
-                    if let Err(err) = serve_stream(stream, &registry) {
+                    if let Err(err) = serve_stream_with_events(stream, &registry, Some(&bus)) {
                         eprintln!("better-companion: connection error: {err}");
                     }
                 });
@@ -128,8 +154,9 @@ fn spawn_ticker(
                 namespace: namespace.to_owned(),
                 action: action.to_owned(),
                 params: serde_json::json!({}),
+                id: None,
             });
-            if let Response::Error { message } = response {
+            if let Response::Error { message, .. } = response {
                 eprintln!("better-companion: {namespace}.{action}: {message}");
             }
         }

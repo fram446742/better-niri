@@ -13,15 +13,32 @@ use serde_json::{Value, json};
 
 use crate::Compositor;
 use crate::layout::{self, WorkspaceTarget};
+use crate::marks::Marks;
 
 #[derive(Clone)]
 pub struct Windows {
     compositor: Compositor,
+    marks: Option<Marks>,
 }
 
 impl Windows {
     pub fn new(compositor: Compositor) -> Self {
-        Self { compositor }
+        Self {
+            compositor,
+            marks: None,
+        }
+    }
+
+    /// Shares the persistent mark store so `find`/`run-or-raise` can match a
+    /// mark and results report it.
+    pub fn with_marks(mut self, marks: Marks) -> Self {
+        self.marks = Some(marks);
+        self
+    }
+
+    /// Whether the shared compositor connection is configured.
+    pub fn is_available(&self) -> bool {
+        self.compositor.is_available()
     }
 
     fn windows(&self) -> Result<Vec<Window>, String> {
@@ -31,7 +48,17 @@ impl Windows {
         }
     }
 
-    fn matches(window: &Window, params: &Value, output_workspaces: Option<&BTreeSet<u64>>) -> bool {
+    fn matches(
+        window: &Window,
+        params: &Value,
+        output_workspaces: Option<&BTreeSet<u64>>,
+        marks: Option<&Marks>,
+    ) -> bool {
+        if let Some(mark) = params.get("mark").and_then(Value::as_str)
+            && marks.and_then(|marks| marks.mark_of(window.id)).as_deref() != Some(mark)
+        {
+            return false;
+        }
         if let Some(app_id) = params.get("app_id").and_then(Value::as_str)
             && !window
                 .app_id
@@ -145,6 +172,7 @@ impl Windows {
                     "app_id": window.app_id,
                     "workspace_id": window.workspace_id,
                     "is_focused": window.is_focused,
+                    "mark": self.marks.as_ref().and_then(|marks| marks.mark_of(window.id)),
                 })
             })
             .collect();
@@ -216,7 +244,14 @@ impl Windows {
         let mut matched: Vec<Window> = self
             .windows()?
             .into_iter()
-            .filter(|window| Self::matches(window, &params, output_workspaces.as_ref()))
+            .filter(|window| {
+                Self::matches(
+                    window,
+                    &params,
+                    output_workspaces.as_ref(),
+                    self.marks.as_ref(),
+                )
+            })
             .collect();
         matched.sort_by_key(|window| window.id);
         Ok(matched)
@@ -320,6 +355,7 @@ impl Context for Windows {
                 ParamInfo::string("workspace_name", false, "workspace name"),
                 ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
                 ParamInfo::string("output", false, "output name"),
+                ParamInfo::string("mark", false, "exact window mark"),
             ]
         };
         let mut run_or_raise = matchers().to_vec();
@@ -362,7 +398,7 @@ impl Context for Windows {
             ]
         };
 
-        vec![
+        let mut actions = vec![
             ActionInfo::new(
                 "run-or-raise",
                 "Focus a matching window or spawn `spawn`/`spawn_sh`",
@@ -432,7 +468,13 @@ impl Context for Windows {
                 "List windows with the native sticky flag in numeric id order",
             )
             .with_permissions(&["niri"]),
-        ]
+        ];
+        if !self.compositor.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {
@@ -450,6 +492,7 @@ impl Context for Windows {
                             "workspace_id": window.workspace_id,
                             "is_focused": window.is_focused,
                             "is_sticky": window.is_sticky,
+                            "mark": self.marks.as_ref().and_then(|marks| marks.mark_of(window.id)),
                         })
                     })
                     .collect();
@@ -882,6 +925,30 @@ mod tests {
                 ref output,
             }) if output == "HDMI-1"
         ));
+    }
+
+    #[test]
+    fn find_matches_and_reports_window_marks() {
+        let dir = temp_dir("find-mark");
+        let socket = dir.join("niri.sock");
+        let server = fake_niri(&socket, vec![window_json(10, "firefox", false)], 0);
+        let marks = crate::Marks::load(dir.join("marks.json"), Compositor::at(&socket)).unwrap();
+        marks
+            .call("set", &json!({ "window": 10, "mark": "browser" }))
+            .unwrap();
+        let windows = Windows::new(Compositor::at(&socket)).with_marks(marks);
+        let found = windows.call("find", &json!({ "mark": "browser" })).unwrap();
+        assert_eq!(found["count"], 1);
+        assert_eq!(found["windows"][0]["mark"], "browser");
+        server.join().unwrap();
+
+        let dir = temp_dir("find-mark-miss");
+        let socket = dir.join("niri.sock");
+        let server = fake_niri(&socket, vec![window_json(10, "firefox", false)], 0);
+        let windows = Windows::new(Compositor::at(&socket));
+        let found = windows.call("find", &json!({ "mark": "browser" })).unwrap();
+        assert_eq!(found["count"], 0);
+        server.join().unwrap();
     }
 
     #[test]

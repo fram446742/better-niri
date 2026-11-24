@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use companion_core::{ActionInfo, Context, load_json, save_json};
+use companion_core::{ActionInfo, Context, ParamInfo, load_json, save_json};
 use companion_parking::Parking;
 use niri_ipc::{Action, Request, Response, Window};
 use regex::RegexBuilder;
@@ -841,33 +841,74 @@ impl Context for Swallow {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
-        vec![
-            ActionInfo::new("enable", "Minimize terminals while their children are open"),
-            ActionInfo::new("disable", "Stop swallowing new children"),
-            ActionInfo::new(
-                "status",
-                "Enabled state, terminals, rules, ignore list and swallowed pairs",
-            ),
-            ActionInfo::new("list", "List swallowed child → parent pairs"),
-            ActionInfo::new("restore", "Restore the parent of swallowed `child`"),
-            ActionInfo::new("add-terminal", "Allow an additional `app_id` term"),
-            ActionInfo::new("remove-terminal", "Remove an `app_id` term"),
-            ActionInfo::new(
-                "add-rule",
-                "Add/replace an ordered `rule` (or inline rule fields)",
-            ),
-            ActionInfo::new("remove-rule", "Remove rule `name`"),
-            ActionInfo::new("set-ignore", "Replace the child `ignore` list"),
-            ActionInfo::new(
-                "configure",
-                "Set `child_age_ms`, `restore_on_exit` and/or `max_pairs`",
-            ),
-            ActionInfo::new(
-                "reconcile",
-                "Drop pairs whose child window is gone and restore terminals",
-            ),
-            ActionInfo::new("reload", "Reload swallow.json and enforce the pair bound"),
-        ]
+        let mut actions =
+            vec![
+                ActionInfo::new("enable", "Minimize terminals while their children are open"),
+                ActionInfo::new("disable", "Stop swallowing new children"),
+                ActionInfo::new(
+                    "status",
+                    "Enabled state, terminals, rules, ignore list and swallowed pairs",
+                ),
+                ActionInfo::new("list", "List swallowed child → parent pairs"),
+                ActionInfo::new("restore", "Restore the parent of swallowed `child`")
+                    .with_params([ParamInfo::integer(
+                        "child",
+                        true,
+                        "swallowed child window id",
+                    )])
+                    .with_permissions(&["niri"]),
+                ActionInfo::new("add-terminal", "Allow an additional `app_id` term").with_params([
+                    ParamInfo::string("app_id", true, "terminal app-id substring"),
+                ]),
+                ActionInfo::new("remove-terminal", "Remove an `app_id` term").with_params([
+                    ParamInfo::string("app_id", true, "terminal app-id to remove"),
+                ]),
+                ActionInfo::new(
+                    "add-rule",
+                    "Add/replace an ordered `rule` (or inline rule fields)",
+                )
+                .with_params([
+                    ParamInfo::string("name", true, "rule name"),
+                    ParamInfo::array("terminal_app_id", false, "terminal app-id substrings"),
+                    ParamInfo::string("terminal_app_id_regex", false, "terminal app-id regex"),
+                    ParamInfo::string("terminal_title_regex", false, "terminal title regex"),
+                    ParamInfo::array("child_app_id", false, "child app-id substrings"),
+                    ParamInfo::string("child_app_id_regex", false, "child app-id regex"),
+                    ParamInfo::string("child_title_regex", false, "child title regex"),
+                    ParamInfo::boolean("ignore", false, "veto swallowing when the rule matches"),
+                    ParamInfo::integer("child_age_ms", false, "override the child-age window"),
+                    ParamInfo::boolean("restore_on_exit", false, "override restore-on-exit"),
+                ]),
+                ActionInfo::new("remove-rule", "Remove rule `name`")
+                    .with_params([ParamInfo::string("name", true, "rule name")]),
+                ActionInfo::new("set-ignore", "Replace the child `ignore` list").with_params([
+                    ParamInfo::array("ignore", true, "child app-id/title substrings"),
+                ]),
+                ActionInfo::new(
+                    "configure",
+                    "Set `child_age_ms`, `restore_on_exit` and/or `max_pairs`",
+                )
+                .with_params([
+                    ParamInfo::integer("child_age_ms", false, "maximum child-process age in ms"),
+                    ParamInfo::boolean(
+                        "restore_on_exit",
+                        false,
+                        "restore terminals when children exit",
+                    ),
+                    ParamInfo::integer("max_pairs", false, "maximum live terminal/child pairs"),
+                ]),
+                ActionInfo::new(
+                    "reconcile",
+                    "Drop pairs whose child window is gone and restore terminals",
+                ),
+                ActionInfo::new("reload", "Reload swallow.json and enforce the pair bound"),
+            ];
+        if !self.inner.compositor.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {

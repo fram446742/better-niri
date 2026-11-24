@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use companion_core::{ActionInfo, Context};
+use companion_core::{ActionInfo, Context, ParamInfo};
 use companion_parking::Parking;
 use niri_ipc::{Action, Workspace, WorkspaceReferenceArg};
 use serde_json::{Value, json};
@@ -116,25 +116,72 @@ impl Context for Parker {
     }
 
     fn actions(&self) -> Vec<ActionInfo> {
-        vec![
+        let mut actions = vec![
             ActionInfo::new(
                 "park",
                 "Minimize `window` (or the focused window) and record it",
-            ),
+            )
+            .with_params([
+                ParamInfo::integer("window", false, "window id, defaults to the focused window"),
+                ParamInfo::string("lot", false, "parking lot (default `parker`)"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "restore",
                 "Unminimize a parked `window` and drop its record",
-            ),
+            )
+            .with_params([
+                ParamInfo::integer("window", true, "parked window id"),
+                ParamInfo::string("lot", false, "parking lot (default `parker`)"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "park-workspace",
                 "Minimize every window on `workspace` (id, name or index) and record the group",
-            ),
+            )
+            .with_params([
+                ParamInfo::integer("workspace", false, "workspace id"),
+                ParamInfo::string("workspace_name", false, "workspace name"),
+                ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
+                ParamInfo::string(
+                    "workspace_output",
+                    false,
+                    "restrict name/index to an output",
+                ),
+                ParamInfo::string("lot", false, "parking lot (default `parker`)"),
+            ])
+            .with_permissions(&["niri"]),
             ActionInfo::new(
                 "restore-workspace",
                 "Unminimize a parked `workspace`; `focus` it optionally",
+            )
+            .with_params([
+                ParamInfo::integer("workspace", false, "workspace id"),
+                ParamInfo::string("workspace_name", false, "workspace name"),
+                ParamInfo::integer("workspace_idx", false, "per-output workspace index"),
+                ParamInfo::string(
+                    "workspace_output",
+                    false,
+                    "restrict name/index to an output",
+                ),
+                ParamInfo::boolean("focus", false, "focus the restored workspace"),
+                ParamInfo::string("lot", false, "parking lot (default `parker`)"),
+            ])
+            .with_permissions(&["niri"]),
+            ActionInfo::new("list", "List the parking lot (`lot`, default `parker`)").with_params(
+                [ParamInfo::string(
+                    "lot",
+                    false,
+                    "parking lot (default `parker`)",
+                )],
             ),
-            ActionInfo::new("list", "List the parking lot (`lot`, default `parker`)"),
-        ]
+        ];
+        if !self.compositor.is_available() {
+            actions
+                .iter_mut()
+                .for_each(|action| action.available = false);
+        }
+        actions
     }
 
     fn call(&self, action: &str, params: &Value) -> Result<Value, String> {
