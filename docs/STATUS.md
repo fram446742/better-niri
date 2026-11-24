@@ -43,7 +43,10 @@ Added on top of the elite base:
 
 - per-keyboard configuration (core input): named `keyboard "device" { ... }`
   blocks, inheritance from the unnamed block, keymap/repeat/Num Lock/locale1/IPC
-  updates on device switches, with headless tests.
+  updates on device switches, with headless tests. The first keyboard applies
+  its config eagerly when it appears (hotplug included); later keyboards switch
+  on first use, and unplugging the active keyboard reverts to the unnamed
+  config.
 - virtual outputs (core outputs): TTY/headless create/remove over IPC/CLI,
   declarative `create-virtual`, per-output mode/refresh handling.
 - isolated outputs (core outputs): compositor chrome is kept off them, the
@@ -137,9 +140,14 @@ The module boundary is now documented and drives the next integrations:
   better-audio, better-wallpaper, better-settings, better-portal (separate
   portal daemon); shell integration stays Noctalia-only.
 
-See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. A per-keyboard branch
-(`integration/biri-per-keyboard`) is parked with the config/tests commits
-applied; it is core input work and resumes next.
+See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. Per-keyboard configuration is
+done: `input { keyboard "Device Name" { … } }` blocks merge over the unnamed
+block, the active keymap/repeat config is resolved per physical device, the
+first keyboard's config is applied as soon as the device appears (so the first
+keystroke is already correct), later keyboards switch on first use, and
+unplugging the active keyboard reverts to the unnamed config. Layout changes
+emit `KeyboardLayoutsChanged` and `niri msg keyboard-layouts` reflects the
+active keymap.
 
 ## What is still open
 
@@ -159,8 +167,12 @@ picked up without re-auditing.
    and default-config docs `e79bd375`).
 3. **Portrait / vertical main axis** — biri `b30284c7` (rewrites the scrolling
    axis; large).
-4. **Vulkan renderer on the niri side** — better-smithay has the Vulkan
-   renderer; niri still wires only GLES.
+4. **Vulkan renderer** — wired for the TTY backend (`TtyGpuManager`/`TtyRenderer`
+   over GLES or Vulkan, `NIRI_RENDERER`). Still open: runtime validation on a
+   real TTY, HDR output on Vulkan, and Vulkan implementations for the GLSL-only
+   visuals that currently skip themselves (borders/shadows/resize/window and
+   global shaders/decoration light, blur/xray, liquid glass, carousel panels,
+   magnified screenshot capture, screen transitions).
 5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker

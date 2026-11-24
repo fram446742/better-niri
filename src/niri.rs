@@ -395,6 +395,9 @@ pub struct Niri {
     // and a cache of resolved configs by device so we don't need to re-match by name on every
     // keystroke. Cleared whenever the keyboard configs change on reload.
     pub current_keyboard: niri_config::Keyboard,
+    /// Device whose resolved config is currently applied to the seat's keyboard,
+    /// if it came from a real libinput keyboard (not winit/headless).
+    pub current_keyboard_device: Option<input::Device>,
     pub keyboard_device_cache: HashMap<input::Device, niri_config::Keyboard>,
 
     // Smithay state.
@@ -1240,9 +1243,13 @@ impl State {
 
         let mut backend = if headless {
             let headless = Headless::new(event_loop.clone());
+            #[cfg(feature = "vulkan")]
+            crate::render_helpers::vulkan::note_backend("headless");
             Backend::Headless(headless)
         } else if has_display {
             let winit = Winit::new(config.clone(), event_loop.clone())?;
+            #[cfg(feature = "vulkan")]
+            crate::render_helpers::vulkan::note_backend("winit (nested)");
             Backend::Winit(winit)
         } else {
             let tty = Tty::new(config.clone(), event_loop.clone())
@@ -2374,6 +2381,7 @@ impl State {
         if config.input.keyboards != old_config.input.keyboards {
             self.niri.keyboard_device_cache.clear();
             self.niri.current_keyboard = default_keyboard;
+            self.niri.current_keyboard_device = None;
         }
 
         if config.input.touchpad != old_config.input.touchpad
@@ -4500,6 +4508,7 @@ impl Niri {
             tablets: HashMap::new(),
             touch: HashSet::new(),
             current_keyboard: default_keyboard,
+            current_keyboard_device: None,
             keyboard_device_cache: HashMap::new(),
 
             #[cfg(feature = "cursor")]

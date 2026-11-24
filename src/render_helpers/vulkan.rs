@@ -227,6 +227,20 @@ pub fn startup_plan() -> Plan {
     decide(Preference::from_env(), &probe())
 }
 
+/// Warns that a non-TTY backend cannot use the Vulkan renderer.
+///
+/// The renderer selection lives in the TTY backend; winit and headless keep
+/// their GLES renderer, so a Vulkan request there would otherwise look like it
+/// took effect just because the plan says `path: vulkan`.
+pub fn note_backend(backend: &str) {
+    if Preference::from_env() == Preference::Vulkan && RENDER_TREE_SUPPORTS_VULKAN {
+        warn!(
+            "NIRI_RENDERER=vulkan only applies to the TTY backend; the {backend} backend uses \
+             the GLES renderer (start niri on a TTY to exercise Vulkan)"
+        );
+    }
+}
+
 /// Logs the startup plan once.
 pub fn log_startup_plan() {
     if let Ok(raw) = std::env::var(ENV_RENDERER) {
