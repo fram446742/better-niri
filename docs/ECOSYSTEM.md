@@ -165,6 +165,8 @@ registry grouped by category:
 ### Sticky contract
 
 - If `sticky` capability is present: nsticky delegates sticky to native actions.
+  Implemented by `contrib/patches/nsticky-native-sticky.patch`; the local
+  better-nsticky checkout has it applied and its 473-test suite passes.
 - Otherwise: nsticky uses its move-based fallback.
 - Staging/scratchpads remain nsticky; companion may call nsticky rather than
   duplicating it.

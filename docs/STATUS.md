@@ -333,8 +333,9 @@ picked up without re-auditing.
    (validated, dry-run, rollback), better-audio `volume`/`mute` for sinks and
    sources, a GTK display arrangement editor (drag, snap, overlap validation,
    preview/apply) and an audio mixer with sliders and mute toggles. Still open:
-   nsticky delegating sticky to the compositor when the capability is present,
-   and the live Noctalia/hardware checks. On the compositor side all planned core
+   the live Noctalia check (done: all 8 plugins loaded in the running shell with
+   no Lua errors; the added source was removed afterwards) and the hardware
+   checks. On the compositor side all planned core
    protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
    DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY

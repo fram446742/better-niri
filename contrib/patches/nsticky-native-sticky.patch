@@ -1,0 +1,619 @@
+diff -ruN --exclude target /tmp/better-nsticky-source-backup-1795560693/src/business.rs /home/franc/Projects/better-nsticky/source/src/business.rs
+--- a/src/business.rs
++++ b/src/business.rs
+@@ -413,6 +413,7 @@
+         };
+ 
+         let exists = |id: u64| windows.iter().any(|window| window.id == id);
++        let native_sticky = self.uses_native_sticky().await;
+         let mut sticky: HashMap<u64, StickyWindow> = HashMap::new();
+         let mut staged: HashMap<u64, StagedWindow> = HashMap::new();
+ 
+@@ -436,13 +437,15 @@
+             ),
+         };
+ 
+-        sticky.extend(
+-            stored_sticky
+-                .into_iter()
+-                .map(StoredSticky::into_parts)
+-                .filter(|(id, _)| exists(*id))
+-                .map(|(id, pin)| (id, StickyWindow { pin })),
+-        );
++        if !native_sticky {
++            sticky.extend(
++                stored_sticky
++                    .into_iter()
++                    .map(StoredSticky::into_parts)
++                    .filter(|(id, _)| exists(*id))
++                    .map(|(id, pin)| (id, StickyWindow { pin })),
++            );
++        }
+         let mut stored_staged: HashMap<u64, StoredStaged> = HashMap::new();
+         stored_staged.extend(
+             stored_entries
+@@ -1078,18 +1081,28 @@
+         let floating = self.window_floating(window_id).await;
+ 
+         // A window parked on the stage keeps what the stage knew about it.
++        let native_sticky = self.uses_native_sticky().await;
++        let natively_sticky = if native_sticky {
++            self.native_sticky_ids().await?.contains(&window_id)
++        } else {
++            false
++        };
+         let (was_sticky, pin, staged_size, staged_position) = {
+             let state = self.state.lock().await;
+             match state.staged_windows.get(&window_id) {
+                 Some(staged) => (
+-                    staged.was_sticky,
++                    if native_sticky {
++                        natively_sticky
++                    } else {
++                        staged.was_sticky
++                    },
+                     staged.pin.clone(),
+                     staged.size,
+                     staged.position,
+                 ),
+                 None => match state.sticky_windows.get(&window_id) {
+                     Some(sticky) => (true, sticky.pin.clone(), None, None),
+-                    None => (false, Vec::new(), None, None),
++                    None => (natively_sticky, Vec::new(), None, None),
+                 },
+             }
+         };
+@@ -1102,6 +1115,9 @@
+         state.staged_windows.remove(&window_id);
+         state.sticky_windows.remove(&window_id);
+         drop(state);
++        if native_sticky && natively_sticky {
++            self.niri.toggle_sticky(window_id).await?;
++        }
+ 
+         // The stage may have lost its last window to this scratchpad.
+         let stage_name = self.stage_workspace_name().await;
+@@ -1219,12 +1235,16 @@
+         self.niri.move_window(record.id, destination).await?;
+ 
+         if record.was_sticky {
+-            self.state.lock().await.sticky_windows.insert(
+-                record.id,
+-                StickyWindow {
+-                    pin: record.pin.clone(),
+-                },
+-            );
++            if self.uses_native_sticky().await {
++                self.restore_native_sticky(record.id, true).await;
++            } else {
++                self.state.lock().await.sticky_windows.insert(
++                    record.id,
++                    StickyWindow {
++                        pin: record.pin.clone(),
++                    },
++                );
++            }
+         }
+ 
+         if floating {
+@@ -1484,14 +1504,73 @@
+         if !windows.iter().any(|window| window.id == window_id) {
+             bail!("Window not found in Niri");
+         }
++        if self.uses_native_sticky().await {
++            if self
++                .state
++                .lock()
++                .await
++                .staged_windows
++                .contains_key(&window_id)
++            {
++                return Ok(false);
++            }
++            if self.native_sticky_ids().await?.contains(&window_id) {
++                return Ok(false);
++            }
++            self.niri.toggle_sticky(window_id).await?;
++            return Ok(true);
++        }
+         let layout = self.layout().await?;
+         let pin = self.default_pin(&windows, &layout, window_id).await;
+ 
+         self.stick(window_id, pin).await
+     }
+ 
++    /// Whether the compositor owns sticky state (`Request::Capabilities.sticky`).
++    async fn uses_native_sticky(&self) -> bool {
++        self.niri.supports_native_sticky().await.unwrap_or(false)
++    }
++
++    /// Windows the compositor reports as natively sticky.
++    async fn native_sticky_ids(&self) -> Result<std::collections::HashSet<u64>> {
++        Ok(self.niri.sticky_windows().await?.into_iter().collect())
++    }
++
++    /// Re-applies a native sticky flag that was remembered by a staged or
++    /// scratchpad record, only when the compositor does not already have it.
++    async fn restore_native_sticky(&self, window_id: u64, was_sticky: bool) {
++        if !was_sticky || !self.uses_native_sticky().await {
++            return;
++        }
++        match self.native_sticky_ids().await {
++            Ok(ids) if ids.contains(&window_id) => {}
++            Ok(_) => {
++                if let Err(e) = self.niri.toggle_sticky(window_id).await {
++                    tracing::warn!("Failed to restore native sticky on {window_id}: {e:#}");
++                }
++            }
++            Err(e) => tracing::warn!("Failed to read native sticky windows: {e:#}"),
++        }
++    }
++
+     /// Add a window to the sticky list with an explicit output pin.
+     async fn stick(&self, window_id: u64, pin: Vec<String>) -> Result<bool> {
++        if self.uses_native_sticky().await {
++            if self
++                .state
++                .lock()
++                .await
++                .staged_windows
++                .contains_key(&window_id)
++            {
++                return Ok(false);
++            }
++            if self.native_sticky_ids().await?.contains(&window_id) {
++                return Ok(false);
++            }
++            self.niri.toggle_sticky(window_id).await?;
++            return Ok(true);
++        }
+         let mut state = self.state.lock().await;
+         if state.staged_windows.contains_key(&window_id) {
+             return Ok(false);
+@@ -1506,6 +1585,23 @@
+     pub async fn remove_sticky_window(&self, window_id: u64) -> Result<bool> {
+         self.ensure_window_exists(window_id).await?;
+ 
++        if self.uses_native_sticky().await {
++            if self
++                .state
++                .lock()
++                .await
++                .staged_windows
++                .contains_key(&window_id)
++            {
++                bail!("Window is in stage, cannot remove from sticky");
++            }
++            if !self.native_sticky_ids().await?.contains(&window_id) {
++                return Ok(false);
++            }
++            self.niri.toggle_sticky(window_id).await?;
++            return Ok(true);
++        }
++
+         let mut state = self.state.lock().await;
+         if state.staged_windows.contains_key(&window_id) {
+             bail!("Window is in stage, cannot remove from sticky");
+@@ -1515,6 +1611,9 @@
+ 
+     /// Sticky windows that still exist.
+     pub async fn list_sticky_windows(&self) -> Result<Vec<u64>> {
++        if self.uses_native_sticky().await {
++            return self.niri.sticky_windows().await;
++        }
+         let snapshot: Vec<u64> = {
+             let state = self.state.lock().await;
+             state.sticky_windows.keys().copied().collect()
+@@ -1535,6 +1634,34 @@
+             bail!("Active window not found in Niri");
+         }
+ 
++        if self.uses_native_sticky().await {
++            let is_staged = {
++                let state = self.state.lock().await;
++                state.staged_windows.contains_key(&window_id)
++            };
++            if is_staged {
++                let workspace_id = self.active_workspace_id().await?;
++                self.niri.move_window(window_id, workspace_id).await?;
++                let was_sticky = {
++                    let mut state = self.state.lock().await;
++                    state
++                        .staged_windows
++                        .remove(&window_id)
++                        .is_some_and(|staged| staged.was_sticky)
++                };
++                if was_sticky && !self.native_sticky_ids().await?.contains(&window_id) {
++                    self.niri.toggle_sticky(window_id).await?;
++                }
++                return Ok(true);
++            }
++            if self.native_sticky_ids().await?.contains(&window_id) {
++                self.niri.toggle_sticky(window_id).await?;
++                return Ok(false);
++            }
++            self.niri.toggle_sticky(window_id).await?;
++            return Ok(true);
++        }
++
+         let is_staged = {
+             let state = self.state.lock().await;
+             state.staged_windows.contains_key(&window_id)
+@@ -1582,6 +1709,38 @@
+     }
+ 
+     async fn toggle_sticky_windows(&self, ids: &[u64]) -> Result<BatchOutcome> {
++        if self.uses_native_sticky().await {
++            let current_ws_id = self.active_workspace_id().await?;
++            let mut outcome = BatchOutcome::default();
++            for id in ids {
++                let is_staged = {
++                    let state = self.state.lock().await;
++                    state.staged_windows.contains_key(id)
++                };
++                if is_staged {
++                    if let Err(e) = self.niri.move_window(*id, current_ws_id).await {
++                        tracing::warn!("Failed to move window {id}: {e:#}");
++                        outcome.failed.push(*id);
++                        continue;
++                    }
++                    let was_sticky = {
++                        let mut state = self.state.lock().await;
++                        state
++                            .staged_windows
++                            .remove(id)
++                            .is_some_and(|staged| staged.was_sticky)
++                    };
++                    if was_sticky && !self.native_sticky_ids().await?.contains(id) {
++                        self.niri.toggle_sticky(*id).await?;
++                    }
++                } else {
++                    self.niri.toggle_sticky(*id).await?;
++                }
++                outcome.succeeded.push(*id);
++            }
++            return Ok(outcome);
++        }
++
+         let current_ws_id = self.active_workspace_id().await?;
+         let windows = self.windows().await?;
+         let layout = self.layout().await?;
+@@ -1639,6 +1798,12 @@
+         self.ensure_window_exists(window_id).await?;
+         let (size, position) = self.capture_geometry(window_id).await;
+         let name = self.stage_workspace_name().await;
++        let native_sticky = self.uses_native_sticky().await;
++        let was_native_sticky =
++            native_sticky && self.native_sticky_ids().await?.contains(&window_id);
++        if was_native_sticky {
++            self.niri.toggle_sticky(window_id).await?;
++        }
+ 
+         let staged = {
+             let mut state = self.state.lock().await;
+@@ -1649,7 +1814,11 @@
+ 
+             let previous = state.sticky_windows.remove(&window_id);
+             let staged = StagedWindow {
+-                was_sticky: previous.is_some(),
++                was_sticky: if native_sticky {
++                    was_native_sticky
++                } else {
++                    previous.is_some()
++                },
+                 pin: previous.map(|sticky| sticky.pin).unwrap_or_default(),
+                 size,
+                 position,
+@@ -1664,7 +1833,8 @@
+                 // Nothing was parked: undo the bookkeeping and report.
+                 let mut state = self.state.lock().await;
+                 state.staged_windows.remove(&window_id);
+-                if staged.was_sticky {
++                let restore = staged.was_sticky && !native_sticky;
++                if restore {
+                     state.sticky_windows.insert(
+                         window_id,
+                         StickyWindow {
+@@ -1672,6 +1842,10 @@
+                         },
+                     );
+                 }
++                drop(state);
++                if staged.was_sticky && native_sticky {
++                    let _ = self.niri.toggle_sticky(window_id).await;
++                }
+                 return Err(e);
+             }
+         };
+@@ -1680,7 +1854,8 @@
+             // Roll the bookkeeping back: the compositor refused the move.
+             let mut state = self.state.lock().await;
+             state.staged_windows.remove(&window_id);
+-            if staged.was_sticky {
++            let restore = staged.was_sticky && !native_sticky;
++            if restore {
+                 state.sticky_windows.insert(
+                     window_id,
+                     StickyWindow {
+@@ -1688,6 +1863,10 @@
+                     },
+                 );
+             }
++            drop(state);
++            if staged.was_sticky && native_sticky {
++                let _ = self.niri.toggle_sticky(window_id).await;
++            }
+             return Err(e);
+         }
+ 
+@@ -1890,7 +2069,10 @@
+             return Err(e);
+         }
+ 
+-        {
++        if self.uses_native_sticky().await {
++            self.restore_native_sticky(window_id, staged.was_sticky)
++                .await;
++        } else {
+             let mut state = self.state.lock().await;
+             if staged.was_sticky {
+                 state.sticky_windows.insert(
+@@ -1956,7 +2138,12 @@
+             succeeded: restored.iter().map(|(id, _)| *id).collect(),
+             failed,
+         };
+-        {
++        let native_sticky = self.uses_native_sticky().await;
++        if native_sticky {
++            for (id, staged) in restored {
++                self.restore_native_sticky(id, staged.was_sticky).await;
++            }
++        } else {
+             let mut state = self.state.lock().await;
+             for (id, staged) in restored {
+                 if staged.was_sticky {
+@@ -6196,4 +6383,74 @@
+             other => panic!("expected an error, got {other:?}"),
+         }
+     }
++
++    #[tokio::test]
++    async fn native_sticky_add_remove_toggle_and_list_delegate_to_the_compositor() {
++        let niri =
++            Arc::new(FakeNiri::with_windows(&[(1, "foot", "terminal")]).with_native_sticky(&[]));
++        let business = business(&niri);
++
++        assert!(business.add_sticky_window(1).await.unwrap());
++        assert_eq!(niri.window_actions(), vec!["sticky 1"]);
++        assert_eq!(business.list_sticky_windows().await.unwrap(), vec![1]);
++        assert!(!business.add_sticky_window(1).await.unwrap());
++        assert!(business.remove_sticky_window(1).await.unwrap());
++        assert!(!business.remove_sticky_window(1).await.unwrap());
++        assert!(business.list_sticky_windows().await.unwrap().is_empty());
++
++        assert!(business.toggle_active_window().await.unwrap());
++        assert_eq!(business.list_sticky_windows().await.unwrap(), vec![1]);
++        assert!(!business.toggle_active_window().await.unwrap());
++        assert!(business.list_sticky_windows().await.unwrap().is_empty());
++    }
++
++    #[tokio::test]
++    async fn native_sticky_is_cleared_while_staged_and_restored_on_unstage() {
++        let niri = with_layout();
++        niri.set_native_sticky(&[1]);
++        let business = business(&niri);
++
++        business.stage_window(1).await.unwrap();
++        assert!(
++            business.list_sticky_windows().await.unwrap().is_empty(),
++            "staging must clear the native sticky flag"
++        );
++        assert!(business.is_window_staged(1).await);
++
++        let workspace = business.active_workspace_id().await.unwrap();
++        business.unstage_window(1, workspace).await.unwrap();
++        assert_eq!(
++            business.list_sticky_windows().await.unwrap(),
++            vec![1],
++            "unstaging restores the native sticky flag"
++        );
++    }
++
++    #[tokio::test]
++    async fn native_reconcile_ignores_stored_sticky_state() {
++        let niri =
++            Arc::new(FakeNiri::with_windows(&[(1, "foot", "terminal")]).with_native_sticky(&[]));
++        let storage = storage();
++        storage
++            .save(&StoredState::new(
++                vec![StoredSticky::new(1, Vec::new())],
++                Vec::new(),
++            ))
++            .unwrap();
++        let business = BusinessLogic::new(
++            Config::default(),
++            Config::default_config_path(),
++            niri.clone(),
++            storage,
++        );
++        business.reconcile().await.unwrap();
++        assert!(
++            business.list_sticky_windows().await.unwrap().is_empty(),
++            "the compositor owns sticky state when it supports it"
++        );
++        assert!(
++            niri.window_actions().is_empty(),
++            "reconcile must not toggle"
++        );
++    }
+ }
+diff -ruN --exclude target /tmp/better-nsticky-source-backup-1795560693/src/niri/client.rs /home/franc/Projects/better-nsticky/source/src/niri/client.rs
+--- a/src/niri/client.rs
++++ b/src/niri/client.rs
+@@ -163,6 +163,47 @@
+ }
+ 
+ impl Niri for NiriClient {
++    fn supports_native_sticky(&self) -> NiriFuture<'_, bool> {
++        Box::pin(async move {
++            let payload = self.request(&json!("Capabilities")).await?;
++            Ok(payload
++                .get("Capabilities")
++                .and_then(|capabilities| capabilities.get("sticky"))
++                .and_then(|sticky| sticky.as_bool())
++                .unwrap_or(false))
++        })
++    }
++
++    fn toggle_sticky(&self, window_id: u64) -> NiriFuture<'_, ()> {
++        Box::pin(async move {
++            self.request(&json!({
++                "Action": {
++                    "ToggleWindowSticky": { "id": window_id }
++                }
++            }))
++            .await?;
++            Ok(())
++        })
++    }
++
++    fn sticky_windows(&self) -> NiriFuture<'_, Vec<u64>> {
++        Box::pin(async move {
++            let payload = self.request(&json!("Windows")).await?;
++            let items = payload
++                .get("Windows")
++                .and_then(|windows| windows.as_array())
++                .cloned()
++                .unwrap_or_default();
++            let mut ids: Vec<u64> = items
++                .iter()
++                .filter(|item| item.get("is_sticky").and_then(|v| v.as_bool()) == Some(true))
++                .filter_map(|item| item.get("id").and_then(|v| v.as_u64()))
++                .collect();
++            ids.sort_unstable();
++            Ok(ids)
++        })
++    }
++
+     fn windows(&self) -> NiriFuture<'_, Vec<WindowInfo>> {
+         Box::pin(async move { parse_windows(&self.request(&json!("Windows")).await?) })
+     }
+diff -ruN --exclude target /tmp/better-nsticky-source-backup-1795560693/src/niri/fake.rs /home/franc/Projects/better-nsticky/source/src/niri/fake.rs
+--- a/src/niri/fake.rs
++++ b/src/niri/fake.rs
+@@ -16,6 +16,9 @@
+ /// A trait call, so a test can pick which one to refuse.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum Call {
++    SupportsNativeSticky,
++    ToggleSticky,
++    StickyWindows,
+     Windows,
+     Workspaces,
+     ActiveWindow,
+@@ -35,6 +38,9 @@
+ impl Call {
+     fn name(self) -> &'static str {
+         match self {
++            Self::SupportsNativeSticky => "supports_native_sticky",
++            Self::ToggleSticky => "toggle_sticky",
++            Self::StickyWindows => "sticky_windows",
+             Self::Windows => "windows",
+             Self::Workspaces => "workspaces",
+             Self::ActiveWindow => "active_window",
+@@ -79,6 +85,10 @@
+     max_in_flight: Mutex<usize>,
+     /// Workspace name/unname calls, in order, for assertions.
+     named_actions: Mutex<Vec<String>>,
++    /// Whether the fake compositor advertises native sticky windows.
++    native_sticky: Mutex<bool>,
++    /// Windows the fake compositor reports as natively sticky.
++    sticky: Mutex<HashSet<u64>>,
+     /// Spawns, focuses and window styling, in order.
+     window_actions: Mutex<Vec<String>>,
+ }
+@@ -111,6 +121,18 @@
+         fake
+     }
+ 
++    /// Fake compositor with native sticky support and the given sticky windows.
++    pub fn with_native_sticky(self, sticky: &[u64]) -> Self {
++        self.set_native_sticky(sticky);
++        self
++    }
++
++    /// Enables native sticky support on an existing fake.
++    pub fn set_native_sticky(&self, sticky: &[u64]) {
++        *self.native_sticky.lock() = true;
++        *self.sticky.lock() = sticky.iter().copied().collect();
++    }
++
+     /// Record the floating state an action leaves the window in, so later
+     /// queries see what a real compositor reports.
+     fn set_window_state(&self, window_id: u64, floating: bool) {
+@@ -390,6 +412,47 @@
+ }
+ 
+ impl Niri for FakeNiri {
++    fn supports_native_sticky(&self) -> NiriFuture<'_, bool> {
++        Box::pin(async move {
++            self.enter().await;
++            let result = self
++                .check_failure(Call::SupportsNativeSticky)
++                .map(|()| *self.native_sticky.lock());
++            self.exit();
++            result
++        })
++    }
++
++    fn toggle_sticky(&self, window_id: u64) -> NiriFuture<'_, ()> {
++        Box::pin(async move {
++            self.enter().await;
++            let result = self.check_failure(Call::ToggleSticky).map(|()| {
++                self.window_actions
++                    .lock()
++                    .push(format!("sticky {window_id}"));
++                let mut sticky = self.sticky.lock();
++                if !sticky.remove(&window_id) {
++                    sticky.insert(window_id);
++                }
++            });
++            self.exit();
++            result
++        })
++    }
++
++    fn sticky_windows(&self) -> NiriFuture<'_, Vec<u64>> {
++        Box::pin(async move {
++            self.enter().await;
++            let result = self.check_failure(Call::StickyWindows).map(|()| {
++                let mut ids: Vec<u64> = self.sticky.lock().iter().copied().collect();
++                ids.sort_unstable();
++                ids
++            });
++            self.exit();
++            result
++        })
++    }
++
+     fn windows(&self) -> NiriFuture<'_, Vec<WindowInfo>> {
+         Box::pin(async move {
+             self.enter().await;
+diff -ruN --exclude target /tmp/better-nsticky-source-backup-1795560693/src/niri/mod.rs /home/franc/Projects/better-nsticky/source/src/niri/mod.rs
+--- a/src/niri/mod.rs
++++ b/src/niri/mod.rs
+@@ -91,6 +91,14 @@
+ /// Kept deliberately small: everything else (matching, bookkeeping, ordering)
+ /// lives in [`crate::business`] and is tested against `fake::FakeNiri`.
+ pub trait Niri: Send + Sync {
++    /// Whether the compositor implements native sticky windows (`open-sticky`,
++    /// `ToggleWindowSticky`). When true, nsticky delegates sticky to niri instead
++    /// of moving windows across workspaces itself.
++    fn supports_native_sticky(&self) -> NiriFuture<'_, bool>;
++    /// Toggle the compositor's native sticky flag on one window.
++    fn toggle_sticky(&self, window_id: u64) -> NiriFuture<'_, ()>;
++    /// Windows the compositor currently reports as sticky.
++    fn sticky_windows(&self) -> NiriFuture<'_, Vec<u64>>;
+     /// Every open window.
+     fn windows(&self) -> NiriFuture<'_, Vec<WindowInfo>>;
+     /// Every workspace.
