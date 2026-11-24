@@ -7,8 +7,9 @@ Run these **inside** a niri session on tty3 with `NIRI_RENDERER=vulkan`
 
 `isolated-session.sh [DIR]` clones `~/.config/niri` into `/tmp/niri-test-session`
 (override with `NIRI_TEST_DIR`) and validates it. Run the test session with
-`niri -c "$NIRI_TEST_DIR"`; the other scripts expect that directory in their
-banner. `HDR_OUTPUT=DP-1` adds an `hdr mode="on"` block to the copy.
+`./target/debug/niri -c "$NIRI_TEST_DIR"` (the **elite** build; stock
+`/usr/bin/niri` does not accept a directory and fails with "Is a directory").
+The scripts default to the repo's `target/debug/niri` via `NIRI_BIN`. `HDR_OUTPUT=DP-1` adds an `hdr mode="on"` block to the copy.
 
 ## drive.sh — windows, clipping, workspaces, overview, screenshots
 

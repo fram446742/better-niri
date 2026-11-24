@@ -6,6 +6,8 @@ set -euo pipefail
 LOG=${PENDING_LOG:-/tmp/pending-isolated.log}
 exec > >(tee -a "$LOG") 2>&1
 DIR=${1:-/tmp/niri-test-session}
+NIRI_BIN=${NIRI_BIN:-/home/franc/Projects/better-niri/better-niri/target/debug/niri}
+[ -x "$NIRI_BIN" ] || NIRI_BIN=$(command -v niri || true)
 case "$DIR" in /|"$HOME"|"") echo "refusing to use $DIR"; exit 1;; esac
 SRC="$HOME/.config/niri"
 [ -d "$SRC" ] || { echo "no $SRC"; exit 1; }
@@ -21,15 +23,17 @@ if [ -n "${HDR_OUTPUT:-}" ] && ! grep -qE 'hdr([[:space:]]|$)' "$DIR/config.kdl"
   echo "added hdr mode=on for $HDR_OUTPUT"
 fi
 
-if command -v niri >/dev/null; then
-  niri validate -c "$DIR" && echo "config validates"
+if [ -n "$NIRI_BIN" ] && [ -x "$NIRI_BIN" ]; then
+  "$NIRI_BIN" validate -c "$DIR" && echo "config validates with $NIRI_BIN"
+else
+  echo "no niri binary found; build the local one with: cargo build -p niri"
 fi
 
 cat <<MSG
 
 Run on tty3 (Ctrl+Alt+F3) WITHOUT --session, so the main session's
 systemd/D-Bus environment is untouched:
-    NIRI_RENDERER=vulkan niri -c "$DIR"
+    NIRI_RENDERER=vulkan "$NIRI_BIN" -c "$DIR"
 
 Service isolation notes:
 - Do not use --session: it imports the environment globally and can clobber
