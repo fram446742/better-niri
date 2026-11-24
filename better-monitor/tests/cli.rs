@@ -115,8 +115,13 @@ fn cancel_restores_the_previous_profile_and_clears_pending() {
     store.save(&temp.profiles).unwrap();
 
     let pending = temp.profiles.with_file_name("pending.json");
-    better_monitor::write_pending(&temp.profiles, &fake.path, "desk", std::time::Duration::from_secs(60))
-        .unwrap();
+    better_monitor::write_pending(
+        &temp.profiles,
+        &fake.path,
+        "desk",
+        std::time::Duration::from_secs(60),
+    )
+    .unwrap();
     assert!(pending.is_file());
 
     let output = run(&args(&["--json", "cancel"], &temp), Some(&fake.path));

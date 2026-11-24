@@ -142,7 +142,9 @@ impl Cli {
                 "--confirm-timeout" => {
                     let secs = parse_u64(&mut iter, "--confirm-timeout")?;
                     if secs == 0 {
-                        return Err("--confirm-timeout needs a positive number of seconds".to_owned());
+                        return Err(
+                            "--confirm-timeout needs a positive number of seconds".to_owned()
+                        );
                     }
                     self.confirm_timeout = Some(Duration::from_secs(secs));
                 }
@@ -329,8 +331,7 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
             if report.status == ApplyStatus::Applied
                 && let Some(timeout) = cli.confirm_timeout
             {
-                let confirmation =
-                    write_pending(&cli.state, cli.socket()?, &name, timeout)?;
+                let confirmation = write_pending(&cli.state, cli.socket()?, &name, timeout)?;
                 match spawn_confirm_watcher(cli, &confirmation) {
                     Ok(()) => report.confirmation = Some(confirmation),
                     Err(err) => {

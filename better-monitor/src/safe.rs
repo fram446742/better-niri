@@ -183,10 +183,8 @@ mod tests {
     use crate::schema::{OutputProfile, Profile};
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "better-monitor-safe-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("better-monitor-safe-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -221,7 +219,9 @@ mod tests {
     fn store_with_previous(path: &Path) {
         let mut store = Store::default();
         let mut profile = Profile::default();
-        profile.outputs.insert("DP-1".to_owned(), OutputProfile::default());
+        profile
+            .outputs
+            .insert("DP-1".to_owned(), OutputProfile::default());
         store.insert("__previous", profile);
         store.save(path).unwrap();
     }
@@ -279,13 +279,9 @@ mod tests {
         let server = fake_niri(&socket, 1);
         let pending = write_pending(&state, &socket, "desk", Duration::from_millis(1)).unwrap();
         std::thread::sleep(Duration::from_millis(30));
-        let report = expire_pending(
-            &pending.pending_path,
-            &pending.id,
-            now_unix_ms() + 10_000,
-        )
-        .unwrap()
-        .expect("expired record restores");
+        let report = expire_pending(&pending.pending_path, &pending.id, now_unix_ms() + 10_000)
+            .unwrap()
+            .expect("expired record restores");
         assert_eq!(report.profile, "__previous");
         assert!(load_pending(&pending.pending_path).unwrap().is_none());
         let requests = server.join().unwrap();
