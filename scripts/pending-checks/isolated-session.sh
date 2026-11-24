@@ -20,15 +20,18 @@ echo "cloned $SRC -> $DIR"
 # output block (niri uses the first matching block, so appending a second one
 # has no effect).
 if [ -n "${HDR_OUTPUT:-}" ]; then
-  python3 "$(dirname "$0")/hdr-config.py" "$HDR_OUTPUT" "$DIR"
+  HDR_MODE=${HDR_MODE:-auto} python3 "$(dirname "$0")/hdr-config.py" "$HDR_OUTPUT" "$DIR"
+  echo "HDR prepared for $HDR_OUTPUT with mode=${HDR_MODE:-auto}"
 fi
 
 if grep -RqE 'hdr([[:space:]]|$)' "$DIR" --include='*.kdl'; then
   cat <<'MSG'
-NOTE: this test config enables HDR. The Vulkan renderer does not yet composite
-SDR content into the HDR blend space, so text/desktop may look rough or
-differently antialiased compared with the SDR session. Re-run
-isolated-session.sh WITHOUT HDR_OUTPUT (fresh copy) for visual/text tests.
+NOTE: this test config enables HDR. With `hdr mode="on"` the whole desktop is
+composited into PQ/BT.2020, so SDR content looks different (dimmer or
+washed out on many monitors) by design; `mode="auto"` (the default used by
+this script) only switches to HDR while fullscreen HDR content is shown and
+keeps the desktop SDR. Re-run isolated-session.sh WITHOUT HDR_OUTPUT for a
+fresh SDR copy.
 MSG
 fi
 

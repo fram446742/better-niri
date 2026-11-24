@@ -22,6 +22,13 @@ snap() {
 
 say "session (expect isolated config $TEST_DIR/config.kdl)"
 $NIRI msg version || exit 1
+if grep -RqsE 'hdr[[:space:]]' "$TEST_DIR" --include='*.kdl'; then
+  echo "HDR config: $(grep -RhE 'hdr[[:space:]]' "$TEST_DIR" --include='*.kdl' | head -1 | tr -s ' ')"
+  echo "  (mode=on keeps the whole desktop in PQ/BT.2020 and changes how SDR colours look;"
+  echo "   mode=auto only switches while fullscreen HDR content plays)"
+else
+  echo "HDR config: none (SDR session)"
+fi
 $NIRI msg outputs | head -20
 $NIRI msg workspaces | head -20
 snap

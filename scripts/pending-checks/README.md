@@ -13,7 +13,10 @@ version` at the start of every run shows the commit in use.
 (override with `NIRI_TEST_DIR`) and validates it. Run the test session with
 `./target/debug/niri -c "$NIRI_TEST_DIR"` (the **elite** build; stock
 `/usr/bin/niri` does not accept a directory and fails with "Is a directory").
-The scripts default to the repo's `target/debug/niri` via `NIRI_BIN`. `HDR_OUTPUT=DP-1` adds an `hdr mode="on"` block to the copy.
+The scripts default to the repo's `target/debug/niri` via `NIRI_BIN`.
+`HDR_OUTPUT=DP-1` adds an `hdr` block to the copy in `auto` mode by default
+(`HDR_MODE=on` forces the whole desktop into HDR). The block persists in the
+test copy, so regenerate it without `HDR_OUTPUT` to return to SDR.
 
 ## Debug files
 
@@ -32,10 +35,10 @@ tee to `/tmp/pending-<name>.log`, so the whole run can be analyzed afterwards.
 
 Spawns terminals, moves/floats/closes windows, switches workspaces, toggles the
 overview/carousel and triggers screenshot captures. It ends with a visual
-checklist. Expected on Vulkan today: windows, rounded-corner clipping, borders,
-shadows and decoration shaders work; window/global/scoped shader effects,
-blur/xray, liquid glass, carousel panel contents, magnified screenshot capture
-and screen transitions still fall back/skip.
+checklist. All of it (windows, clipping, borders, shadows, global/scoped
+shaders, blur/xray, liquid glass, carousel panels, magnified screenshot,
+transitions, closing/opening animations and popups) is expected to draw on
+Vulkan now; report anything missing.
 
 ## hdr.sh — HDR output
 
@@ -48,10 +51,13 @@ ffmpeg when `$HDR_CLIP` does not exist, then plays it with HDR passthrough.
 HDR_CLIP=/path/to/hdr10.mp4 ./scripts/pending-checks/hdr.sh
 ```
 
-Check the HDR badge in mpv and that highlights are not clipped. **HDR output on
-the Vulkan renderer is not wired yet**: this run should be compared against
-`NIRI_RENDERER=auto` (GLES) to see the current gap. For a real HDR test also
-enable HDR on the output in the niri config.
+Check the HDR badge in mpv and that highlights are not clipped. The Vulkan
+renderer does mixed SDR→HDR compositing: with `hdr mode="auto"` the desktop
+stays SDR and only fullscreen HDR content switches the output to PQ/BT.2020;
+with `mode="on"` SDR desktop content is PQ-encoded at the reference luminance
+and will look different (dimmer/washed out) on most monitors by design. To
+compare, capture a screenshot in both modes (screenshots stay SDR) and check
+that colours match, then compare the on-screen brightness.
 
 ## portal.sh — better-portal
 

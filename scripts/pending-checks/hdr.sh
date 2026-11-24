@@ -37,12 +37,10 @@ CONFIG=${NIRI_TEST_CONFIG:-$TEST_DIR/config.kdl}
 if ! grep -qE 'hdr([[:space:]]|$)' "$CONFIG" 2>/dev/null; then
   cat <<'MSG'
 WARNING: no `hdr` entry in the active config, so niri does not
-advertise colour management and mpv will stay SDR. Add it to the test copy, then restart niri:
-  output "DP-1" {
-      hdr mode="on" {
-          reference-luminance 203
-      }
-  }
+advertise colour management and mpv will stay SDR. Regenerate the test copy with:
+  HDR_OUTPUT=DP-1 ./scripts/pending-checks/isolated-session.sh
+then restart niri. The script writes `hdr mode="auto"` by default; set
+HDR_MODE=on to force the whole desktop into HDR (colours will look different).
 MSG
 fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
@@ -52,8 +50,11 @@ Verification while mpv is playing:
   tone-mapped, the compositor did not take HDR and mpv converted for you.
 - in the niri log (RUST_LOG=niri=debug), look for connector colour/HDR lines
   and "hdr" state changes when the fullscreen window starts.
-- washed-out in another session is expected on winit (nested) or without an
-  `hdr` output node; that is not the Vulkan output path.
+- with `mode="auto"` the desktop returns to SDR when the HDR window closes; with
+  `mode="on"` SDR desktop content stays PQ-encoded and looks different on most
+  monitors by design.
+- the `hdr` node persists in the test copy: re-run isolated-session.sh without
+  HDR_OUTPUT to get an SDR session again.
 MSG
 mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config \
   --log-file="$MPV_LOG" --msg-level=all=info,vo/gpu-next=debug "$CLIP" "$@"
