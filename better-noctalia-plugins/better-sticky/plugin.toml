@@ -1,0 +1,16 @@
+id = "better-desktop/better-sticky"
+name = "Better Sticky"
+version = "1.0.0"
+plugin_api = 24
+author = "Better Desktop"
+description = "Stage the focused window and toggle a named scratchpad through better-companion."
+
+[[widget]]
+id = "sticky"
+entry = "widget.luau"
+
+[[setting]]
+key = "scratchpad"
+type = "string"
+label_key = "settings.scratchpad"
+default = "term"

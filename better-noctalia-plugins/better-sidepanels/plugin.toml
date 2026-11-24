@@ -1,0 +1,10 @@
+id = "better-desktop/better-sidepanels"
+name = "Better Sidepanels"
+version = "1.0.0"
+plugin_api = 24
+author = "Better Desktop"
+description = "Reload and validate better-sidepanels from the bar."
+
+[[widget]]
+id = "panels"
+entry = "widget.luau"
