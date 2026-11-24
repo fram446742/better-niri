@@ -106,6 +106,10 @@ fn main() -> Result<()> {
             "--check" => check = true,
             "--validate" => validate = true,
             "--init" => init = true,
+            "--version" | "-V" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
             "--help" | "-h" => {
                 print!("{}", usage());
                 return Ok(());

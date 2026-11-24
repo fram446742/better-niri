@@ -69,6 +69,10 @@ fn run_cli() -> Result<(), String> {
                 backend = Some(Backend::parse(&value)?);
             }
             "--dry-run" => dry_run = true,
+            "--version" | "-V" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
             "--help" | "-h" => {
                 print!("{}", usage());
                 return Ok(());

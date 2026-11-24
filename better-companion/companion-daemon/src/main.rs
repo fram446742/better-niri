@@ -42,6 +42,10 @@ fn main() -> ExitCode {
             },
             "--once" => once = true,
             "--no-track" => track = false,
+            "--version" | "-V" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
             "--help" | "-h" => {
                 print!("{}", usage());
                 return ExitCode::SUCCESS;
