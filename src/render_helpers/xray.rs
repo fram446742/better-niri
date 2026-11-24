@@ -1,3 +1,11 @@
+//! Shared scene-wide xray backdrop.
+//!
+//! This module is GLES-only. Its buffers (`EffectBuffer`) hold raw `GlesTexture`s rendered
+//! through `GlesRenderer`, the composite program is a `GlesTexProgram`, and the optional
+//! alpha mask is a GLES surface texture. `Niri::fill_xray_elements` fills it with a
+//! `RenderCtx<GlesRenderer>`, so the Vulkan backend has no producer. On Vulkan
+//! `BackgroundEffect::render` falls back to the per-window framebuffer effect instead.
+
 use std::array;
 use std::cell::RefCell;
 use std::rc::Rc;

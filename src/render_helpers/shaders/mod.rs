@@ -358,6 +358,20 @@ impl Shaders {
         false
     }
 
+    /// Whether the renderer has a compiled per-window decoration shader for `key`, on either
+    /// backend.
+    pub fn has_decoration(renderer: &mut impl NiriRenderer, key: u64) -> bool {
+        if let Some(renderer) = renderer.as_gles_renderer() {
+            return Self::get(renderer).decorations.borrow().contains_key(&key);
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(renderer) = renderer.as_vulkan_renderer() {
+            return get_vulkan_renderer(renderer)
+                .is_some_and(|shaders| shaders.decorations.borrow().contains_key(&key));
+        }
+        false
+    }
+
     pub fn get(renderer: &mut GlesRenderer) -> &Self {
         let data = renderer.egl_context().user_data();
         data.get()

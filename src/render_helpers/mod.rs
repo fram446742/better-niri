@@ -30,6 +30,8 @@ use crate::render_helpers::xray::Xray;
 pub mod background_effect;
 pub mod blend;
 pub mod blur;
+#[cfg(feature = "vulkan")]
+pub mod blur_vulkan;
 pub mod border;
 pub mod capture;
 pub mod clipped_surface;

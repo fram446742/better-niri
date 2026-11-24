@@ -7460,6 +7460,10 @@ impl Niri {
         // Skip the xray background re-render while the host's live workspace strip is
         // suppressed: xray elements are only consumed by that strip's per-workspace layer-shell
         // rendering in `render_inner`, which doesn't run in that case either.
+        //
+        // GLES-only: `fill_xray_elements` takes `RenderCtx<GlesRenderer>` and stores GLES
+        // offscreen elements in `Xray`'s `EffectBuffer`s (see `xray.rs` module docs). On Vulkan
+        // `BackgroundEffect::render` falls back to the per-window framebuffer effect.
         if !self.carousel_host_strip_suppressed(output)
             && let Some(mut gles) = ctx.as_gles()
         {
