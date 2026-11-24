@@ -1,5 +1,5 @@
-use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesTexture};
 use smithay::backend::renderer::Texture as _;
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesTexture, ffi};
 use smithay::utils::{Physical, Rectangle};
 
 /// Blit the `dst` region of the frame's current DRAW framebuffer into `into`.

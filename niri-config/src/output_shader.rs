@@ -7,7 +7,7 @@
 
 use tracing::warn;
 
-use crate::shader_presets::{builtin_preset_source, ShaderPresetRefPart};
+use crate::shader_presets::{ShaderPresetRefPart, builtin_preset_source};
 
 /// One pass of an output shader.
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
@@ -152,9 +152,10 @@ fn resolve_body(
 
     // A top-level `preset` may name a user preset, which shadows a built-in of the same name.
     if let (Some(r), Some(presets)) = (preset, user_presets)
-        && let Some(user) = presets.iter().find(|p| p.name == r.name) {
-            return user.pass_sources(expand);
-        }
+        && let Some(user) = presets.iter().find(|p| p.name == r.name)
+    {
+        return user.pass_sources(expand);
+    }
 
     match resolve_leaf(source, path, default_mode, preset, expand) {
         Some(pair) => vec![pair],
@@ -296,9 +297,11 @@ mod tests {
         .unwrap();
         let out_config = config.outputs.0.iter().find(|o| o.name == "DP-1").unwrap();
         let shader = out_config.shader.as_ref().unwrap();
-        assert!(shader
-            .pass_sources(&config.output_shaders, &no_files)
-            .is_empty());
+        assert!(
+            shader
+                .pass_sources(&config.output_shaders, &no_files)
+                .is_empty()
+        );
     }
 
     #[test]

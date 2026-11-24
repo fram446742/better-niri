@@ -4,11 +4,11 @@ use std::hash::{Hash, Hasher};
 
 use glam::Mat3;
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::ImportMem;
 use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName,
     UniformType, UniformValue,
 };
-use smithay::backend::renderer::ImportMem;
 use smithay::utils::Size;
 
 use super::renderer::NiriRenderer;
@@ -436,9 +436,10 @@ pub fn set_custom_resize_program(renderer: &mut GlesRenderer, src: Option<&str>)
     };
 
     if let Some(prev) = Shaders::get(renderer).replace_custom_resize_program(program)
-        && let Err(err) = prev.destroy(renderer) {
-            warn!("error destroying previous custom resize shader: {err:?}");
-        }
+        && let Err(err) = prev.destroy(renderer)
+    {
+        warn!("error destroying previous custom resize shader: {err:?}");
+    }
 }
 
 fn compile_close_program(
@@ -478,9 +479,10 @@ pub fn set_custom_close_program(renderer: &mut GlesRenderer, src: Option<&str>) 
     };
 
     if let Some(prev) = Shaders::get(renderer).replace_custom_close_program(program)
-        && let Err(err) = prev.destroy(renderer) {
-            warn!("error destroying previous custom close shader: {err:?}");
-        }
+        && let Err(err) = prev.destroy(renderer)
+    {
+        warn!("error destroying previous custom close shader: {err:?}");
+    }
 }
 
 fn compile_open_program(
@@ -520,9 +522,10 @@ pub fn set_custom_open_program(renderer: &mut GlesRenderer, src: Option<&str>) {
     };
 
     if let Some(prev) = Shaders::get(renderer).replace_custom_open_program(program)
-        && let Err(err) = prev.destroy(renderer) {
-            warn!("error destroying previous custom open shader: {err:?}");
-        }
+        && let Err(err) = prev.destroy(renderer)
+    {
+        warn!("error destroying previous custom open shader: {err:?}");
+    }
 }
 
 fn compile_global_program(

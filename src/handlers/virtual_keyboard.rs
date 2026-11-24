@@ -158,13 +158,14 @@ impl State {
         };
 
         if let Some(active) = &mut self.niri.virtual_keyboard_keymap
-            && active.keymap.id() == keymap.id() {
-                // Another virtual keyboard may have installed an identical
-                // keymap. Take ownership of it anyway, so that removing that
-                // one doesn't take the keymap out from under us.
-                active.device = device.clone();
-                return;
-            }
+            && active.keymap.id() == keymap.id()
+        {
+            // Another virtual keyboard may have installed an identical
+            // keymap. Take ownership of it anyway, so that removing that
+            // one doesn't take the keymap out from under us.
+            active.device = device.clone();
+            return;
+        }
 
         // A keymap identical to the configured one (e.g. from an input method
         // forwarding keys with the keymap it received from us) doesn't need to

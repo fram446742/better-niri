@@ -15,8 +15,8 @@ use pango::{Alignment, FontDescription};
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::TouchSlot;
-use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{ExportMem, Texture as _};
 use smithay::input::keyboard::Keysym;
@@ -29,7 +29,7 @@ use crate::niri_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
-use crate::render_helpers::{render_to_texture, RenderTarget};
+use crate::render_helpers::{RenderTarget, render_to_texture};
 use crate::utils::to_physical_precise_round;
 
 const SELECTION_BORDER: i32 = 2;
@@ -38,11 +38,9 @@ const PADDING: i32 = 8;
 const RADIUS: i32 = 16;
 const FONT: &str = "sans 14px";
 const BORDER: i32 = 4;
-const TEXT_HIDE_P: &str =
-    "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
+const TEXT_HIDE_P: &str = "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to hide the pointer.";
-const TEXT_SHOW_P: &str =
-    "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
+const TEXT_SHOW_P: &str = "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
 
 pub type ScreenshotReplySender = async_channel::Sender<Result<Arc<[u8]>, String>>;
@@ -725,10 +723,9 @@ impl ScreenshotUi {
         };
         let screenshot = &output_data.screenshot[index];
 
-        if *show_pointer
-            && let Some(pointer) = screenshot.pointer.clone() {
-                push(pointer.into());
-            }
+        if *show_pointer && let Some(pointer) = screenshot.pointer.clone() {
+            push(pointer.into());
+        }
         push(screenshot.buffer.clone().into());
     }
 
@@ -755,35 +752,35 @@ impl ScreenshotUi {
 
         // Composite the pointer on top if needed.
         let mut tex_rect = None;
-        if *show_pointer
-            && let Some(pointer) = screenshot.pointer.clone() {
-                let scale = pointer.0.buffer().texture_scale();
-                let offset = rect.loc.upscale(-1);
+        if *show_pointer && let Some(pointer) = screenshot.pointer.clone() {
+            let scale = pointer.0.buffer().texture_scale();
+            let offset = rect.loc.upscale(-1);
 
-                let mut elements = ArrayVec::<_, 2>::new();
-                elements.push(pointer);
-                elements.push(screenshot.buffer.clone());
-                let elements = elements.iter().rev().map(|elem| {
-                    RelocateRenderElement::from_element(elem, offset, Relocate::Relative)
-                });
+            let mut elements = ArrayVec::<_, 2>::new();
+            elements.push(pointer);
+            elements.push(screenshot.buffer.clone());
+            let elements = elements
+                .iter()
+                .rev()
+                .map(|elem| RelocateRenderElement::from_element(elem, offset, Relocate::Relative));
 
-                let res = render_to_texture(
-                    renderer,
-                    rect.size,
-                    scale,
-                    Transform::Normal,
-                    Fourcc::Abgr8888,
-                    elements,
-                );
-                match res {
-                    Ok((texture, _)) => {
-                        tex_rect = Some((texture, Rectangle::from_size(rect.size)));
-                    }
-                    Err(err) => {
-                        warn!("error compositing pointer onto screenshot: {err:?}");
-                    }
+            let res = render_to_texture(
+                renderer,
+                rect.size,
+                scale,
+                Transform::Normal,
+                Fourcc::Abgr8888,
+                elements,
+            );
+            match res {
+                Ok((texture, _)) => {
+                    tex_rect = Some((texture, Rectangle::from_size(rect.size)));
+                }
+                Err(err) => {
+                    warn!("error compositing pointer onto screenshot: {err:?}");
                 }
             }
+        }
 
         let (texture, rect) = tex_rect.unwrap_or_else(|| (screenshot.texture.clone(), rect));
         // The size doesn't actually matter because we're not transforming anything.
@@ -989,12 +986,13 @@ impl ScreenshotUi {
                 last_pos,
                 ..
             } = button
-                && move_state.is_none() {
-                    *move_state = Some(MoveState {
-                        pointer_offset: last_pos.1 - selection.1,
-                        touch_slot: Some(new_slot),
-                    });
-                }
+            && move_state.is_none()
+        {
+            *move_state = Some(MoveState {
+                pointer_offset: last_pos.1 - selection.1,
+                touch_slot: Some(new_slot),
+            });
+        }
 
         if button.is_down() {
             return false;
@@ -1064,9 +1062,10 @@ impl ScreenshotUi {
         if touch_slot != slot {
             // This is not our main touch, but it might be the move touch. If so, stop the move.
             if let Some(state) = move_state
-                && state.touch_slot.is_some_and(|m_slot| Some(m_slot) == slot) {
-                    *move_state = None;
-                };
+                && state.touch_slot.is_some_and(|m_slot| Some(m_slot) == slot)
+            {
+                *move_state = None;
+            };
 
             return None;
         }

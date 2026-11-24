@@ -129,8 +129,8 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for DecorationShader {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::MergeWith;
     use crate::Config;
+    use crate::utils::MergeWith;
 
     #[test]
     fn shader_rules_replace_and_disable() {

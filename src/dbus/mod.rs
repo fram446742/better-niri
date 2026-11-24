@@ -260,10 +260,9 @@ impl DBusServers {
 }
 
 fn request_name(conn: &Connection, name: &'static str, monitor: bool) -> zbus::Result<()> {
-    if monitor
-        && let Err(err) = start_name_monitor(conn, name) {
-            warn!("error monitoring D-Bus name {name}: {err:?}");
-        }
+    if monitor && let Err(err) = start_name_monitor(conn, name) {
+        warn!("error monitoring D-Bus name {name}: {err:?}");
+    }
 
     let flags = RequestNameFlags::AllowReplacement
         | RequestNameFlags::ReplaceExisting

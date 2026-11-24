@@ -4,12 +4,12 @@ use std::rc::Rc;
 
 use glam::{Mat3, Vec2};
 use niri_config::CornerRadius;
+use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles::{
-    ffi, GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform,
+    GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, ffi,
 };
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
-use smithay::backend::renderer::Color32F;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
@@ -19,7 +19,7 @@ use crate::render_helpers::blend::FrameBlendState;
 use crate::render_helpers::effect_buffer::EffectBuffer;
 use crate::render_helpers::liquid_glass::LiquidGlassOptions;
 use crate::render_helpers::renderer::AsGlesFrame as _;
-use crate::render_helpers::shaders::{mat3_uniform, Shaders};
+use crate::render_helpers::shaders::{Shaders, mat3_uniform};
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::region::TransformedRegion;
 

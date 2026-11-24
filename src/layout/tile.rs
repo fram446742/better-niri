@@ -14,7 +14,7 @@ use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
 use super::{
     HitType, LayoutElement, LayoutElementRenderElement, LayoutElementRenderSnapshot, Options,
-    SizeFrac, StickyRestoreInfo, RESIZE_ANIMATION_THRESHOLD,
+    RESIZE_ANIMATION_THRESHOLD, SizeFrac, StickyRestoreInfo,
 };
 use crate::animation::{Animation, Clock};
 use crate::layout::SizingMode;
@@ -482,28 +482,34 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn advance_animations(&mut self) {
         if let Some(open) = &mut self.open_animation
-            && open.is_done() {
-                self.open_animation = None;
-            }
+            && open.is_done()
+        {
+            self.open_animation = None;
+        }
 
         if let Some(resize) = &mut self.resize_animation
-            && resize.anim.is_done() {
-                self.resize_animation = None;
-            }
+            && resize.anim.is_done()
+        {
+            self.resize_animation = None;
+        }
 
         if let Some(move_) = &mut self.move_x_animation
-            && move_.anim.is_done() {
-                self.move_x_animation = None;
-            }
+            && move_.anim.is_done()
+        {
+            self.move_x_animation = None;
+        }
         if let Some(move_) = &mut self.move_y_animation
-            && move_.anim.is_done() {
-                self.move_y_animation = None;
-            }
+            && move_.anim.is_done()
+        {
+            self.move_y_animation = None;
+        }
 
         if let Some(alpha) = &mut self.alpha_animation
-            && !alpha.hold_after_done && alpha.anim.is_done() {
-                self.alpha_animation = None;
-            }
+            && !alpha.hold_after_done
+            && alpha.anim.is_done()
+        {
+            self.alpha_animation = None;
+        }
 
         if self
             .focus_ring_anim
@@ -836,11 +842,12 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn ensure_alpha_animates_to_1(&mut self) {
         if let Some(alpha) = &self.alpha_animation
-            && alpha.anim.to() != 1. {
-                // Cancel animation instead of starting a new one because the user likely wants to
-                // see the tile right away.
-                self.alpha_animation = None;
-            }
+            && alpha.anim.to() != 1.
+        {
+            // Cancel animation instead of starting a new one because the user likely wants to
+            // see the tile right away.
+            self.alpha_animation = None;
+        }
     }
 
     pub fn hold_alpha_animation_after_done(&mut self) {
@@ -863,9 +870,10 @@ impl<W: LayoutElement> Tile<W> {
 
     fn fullscreen_progress(&self) -> f64 {
         if let Some(resize) = &self.resize_animation
-            && let Some(anim) = &resize.fullscreen_progress {
-                return anim.clamped_value().clamp(0., 1.);
-            }
+            && let Some(anim) = &resize.fullscreen_progress
+        {
+            return anim.clamped_value().clamp(0., 1.);
+        }
 
         if self.sizing_mode.is_fullscreen() {
             1.
@@ -876,15 +884,12 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn expanded_progress(&self) -> f64 {
         if let Some(resize) = &self.resize_animation
-            && let Some(anim) = &resize.expanded_progress {
-                return anim.clamped_value().clamp(0., 1.);
-            }
-
-        if self.sizing_mode.is_normal() {
-            0.
-        } else {
-            1.
+            && let Some(anim) = &resize.expanded_progress
+        {
+            return anim.clamped_value().clamp(0., 1.);
         }
+
+        if self.sizing_mode.is_normal() { 0. } else { 1. }
     }
 
     /// Returns `None` if the border is hidden and `Some(width)` if it should be shown.
@@ -1431,23 +1436,19 @@ impl<W: LayoutElement> Tile<W> {
                     // If we should clip to geometry, render a clipped window.
                     if clip_to_geometry
                         && let Some(shader) = clip_shader.clone()
-                            && ClippedSurfaceRenderElement::will_clip(
-                                elem.inner(),
-                                scale,
-                                geo,
-                                radius,
-                            ) {
-                                let content = elem.content();
-                                return ClippedSurfaceRenderElement::new(
-                                    elem.into_inner(),
-                                    scale,
-                                    geo,
-                                    shader.clone(),
-                                    radius,
-                                    content,
-                                )
-                                .into();
-                            }
+                        && ClippedSurfaceRenderElement::will_clip(elem.inner(), scale, geo, radius)
+                    {
+                        let content = elem.content();
+                        return ClippedSurfaceRenderElement::new(
+                            elem.into_inner(),
+                            scale,
+                            geo,
+                            shader.clone(),
+                            radius,
+                            content,
+                        )
+                        .into();
+                    }
 
                     // Otherwise, render it normally.
                     LayoutElementRenderElement::Wayland(elem).into()
@@ -1633,17 +1634,18 @@ impl<W: LayoutElement> Tile<W> {
                 && let Some(light) =
                     self.focus_ring
                         .render_light(ctx.renderer, location, tile_alpha)
-                {
-                    push(light.into());
-                }
+            {
+                push(light.into());
+            }
             if let Some(width) = self.visual_border_width()
                 && let Some(light) = self.border.render_light(
                     ctx.renderer,
                     location + Point::from((width, width)),
                     tile_alpha,
-                ) {
-                    push(light.into());
-                }
+                )
+            {
+                push(light.into());
+            }
         }
 
         let mut pushed = false;
@@ -1676,31 +1678,30 @@ impl<W: LayoutElement> Tile<W> {
                     warn!("error rendering window opening animation: {err:?}");
                 }
             }
-        } else if alpha_animations
-            && let Some(alpha) = &self.alpha_animation {
-                let mut ctx = ctx.as_gles();
-                let mut elements = Vec::new();
-                self.render_inner(
-                    ctx.r(),
-                    Point::new(0., 0.),
-                    xray_pos,
-                    focus_ring,
-                    &mut |elem| elements.push(elem),
-                );
-                match alpha.offscreen.render(ctx.renderer, scale, &elements) {
-                    Ok((elem, _sync, data)) => {
-                        let offset = elem.offset();
-                        let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
+        } else if alpha_animations && let Some(alpha) = &self.alpha_animation {
+            let mut ctx = ctx.as_gles();
+            let mut elements = Vec::new();
+            self.render_inner(
+                ctx.r(),
+                Point::new(0., 0.),
+                xray_pos,
+                focus_ring,
+                &mut |elem| elements.push(elem),
+            );
+            match alpha.offscreen.render(ctx.renderer, scale, &elements) {
+                Ok((elem, _sync, data)) => {
+                    let offset = elem.offset();
+                    let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
 
-                        self.window().set_offscreen_data(Some(data));
-                        push(elem.into());
-                        pushed = true;
-                    }
-                    Err(err) => {
-                        warn!("error rendering tile to offscreen for alpha animation: {err:?}");
-                    }
+                    self.window().set_offscreen_data(Some(data));
+                    push(elem.into());
+                    pushed = true;
+                }
+                Err(err) => {
+                    warn!("error rendering tile to offscreen for alpha animation: {err:?}");
                 }
             }
+        }
 
         if !pushed {
             self.render_inner(ctx, location, xray_pos, focus_ring, &mut |elem| push(elem));

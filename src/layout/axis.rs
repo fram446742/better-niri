@@ -59,19 +59,11 @@ impl AxisMap {
     }
 
     pub fn point_main<N: Copy>(self, point: Point<N, Logical>) -> N {
-        if self.is_vertical() {
-            point.y
-        } else {
-            point.x
-        }
+        if self.is_vertical() { point.y } else { point.x }
     }
 
     pub fn point_cross<N: Copy>(self, point: Point<N, Logical>) -> N {
-        if self.is_vertical() {
-            point.x
-        } else {
-            point.y
-        }
+        if self.is_vertical() { point.x } else { point.y }
     }
 
     pub fn map_main<T, U>(
@@ -101,19 +93,11 @@ impl AxisMap {
     }
 
     pub fn size_main<N: Copy>(self, size: Size<N, Logical>) -> N {
-        if self.is_vertical() {
-            size.h
-        } else {
-            size.w
-        }
+        if self.is_vertical() { size.h } else { size.w }
     }
 
     pub fn size_cross<N: Copy>(self, size: Size<N, Logical>) -> N {
-        if self.is_vertical() {
-            size.w
-        } else {
-            size.h
-        }
+        if self.is_vertical() { size.w } else { size.h }
     }
 
     pub fn rect_in<N: Coordinate>(self, rect: Rectangle<N, Logical>) -> Rectangle<N, Logical> {

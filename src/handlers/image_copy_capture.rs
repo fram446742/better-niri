@@ -27,7 +27,7 @@ use wayland_backend::server::Credentials;
 
 use crate::niri::{Niri, State};
 use crate::render_helpers::CaptureBuffer;
-use crate::utils::{get_credentials_for_client, CastSessionId, CastStreamId};
+use crate::utils::{CastSessionId, CastStreamId, get_credentials_for_client};
 use crate::window::mapped::{Mapped, MappedId};
 
 /// Output capture session.

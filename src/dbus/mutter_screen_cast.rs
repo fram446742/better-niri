@@ -10,12 +10,12 @@ use zbus::message::Header;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::zvariant::{DeserializeDict, NoneValue, OwnedObjectPath, SerializeDict, Type, Value};
-use zbus::{fdo, interface, ObjectServer};
+use zbus::{ObjectServer, fdo, interface};
 
 use super::niri_portal_screen_cast::{
     ConsumeTokenError, PickSourcesRequest, PickerRequestId, PortalScreenCast, SelectionTokens,
 };
-use super::{request_name, Start};
+use super::{Start, request_name};
 use crate::backend::IpcOutputMap;
 use crate::utils::{CastSessionId, CastStreamId};
 
@@ -220,7 +220,7 @@ impl ScreenCast {
             Err(err) => {
                 return Err(fdo::Error::Failed(format!(
                     "error creating session object: {err:?}"
-                )))
+                )));
             }
         }
 
@@ -308,7 +308,7 @@ impl Session {
             Err(err) => {
                 return Err(fdo::Error::Failed(format!(
                     "error creating stream object: {err:?}"
-                )))
+                )));
             }
         }
 
@@ -353,7 +353,7 @@ impl Session {
             Err(err) => {
                 return Err(fdo::Error::Failed(format!(
                     "error creating stream object: {err:?}"
-                )))
+                )));
             }
         }
 
@@ -368,7 +368,7 @@ impl Session {
 impl Stream {
     #[zbus(signal)]
     pub async fn pipe_wire_stream_added(ctxt: &SignalEmitter<'_>, node_id: u32)
-        -> zbus::Result<()>;
+    -> zbus::Result<()>;
 
     #[zbus(signal)]
     pub async fn pipe_wire_stream_added_v2(

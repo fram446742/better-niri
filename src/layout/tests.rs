@@ -5089,10 +5089,12 @@ fn grid_expel_from_column_focuses_previous_tile_when_focused_tile_is_expelled() 
         Op::CompleteAnimations,
     ]);
     assert_eq!(scrolling_column_ids(&layout), vec![vec![1, 2, 3]]);
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&3));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&3)
+    );
 
     layout.expel_from_column();
     layout.verify_invariants();
@@ -5133,11 +5135,12 @@ fn grid_stays_open_when_window_is_added() {
         .active_workspace()
         .and_then(|ws| ws.grid_overview())
         .unwrap();
-    assert!(go
-        .layout
-        .entries
-        .iter()
-        .any(|(item, _)| item.window_id() == &2));
+    assert!(
+        go.layout
+            .entries
+            .iter()
+            .any(|(item, _)| item.window_id() == &2)
+    );
 }
 
 #[cfg(feature = "navigation")]
@@ -5484,10 +5487,12 @@ fn focused_tiled_window_goes_above_floating() {
     let pos = tiled_and_floating_overlap(&layout);
 
     // The new floating window is focused and on top.
-    assert!(!layout
-        .active_workspace()
-        .unwrap()
-        .active_tile_above_floating());
+    assert!(
+        !layout
+            .active_workspace()
+            .unwrap()
+            .active_tile_above_floating()
+    );
     assert_eq!(window_id_under(&layout, pos), Some(2));
 
     check_ops_on_layout(&mut layout, [Op::FocusTiling]);
@@ -5502,10 +5507,12 @@ fn focused_tiled_window_goes_above_floating() {
     assert_eq!(order, [1, 2]);
 
     check_ops_on_layout(&mut layout, [Op::FocusFloating]);
-    assert!(!layout
-        .active_workspace()
-        .unwrap()
-        .active_tile_above_floating());
+    assert!(
+        !layout
+            .active_workspace()
+            .unwrap()
+            .active_tile_above_floating()
+    );
     assert_eq!(window_id_under(&layout, pos), Some(2));
 
     // Clicking the tiled window raises it.
@@ -5532,10 +5539,12 @@ fn floating_stays_above_focused_tiled_window_by_default() {
     let pos = tiled_and_floating_overlap(&layout);
 
     check_ops_on_layout(&mut layout, [Op::FocusTiling]);
-    assert!(!layout
-        .active_workspace()
-        .unwrap()
-        .active_tile_above_floating());
+    assert!(
+        !layout
+            .active_workspace()
+            .unwrap()
+            .active_tile_above_floating()
+    );
     assert_eq!(window_id_under(&layout, pos), Some(2));
 }
 
@@ -5740,10 +5749,12 @@ fn grid_closing_focused_minimized_cell_moves_focus_without_restoring() {
         Op::FocusWindow(1),
         Op::ToggleGridOverview,
     ]);
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&2));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&2)
+    );
 
     // The minimized window's client goes away while its cell is focused. It used to be restored
     // first, to let the scrolling layout pick a neighbour.
@@ -6076,10 +6087,11 @@ fn window_restored_as_the_grid_closes_doesnt_fade_out() {
         .tiles()
         .find(|tile| tile.window().id() == &1)
         .unwrap();
-    assert!(tile
-        .alpha_animation
-        .as_ref()
-        .is_none_or(|alpha| alpha.anim.to() == 1.));
+    assert!(
+        tile.alpha_animation
+            .as_ref()
+            .is_none_or(|alpha| alpha.anim.to() == 1.)
+    );
 }
 
 #[cfg(feature = "navigation")]
@@ -6096,10 +6108,12 @@ fn grid_move_to_workspace_that_goes_nowhere_keeps_minimized_cell() {
         Op::MinimizeWindow(1),
         Op::ToggleGridOverview,
     ]);
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
 
     // This is the first workspace, so there is nowhere up to move. It used to restore the
     // window anyway, before finding out.
@@ -6236,10 +6250,12 @@ fn grid_with_minimized_ignored_floating() -> Layout<TestWindow> {
         Op::ToggleGridOverview,
         Op::CompleteAnimations,
     ]);
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&2));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&2)
+    );
     layout
 }
 
@@ -6930,8 +6946,8 @@ fn grid_up_from_a_centered_last_row_goes_to_the_cell_above_it() {
 fn grid_retarget_during_spring_overshoot_doesnt_jump() {
     use niri_config::animations::{Kind, SpringParams};
 
-    use super::grid_overview::{GridItem, GridOverview, GridSource};
     use super::OverviewProgress;
+    use super::grid_overview::{GridItem, GridOverview, GridSource};
 
     let mut options = Options::default();
     options.animations.window_movement.0 = niri_config::Animation {
@@ -6993,8 +7009,8 @@ fn grid_retarget_during_spring_overshoot_doesnt_jump() {
 #[cfg(feature = "navigation")]
 #[test]
 fn grid_column_inserted_in_the_middle_doesnt_take_over_its_neighbours_cell() {
-    use super::grid_overview::{GridItem, GridOverview, GridSource};
     use super::OverviewProgress;
+    use super::grid_overview::{GridItem, GridOverview, GridSource};
 
     let options = Rc::new(Options::default());
     let mut go = GridOverview::<TestWindow>::new(Clock::with_time(Duration::ZERO), options);
@@ -7310,10 +7326,12 @@ fn grid_tab_indicator_folds_away_when_tab_leaves() {
     layout.update_render_elements(None);
 
     // Window 2 leaves the tabbed column into a column of its own.
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&2));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&2)
+    );
     layout.consume_or_expel_window_left(None);
     layout.verify_invariants();
     layout.update_render_elements(None);
@@ -7452,10 +7470,12 @@ fn grid_has_rearrange_anim(layout: &Layout<TestWindow>) -> bool {
 #[test]
 fn grid_move_column_moves_tabbed_column_as_group() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
 
     layout.move_right(true);
     layout.verify_invariants();
@@ -7469,10 +7489,12 @@ fn grid_move_column_moves_tabbed_column_as_group() {
 #[test]
 fn grid_move_window_down_reorders_focused_tab_only() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
 
     layout.move_down(true);
     layout.verify_invariants();
@@ -7810,10 +7832,12 @@ fn grid_column_to_tabs_starts_windows_from_previous_visual_positions() {
 #[test]
 fn grid_tabs_to_column_starts_windows_from_previous_visual_positions() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
     let before_1 = layout
         .active_workspace()
@@ -7862,10 +7886,12 @@ fn grid_merge_starts_windows_from_previous_visual_positions() {
         Op::ToggleGridOverview,
         Op::CompleteAnimations,
     ]);
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&2));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&2)
+    );
     let before_1 = layout
         .active_workspace()
         .unwrap()
@@ -7922,10 +7948,12 @@ fn grid_action_snapshots_visuals_before_activating_grid_focus() {
             .id(),
         &1
     );
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&2));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&2)
+    );
     let before_2 = layout
         .active_workspace()
         .unwrap()
@@ -7948,21 +7976,24 @@ fn grid_action_snapshots_visuals_before_activating_grid_focus() {
 #[test]
 fn grid_set_column_display_normal_refreshes_grid_items() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
 
     layout.set_column_display(ColumnDisplay::Normal);
     layout.verify_invariants();
 
     let ws = layout.active_workspace().unwrap();
     let go = ws.grid_overview().unwrap();
-    assert!(!go
-        .layout
-        .entries
-        .iter()
-        .any(|(item, _)| matches!(item, super::grid_overview::GridItem::Tab { .. })));
+    assert!(
+        !go.layout
+            .entries
+            .iter()
+            .any(|(item, _)| matches!(item, super::grid_overview::GridItem::Tab { .. }))
+    );
     assert!(go.layout.entries.iter().any(|(item, _)| matches!(
         item,
         super::grid_overview::GridItem::Column { window_id, .. } if window_id == &1
@@ -8613,11 +8644,13 @@ fn grid_focus_navigation_works_during_close_animation() {
     let after = layout.grid_focused_window_id();
 
     assert_ne!(before, after);
-    assert!(layout
-        .active_workspace()
-        .unwrap()
-        .grid_overview()
-        .is_some_and(|go| !go.open));
+    assert!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .grid_overview()
+            .is_some_and(|go| !go.open)
+    );
 }
 
 #[cfg(feature = "navigation")]
@@ -9046,10 +9079,12 @@ fn grid_window_scope_is_limited_to_open_grid_workspace() {
 #[test]
 fn grid_drop_position_uses_visual_cell_edges() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 
     let ws = layout.active_workspace().unwrap();
@@ -9090,10 +9125,12 @@ fn grid_drop_position_uses_visual_cell_edges() {
 #[test]
 fn grid_insert_hint_area_uses_grid_visual_coordinates() {
     let mut layout = tabbed_column_and_column_grid();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 
     let ws = layout.active_workspace().unwrap();
@@ -9216,10 +9253,12 @@ fn grid_new_column_insert_hint_does_not_span_wrapped_rows() {
 #[test]
 fn grid_interactive_move_keeps_visual_scale_and_can_merge() {
     let mut layout = large_grid_layout();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 
     let (output, start, visual_scale) = grid_window_point(&layout, 3, 0.5, 0.5);
@@ -9350,10 +9389,12 @@ fn grid_closing_on_a_minimized_cell_restores_it() {
     ]);
 
     // Closing the grid confirms its focused cell, minimized or not.
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::ToggleGridOverview]);
     assert_eq!(minimized_ids(&layout), Vec::<usize>::new());
     assert_eq!(
@@ -10221,10 +10262,12 @@ fn overview_grid_close_after_moving_focused_window_to_workspace_refits_source_wo
 #[test]
 fn grid_interactive_move_starts_with_small_drag() {
     let mut layout = large_grid_layout();
-    assert!(layout
-        .active_workspace_mut()
-        .unwrap()
-        .set_grid_focus_for_window(&1));
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .set_grid_focus_for_window(&1)
+    );
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 
     let (output, start, _) = grid_window_point(&layout, 3, 0.5, 0.5);
@@ -12320,10 +12363,12 @@ fn grid_gesture_closes_an_open_grid() {
     let p = grid_progress(&layout).unwrap();
     assert!((p - 0.6).abs() < 0.01, "{p}");
     // On its way closed, the grid still shows.
-    assert!(layout
-        .active_workspace()
-        .unwrap()
-        .is_grid_overview_animation());
+    assert!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .is_grid_overview_animation()
+    );
 
     check_ops_on_layout(
         &mut layout,
@@ -12974,7 +13019,7 @@ fn carousel_outputs_includes_host_and_reset_centers_on_active() {
 
     layout.reset_carousel_center();
     assert_eq!(layout.carousel_rotation_target(), 0.0); // centered (rotation snapped to host) on
-                                                        // active host "A"
+    // active host "A"
 }
 
 #[cfg(feature = "navigation")]

@@ -1,6 +1,6 @@
 use std::ptr;
 
-use anyhow::{bail, ensure, Context as _};
+use anyhow::{Context as _, bail, ensure};
 use niri_config::{BlockOutFrom, BlockOutKind, BlockOutTarget};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Buffer, Fourcc};
@@ -23,7 +23,7 @@ use solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
 use self::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use self::texture::{TextureBuffer, TextureRenderElement};
-use crate::render_helpers::blend::{set_sdr_capture_blend, DEFAULT_REFERENCE_LUMINANCE};
+use crate::render_helpers::blend::{DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend};
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::xray::Xray;
 

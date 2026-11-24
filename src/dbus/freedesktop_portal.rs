@@ -11,21 +11,21 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
-use futures_util::future::{select, Either};
 use futures_util::StreamExt;
+use futures_util::future::{Either, select};
 use zbus::message::Header;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{
     DeserializeDict, NoneValue, OwnedObjectPath, OwnedValue, SerializeDict, Type, Value,
 };
-use zbus::{fdo, interface, ObjectServer};
+use zbus::{ObjectServer, fdo, interface};
 
-use super::gnome_shell_screenshot::{file_uri, ScreenshotToNiri};
+use super::gnome_shell_screenshot::{ScreenshotToNiri, file_uri};
 use super::mutter_screen_cast::{CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId};
 use super::niri_portal_screen_cast::{
-    validate_selection, PickSourcesReply, PickSourcesRequest, PickerCursorMode, PickerOptions,
-    PickerPersistMode, PickerRequestId, PickerSelection, PickerSourceTypes,
+    PickSourcesReply, PickSourcesRequest, PickerCursorMode, PickerOptions, PickerPersistMode,
+    PickerRequestId, PickerSelection, PickerSourceTypes, validate_selection,
 };
 use super::request_name;
 use crate::backend::IpcOutputMap;
@@ -985,7 +985,7 @@ fn parse_selection_sources(sources: &[(u32, String)]) -> Result<Vec<StreamTarget
             other => {
                 return Err(fdo::Error::InvalidArgs(format!(
                     "unknown screen cast source type {other}"
-                )))
+                )));
             }
         }
     }

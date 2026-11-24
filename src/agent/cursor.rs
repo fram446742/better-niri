@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use niri_config::FocusRing;
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
-use smithay::backend::renderer::element::Kind;
 use smithay::utils::{Logical, Point, Scale, Size, Transform};
 
 use crate::render_helpers::renderer::NiriRenderer;

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use std::{env, mem, thread};
 
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDecorationsMode;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::gestures::HotCornerAction;
@@ -19,36 +19,36 @@ use niri_config::input::XkbFile;
 use niri_config::output::{HdrMode, MaxBpc};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
-    Bind, Config, FloatOrInt, Key, Modifiers, OutputName,
-    TrackLayout, WarpMouseToFocusMode, WorkspaceReference, Xkb,
+    Bind, Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
+    WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{InputTime, Keycode};
+use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
 use smithay::backend::renderer::element::utils::{
-    select_dmabuf_feedback, CropRenderElement, Relocate, RelocateRenderElement,
-    RescaleRenderElement,
+    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
+    select_dmabuf_feedback,
 };
 use smithay::backend::renderer::element::{
-    default_primary_scanout_output_compare, Element, Id, Kind, PrimaryScanoutOutput, RenderElement,
-    RenderElementStates,
+    Element, Id, Kind, PrimaryScanoutOutput, RenderElement, RenderElementStates,
+    default_primary_scanout_output_compare,
 };
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::sync::SyncPoint;
-use smithay::backend::renderer::Color32F;
 use smithay::desktop::utils::{
-    bbox_from_surface_tree, output_update, send_dmabuf_feedback_surface_tree,
-    send_frames_surface_tree, surface_presentation_feedback_flags_from_states,
-    surface_primary_scanout_output, take_presentation_feedback_surface_tree,
-    under_from_surface_tree, update_surface_primary_scanout_output, with_surfaces_surface_tree,
-    OutputPresentationFeedback,
+    OutputPresentationFeedback, bbox_from_surface_tree, output_update,
+    send_dmabuf_feedback_surface_tree, send_frames_surface_tree,
+    surface_presentation_feedback_flags_from_states, surface_primary_scanout_output,
+    take_presentation_feedback_surface_tree, under_from_surface_tree,
+    update_surface_primary_scanout_output, with_surfaces_surface_tree,
 };
 use smithay::desktop::{
-    find_popup_root_surface, layer_map_for_output, LayerMap, LayerSurface, PopupGrab, PopupManager,
-    PopupUngrabStrategy, Space, Window, WindowSurfaceType,
+    LayerMap, LayerSurface, PopupGrab, PopupManager, PopupUngrabStrategy, Space, Window,
+    WindowSurfaceType, find_popup_root_surface, layer_map_for_output,
 };
 use smithay::input::keyboard::{KeymapFile, Layout as KeyboardLayout, LedState, XkbConfig};
 use smithay::input::pointer::{
@@ -77,7 +77,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{
     Buffer as BufferCoords, ClockSource, IsAlive as _, Logical, Monotonic, Physical, Point,
-    Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
+    Rectangle, SERIAL_COUNTER, Scale, Size, Transform,
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::color::management::{
@@ -86,13 +86,13 @@ use smithay::wayland::color::management::{
     TransferFunction as CmTransferFunction,
 };
 use smithay::wayland::compositor::{
-    get_parent, with_states, with_surface_tree_downward, Barrier, CompositorClientState,
-    CompositorHandler, CompositorState, HookId, SurfaceData, TraversalAction,
+    Barrier, CompositorClientState, CompositorHandler, CompositorState, HookId, SurfaceData,
+    TraversalAction, get_parent, with_states, with_surface_tree_downward,
 };
 use smithay::wayland::content_type::{ContentTypeState, ContentTypeSurfaceCachedState};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::DmabufState;
-use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
+use smithay::wayland::drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd};
 use smithay::wayland::fifo::{FifoBarrierCachedState, FifoManagerState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
@@ -106,21 +106,21 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
 use smithay::wayland::output::OutputManagerState;
-use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsState};
+use smithay::wayland::pointer_constraints::{PointerConstraintsState, with_pointer_constraint};
 use smithay::wayland::pointer_gestures::PointerGesturesState;
 use smithay::wayland::pointer_warp::PointerWarpManager;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::security_context::SecurityContextState;
-use smithay::wayland::selection::data_device::{set_data_device_selection, DataDeviceState};
+use smithay::wayland::selection::data_device::{DataDeviceState, set_data_device_selection};
 use smithay::wayland::selection::ext_data_control::DataControlState as ExtDataControlState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState as WlrDataControlState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
 use smithay::wayland::shell::kde::decoration::KdeDecorationState;
 use smithay::wayland::shell::wlr_layer::{self, Layer, WlrLayerShellState};
-use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::XdgShellState;
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shm::ShmState;
 #[cfg(test)]
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
@@ -157,18 +157,18 @@ use crate::handlers::image_copy_capture::{
     ImageCopySession,
 };
 use crate::handlers::virtual_keyboard::VirtualKeyboardKeymap;
-use crate::handlers::{configure_lock_surface, XDG_ACTIVATION_TOKEN_TIMEOUT};
+use crate::handlers::{XDG_ACTIVATION_TOKEN_TIMEOUT, configure_lock_surface};
 use crate::input::pick_color_grab::PickColorGrab;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
 use crate::input::{
-    apply_libinput_settings, mods_with_finger_scroll_binds, mods_with_horizontal_wheel_binds,
-    mods_with_mouse_binds, mods_with_tablet_stylus_binds, mods_with_vertical_wheel_binds,
-    TabletData,
+    TabletData, apply_libinput_settings, mods_with_finger_scroll_binds,
+    mods_with_horizontal_wheel_binds, mods_with_mouse_binds, mods_with_tablet_stylus_binds,
+    mods_with_vertical_wheel_binds,
 };
 use crate::ipc::server::IpcServer;
-use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layer::MappedLayer;
+use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::{
@@ -186,7 +186,7 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyManagerState};
 use crate::render_helpers::blend::{
-    set_sdr_capture_blend, BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE,
+    BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend,
 };
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
@@ -205,9 +205,9 @@ use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    encompassing_geo, render_and_download, render_to_dmabuf, render_to_encompassing_texture,
-    render_to_shm, render_to_texture, render_to_vec, shaders, CaptureBuffer, RenderCtx,
-    RenderIntent, RenderTarget,
+    CaptureBuffer, RenderCtx, RenderIntent, RenderTarget, encompassing_geo, render_and_download,
+    render_to_dmabuf, render_to_encompassing_texture, render_to_shm, render_to_texture,
+    render_to_vec, shaders,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
@@ -215,11 +215,11 @@ use crate::ui::config_error_notification::ConfigErrorNotification;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
-use crate::ui::pick_color_ui::{clamp_to_output, PickColorUi, Region as PickColorRegion};
+use crate::ui::pick_color_ui::{PickColorUi, Region as PickColorRegion, clamp_to_output};
 use crate::ui::screen_transition::{self, ScreenTransition};
+use crate::ui::screencast_picker::{PREVIEW_FRAME_INTERVAL, ScreenCastPickerRenderElement};
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::ui::screencast_picker::{PickerCandidate, ScreenCastPickerUi};
-use crate::ui::screencast_picker::{ScreenCastPickerRenderElement, PREVIEW_FRAME_INTERVAL};
 use crate::ui::screenshot_ui::{
     OutputScreenshot, ScreenshotPathReplySender, ScreenshotPortalError, ScreenshotReplySender,
     ScreenshotSelectionReplySender, ScreenshotUi, ScreenshotUiRenderElement,
@@ -823,7 +823,6 @@ pub struct PanelSource {
 }
 
 #[cfg(feature = "navigation")]
-
 #[cfg(feature = "navigation")]
 impl PanelSource {
     /// Resets to the fresh (never-rendered) state, dropping the retained published element (and
@@ -1721,9 +1720,10 @@ impl State {
                     let new_active = self.niri.layout.active_output().cloned();
                     if new_active != active_output {
                         if let Some(output) = new_active
-                            && !self.maybe_warp_cursor_to_focus_centered() {
-                                self.move_cursor_to_output(&output);
-                            }
+                            && !self.maybe_warp_cursor_to_focus_centered()
+                        {
+                            self.move_cursor_to_output(&output);
+                        }
                     } else {
                         self.maybe_warp_cursor_to_focus();
                     }
@@ -1860,9 +1860,10 @@ impl State {
 
     pub fn refresh_popup_grab(&mut self) {
         if let Some(grab) = &mut self.niri.popup_grab
-            && grab.grab.has_ended() {
-                self.niri.popup_grab = None;
-            }
+            && grab.grab.has_ended()
+        {
+            self.niri.popup_grab = None;
+        }
     }
 
     pub fn update_keyboard_focus(&mut self) {
@@ -2007,75 +2008,77 @@ impl State {
         if self.niri.keyboard_focus != focus {
             trace!(
                 "keyboard focus changed from {:?} to {:?}",
-                self.niri.keyboard_focus,
-                focus
+                self.niri.keyboard_focus, focus
             );
 
             // Tell the windows their new focus state for window rule purposes.
             if let KeyboardFocus::Layout {
                 surface: Some(surface),
             } = &self.niri.keyboard_focus
-                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
-                    mapped.set_is_focused(false);
-                }
+                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface)
+            {
+                mapped.set_is_focused(false);
+            }
             if let KeyboardFocus::Layout {
                 surface: Some(surface),
             } = &focus
-                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
-                    mapped.set_is_focused(true);
+                && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface)
+            {
+                mapped.set_is_focused(true);
 
-                    // If `mapped` does not have a focus timestamp, then the window is newly
-                    // created/mapped and a timestamp is unconditionally created.
-                    //
-                    // If `mapped` already has a timestamp only update it after the focus lock-in
-                    // period has gone by without the focus having elsewhere.
-                    let stamp = get_monotonic_time();
+                // If `mapped` does not have a focus timestamp, then the window is newly
+                // created/mapped and a timestamp is unconditionally created.
+                //
+                // If `mapped` already has a timestamp only update it after the focus lock-in
+                // period has gone by without the focus having elsewhere.
+                let stamp = get_monotonic_time();
 
-                    let debounce = self.niri.config.borrow().recent_windows.debounce_ms;
-                    let debounce = Duration::from_millis(u64::from(debounce));
+                let debounce = self.niri.config.borrow().recent_windows.debounce_ms;
+                let debounce = Duration::from_millis(u64::from(debounce));
 
-                    if mapped.get_focus_timestamp().is_none() || debounce.is_zero() {
-                        mapped.set_focus_timestamp(stamp);
-                    } else {
-                        let timer = Timer::from_duration(debounce);
+                if mapped.get_focus_timestamp().is_none() || debounce.is_zero() {
+                    mapped.set_focus_timestamp(stamp);
+                } else {
+                    let timer = Timer::from_duration(debounce);
 
-                        let focus_token = self
-                            .niri
-                            .event_loop
-                            .insert_source(timer, move |_, _, state| {
-                                state.niri.mru_apply_keyboard_commit();
-                                TimeoutAction::Drop
-                            })
-                            .unwrap();
-                        if let Some(PendingMruCommit { token, .. }) =
-                            self.niri.pending_mru_commit.replace(PendingMruCommit {
-                                id: mapped.id(),
-                                token: focus_token,
-                                stamp,
-                            })
-                        {
-                            self.niri.event_loop.remove(token);
-                        }
+                    let focus_token = self
+                        .niri
+                        .event_loop
+                        .insert_source(timer, move |_, _, state| {
+                            state.niri.mru_apply_keyboard_commit();
+                            TimeoutAction::Drop
+                        })
+                        .unwrap();
+                    if let Some(PendingMruCommit { token, .. }) =
+                        self.niri.pending_mru_commit.replace(PendingMruCommit {
+                            id: mapped.id(),
+                            token: focus_token,
+                            stamp,
+                        })
+                    {
+                        self.niri.event_loop.remove(token);
                     }
                 }
+            }
 
             if let Some(grab) = self.niri.popup_grab.as_mut()
-                && grab.has_keyboard_grab && Some(&grab.root) != focus.surface() {
-                    trace!(
-                        "grab root {:?} is not the new focus {:?}, ungrabbing",
-                        grab.root,
-                        focus
-                    );
+                && grab.has_keyboard_grab
+                && Some(&grab.root) != focus.surface()
+            {
+                trace!(
+                    "grab root {:?} is not the new focus {:?}, ungrabbing",
+                    grab.root, focus
+                );
 
-                    grab.grab.ungrab(PopupUngrabStrategy::All);
-                    keyboard.unset_grab(self);
-                    self.niri.seat.get_pointer().unwrap().unset_grab(
-                        self,
-                        SERIAL_COUNTER.next_serial(),
-                        InputTime::now(),
-                    );
-                    self.niri.popup_grab = None;
-                }
+                grab.grab.ungrab(PopupUngrabStrategy::All);
+                keyboard.unset_grab(self);
+                self.niri.seat.get_pointer().unwrap().unset_grab(
+                    self,
+                    SERIAL_COUNTER.next_serial(),
+                    InputTime::now(),
+                );
+                self.niri.popup_grab = None;
+            }
 
             if self.niri.current_keyboard.track_layout == TrackLayout::Window {
                 let current_layout = keyboard.with_xkb_state(self, |context| {
@@ -2146,9 +2149,10 @@ impl State {
             .file
             .clone();
         if let Some(XkbFile(Some(keymap))) = xkb_file
-            && let Err(err) = self.set_xkb_file_content(keymap) {
-                warn!("error loading xkb_file: {err:?}");
-            }
+            && let Err(err) = self.set_xkb_file_content(keymap)
+        {
+            warn!("error loading xkb_file: {err:?}");
+        }
     }
 
     pub fn set_xkb_config(&mut self, xkb: XkbConfig) {
@@ -2200,15 +2204,17 @@ impl State {
         let mut mods = keyboard.modifier_state();
         let mut mods_changed = false;
         if let Some(caps_lock) = state.caps_lock
-            && mods.caps_lock != caps_lock {
-                mods.caps_lock = caps_lock;
-                mods_changed = true;
-            }
+            && mods.caps_lock != caps_lock
+        {
+            mods.caps_lock = caps_lock;
+            mods_changed = true;
+        }
         if let Some(num_lock) = state.num_lock
-            && mods.num_lock != num_lock {
-                mods.num_lock = num_lock;
-                mods_changed = true;
-            }
+            && mods.num_lock != num_lock
+        {
+            mods.num_lock = num_lock;
+            mods_changed = true;
+        }
         if mods_changed {
             keyboard.set_modifier_state(mods);
             // set_modifier_state() doesn't update the LED state of physical keyboards.
@@ -2677,9 +2683,10 @@ impl State {
                 .map(|satellite| satellite.display_name().to_owned());
 
             if let Some(name) = &display_name
-                && !was_working {
-                    info!("listening on X11 socket: {name}");
-                }
+                && !was_working
+            {
+                info!("listening on X11 socket: {name}");
+            }
 
             // This won't change the systemd environment, but oh well.
             *CHILD_DISPLAY.write().unwrap() = display_name;
@@ -2745,10 +2752,11 @@ impl State {
             let backdrop_color = Color32F::from(backdrop_color);
 
             if let Some(state) = self.niri.output_state.get_mut(output)
-                && state.backdrop_buffer.color() != backdrop_color {
-                    state.backdrop_buffer.set_color(backdrop_color);
-                    recolored_outputs.push(output.clone());
-                }
+                && state.backdrop_buffer.color() != backdrop_color
+            {
+                state.backdrop_buffer.set_color(backdrop_color);
+                recolored_outputs.push(output.clone());
+            }
 
             for mon in self.niri.layout.monitors_mut() {
                 if mon.output() != output {
@@ -2758,9 +2766,10 @@ impl State {
                 let mut layout_config = config.and_then(|c| c.layout.clone());
                 // Support the deprecated non-layout background-color key.
                 if let Some(layout) = &mut layout_config
-                    && layout.background_color.is_none() {
-                        layout.background_color = config.and_then(|c| c.background_color);
-                    }
+                    && layout.background_color.is_none()
+                {
+                    layout.background_color = config.and_then(|c| c.background_color);
+                }
 
                 if mon.update_layout_config(layout_config) {
                     // Also redraw these; if anything, the background color could've changed.
@@ -4712,7 +4721,7 @@ impl Niri {
 
     #[cfg(feature = "dbus")]
     pub fn inhibit_power_key(&mut self) -> anyhow::Result<()> {
-        use smithay::reexports::rustix::io::{fcntl_setfd, FdFlags};
+        use smithay::reexports::rustix::io::{FdFlags, fcntl_setfd};
 
         let conn = zbus::blocking::Connection::system()?;
 
@@ -4896,9 +4905,10 @@ impl Niri {
         let mut layout_config = c.and_then(|c| c.layout.clone());
         // Support the deprecated non-layout background-color key.
         if let Some(layout) = &mut layout_config
-            && layout.background_color.is_none() {
-                layout.background_color = c.and_then(|c| c.background_color);
-            }
+            && layout.background_color.is_none()
+        {
+            layout.background_color = c.and_then(|c| c.background_color);
+        }
         let isolated = c.is_some_and(|c| c.isolated);
         drop(config);
 
@@ -5274,9 +5284,10 @@ impl Niri {
                 #[cfg(feature = "navigation")]
                 {
                     if !self.config.borrow().grid_overview.grid_all_monitors
-                        && let Some(output) = output {
-                            self.layout.focus_output(output);
-                        }
+                        && let Some(output) = output
+                    {
+                        self.layout.focus_output(output);
+                    }
                     self.layout.toggle_grid_overview();
                 }
                 #[cfg(not(feature = "navigation"))]
@@ -5949,9 +5960,10 @@ impl Niri {
 
             if let Some(fifo_barrier) = fifo_barrier
                 && !fifo_barrier.is_signaled()
-                    && let Some(client) = surface.client() {
-                        barriers.push((fifo_barrier, client));
-                    }
+                && let Some(client) = surface.client()
+            {
+                barriers.push((fifo_barrier, client));
+            }
         });
 
         barriers
@@ -6116,21 +6128,22 @@ impl Niri {
 
         if (self.pointer_scale_animation.is_none()
             || (self.pointer_scale_animation.as_ref().unwrap().to() - target_scale).abs() > 0.01)
-            && (target_scale != 1.0 || current_scale != 1.0) {
-                let anim_config = niri_config::Animation {
-                    off: false,
-                    kind: self.config.borrow().animations.cursor_enlarge.0.kind,
-                };
-                let anim = crate::animation::Animation::new(
-                    self.clock.clone(),
-                    current_scale,
-                    target_scale,
-                    0.0,
-                    anim_config,
-                );
-                self.pointer_scale_animation = Some(anim);
-                self.queue_redraw_all();
-            }
+            && (target_scale != 1.0 || current_scale != 1.0)
+        {
+            let anim_config = niri_config::Animation {
+                off: false,
+                kind: self.config.borrow().animations.cursor_enlarge.0.kind,
+            };
+            let anim = crate::animation::Animation::new(
+                self.clock.clone(),
+                current_scale,
+                target_scale,
+                0.0,
+                anim_config,
+            );
+            self.pointer_scale_animation = Some(anim);
+            self.queue_redraw_all();
+        }
     }
 
     #[cfg(feature = "navigation")]
@@ -6180,13 +6193,15 @@ impl Niri {
     #[cfg(feature = "navigation")]
     pub fn update_magnifier_animation(&mut self) {
         if let Some(anim) = &self.magnifier_animation
-            && anim.is_done() {
-                self.magnifier_animation = None;
-            }
+            && anim.is_done()
+        {
+            self.magnifier_animation = None;
+        }
         if let Some(anim) = &self.magnifier_center_anim
-            && anim.is_done() {
-                self.magnifier_center_anim = None;
-            }
+            && anim.is_done()
+        {
+            self.magnifier_center_anim = None;
+        }
     }
 
     #[cfg(feature = "navigation")]
@@ -6412,9 +6427,10 @@ impl Niri {
 
         #[cfg(feature = "xdp-gnome-screencast")]
         if let Some(host) = picker_host
-            && let Some(state) = self.output_state.get_mut(&host) {
-                state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
-            }
+            && let Some(state) = self.output_state.get_mut(&host)
+        {
+            state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
+        }
     }
 
     /// Cancel any pending `shader-animation-max-fps` throttle wake for `output`.
@@ -6536,8 +6552,7 @@ impl Niri {
         let render_cursor = self.cursor_manager.get_render_cursor(cursor_scale);
 
         // Pre-extract frame widths for adjusted zoom calculation.
-        let enlarged_frame_width = if let RenderCursor::Named { cursor: c, .. } = &render_cursor
-        {
+        let enlarged_frame_width = if let RenderCursor::Named { cursor: c, .. } = &render_cursor {
             let (_, f) = c.frame(0);
             Some(f.width)
         } else {
@@ -6676,48 +6691,50 @@ impl Niri {
         if let Some(tablet_pos) = self.tablet_cursor_location {
             let contents = self.contents_under(tablet_pos);
             if let Some((w, HitType::Input { win_pos })) = contents.window
-                && w == mapped.window {
-                    // Tablet tools don't currently expose current focus, and don't currently
-                    // have grabs. When those are implemented, this branch should be adjusted
-                    // to look more similar to the branch below.
-                    return Some((tablet_pos, win_pos));
-                }
+                && w == mapped.window
+            {
+                // Tablet tools don't currently expose current focus, and don't currently
+                // have grabs. When those are implemented, this branch should be adjusted
+                // to look more similar to the branch below.
+                return Some((tablet_pos, win_pos));
+            }
         }
         // Regular cursor.
         else if let Some((w, HitType::Input { win_pos })) = &self.pointer_contents.window
-            && w == &mapped.window {
-                // Grabs can modify the pointer focus, making it different from
-                // pointer_contents. Notably, gestures like Mod+MMB will remove the pointer
-                // focus, and ClickGrab will keep pointer focus on the clicked window even
-                // while it's moving over a different window.
-                //
-                // So, double-check that current_focus() (after grabs) also matches the pointer
-                // contents.
-                let pointer = self.seat.get_pointer().unwrap();
+            && w == &mapped.window
+        {
+            // Grabs can modify the pointer focus, making it different from
+            // pointer_contents. Notably, gestures like Mod+MMB will remove the pointer
+            // focus, and ClickGrab will keep pointer focus on the clicked window even
+            // while it's moving over a different window.
+            //
+            // So, double-check that current_focus() (after grabs) also matches the pointer
+            // contents.
+            let pointer = self.seat.get_pointer().unwrap();
 
-                // The DnD grab is a bit special because it has its own focus (data device)
-                // while the pointer focus is cleared. That focus is not currently exposed from
-                // Smithay, and showing DnD icons on window screenshots seems useful, so let's
-                // just allow it during DnD grabs.
-                let is_dnd_grab = pointer
-                    .with_grab(|_, grab| State::is_dnd_grab(grab.as_any()))
-                    .unwrap_or(false);
+            // The DnD grab is a bit special because it has its own focus (data device)
+            // while the pointer focus is cleared. That focus is not currently exposed from
+            // Smithay, and showing DnD icons on window screenshots seems useful, so let's
+            // just allow it during DnD grabs.
+            let is_dnd_grab = pointer
+                .with_grab(|_, grab| State::is_dnd_grab(grab.as_any()))
+                .unwrap_or(false);
 
-                let current_focus_matches = is_dnd_grab
-                    || pointer
-                        .current_focus()
-                        .map(|focused| self.find_root_shell_surface(&focused))
-                        .is_some_and(|focused| mapped.is_wl_surface(&focused));
-                if current_focus_matches {
-                    // We don't check for pointer visibility because it can only be Visible or
-                    // Hidden, and never Disabled (then it wouldn't have focus). Even when the
-                    // pointer is Hidden, we want to render it, since the user explicitly
-                    // requested show_pointer = true, and otherwise there's no easy way to
-                    // screenshot a window with pointer with hide-when-typing because pressing
-                    // the screenshot bind will hide the pointer.
-                    return Some((pointer.current_location(), *win_pos));
-                }
+            let current_focus_matches = is_dnd_grab
+                || pointer
+                    .current_focus()
+                    .map(|focused| self.find_root_shell_surface(&focused))
+                    .is_some_and(|focused| mapped.is_wl_surface(&focused));
+            if current_focus_matches {
+                // We don't check for pointer visibility because it can only be Visible or
+                // Hidden, and never Disabled (then it wouldn't have focus). Even when the
+                // pointer is Hidden, we want to render it, since the user explicitly
+                // requested show_pointer = true, and otherwise there's no easy way to
+                // screenshot a window with pointer with hide-when-typing because pressing
+                // the screenshot bind will hide the pointer.
+                return Some((pointer.current_location(), *win_pos));
             }
+        }
 
         None
     }
@@ -7015,9 +7032,10 @@ impl Niri {
 
         for state in self.output_state.values_mut() {
             if let Some(transition) = &mut state.screen_transition
-                && transition.is_done() {
-                    state.screen_transition = None;
-                }
+                && transition.is_done()
+            {
+                state.screen_transition = None;
+            }
         }
         screen_cast_picker_closed
     }
@@ -7130,9 +7148,10 @@ impl Niri {
         // safety net for any path that reads the state in between, so it must not warn itself —
         // it runs every frame, from both the render path and the redraw gate.
         if let Some(selected) = &selected
-            && let Some(preset) = config.output_shaders.iter().find(|p| &p.name == selected) {
-                return preset.pass_sources(&read_scoped_shader_path);
-            }
+            && let Some(preset) = config.output_shaders.iter().find(|p| &p.name == selected)
+        {
+            return preset.pass_sources(&read_scoped_shader_path);
+        }
 
         let Some(out_config) = config.outputs.find(name) else {
             return Vec::new();
@@ -7377,13 +7396,12 @@ impl Niri {
         let _span = tracy_client::span!("Niri::render");
 
         let rendering_output = ctx.target == RenderTarget::Output;
-        if rendering_output
-            && let Some(preview) = self.config.borrow().debug.preview_render {
-                ctx.target = match preview {
-                    PreviewRender::Screencast => RenderTarget::Screencast,
-                    PreviewRender::ScreenCapture => RenderTarget::ScreenCapture,
-                };
-            }
+        if rendering_output && let Some(preview) = self.config.borrow().debug.preview_render {
+            ctx.target = match preview {
+                PreviewRender::Screencast => RenderTarget::Screencast,
+                PreviewRender::ScreenCapture => RenderTarget::ScreenCapture,
+            };
+        }
 
         #[cfg(feature = "xdp-gnome-screencast")]
         if rendering_output && self.screen_cast_picker.is_visible() {
@@ -7669,10 +7687,9 @@ impl Niri {
 
             // When reads_cursor is on, push the global shader element first so the cursor is
             // composited into niri_screen (the cursor becomes part of the captured screen texture).
-            if reads_cursor
-                && let Some(elem) = global_shader_elem.take() {
-                    push(elem.into());
-                }
+            if reads_cursor && let Some(elem) = global_shader_elem.take() {
+                push(elem.into());
+            }
 
             // The pointer goes on the top (or below the global shader when reads_cursor is on).
             if include_pointer && self.pointer_visibility.is_visible() {
@@ -7681,10 +7698,9 @@ impl Niri {
 
             // When reads_cursor is off (default), push the global shader element after the pointer
             // so the hardware cursor remains above the effect.
-            if !reads_cursor
-                && let Some(elem) = global_shader_elem {
-                    push(elem.into());
-                }
+            if !reads_cursor && let Some(elem) = global_shader_elem {
+                push(elem.into());
+            }
         }
 
         // Push region shader elements for regions matching this output.
@@ -7827,9 +7843,10 @@ impl Niri {
 
         // Next, the config error notification too. Isolated outputs stay free of compositor chrome.
         if !self.is_output_isolated(output)
-            && let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
-                push(element.into());
-            }
+            && let Some(element) = self.config_error_notification.render(ctx.renderer, output)
+        {
+            push(element.into());
+        }
 
         // If the session is locked, draw the lock surface.
         if self.is_locked() {
@@ -9515,9 +9532,11 @@ impl Niri {
             // If we already sent a frame callback to this surface this output refresh
             // cycle, don't send one again to prevent empty-damage commit busy loops.
             if let Some((last_output, last_sequence)) = &*last_sent_at
-                && last_output == output && *last_sequence == sequence {
-                    send = false;
-                }
+                && last_output == output
+                && *last_sequence == sequence
+            {
+                send = false;
+            }
 
             if send {
                 *last_sent_at = Some((output.clone(), sequence));
@@ -9848,18 +9867,15 @@ impl Niri {
         reference_luminance: f64,
     ) -> anyhow::Result<SyncPoint> {
         let sync = match screencopy.buffer() {
-            CaptureBuffer::Dma(dmabuf) => {
-                
-                render_to_dmabuf(
-                    renderer,
-                    damage_tracker,
-                    dmabuf.clone(),
-                    elements,
-                    states,
-                    reference_luminance,
-                )
-                .context("error rendering to screencopy dmabuf")?
-            }
+            CaptureBuffer::Dma(dmabuf) => render_to_dmabuf(
+                renderer,
+                damage_tracker,
+                dmabuf.clone(),
+                elements,
+                states,
+                reference_luminance,
+            )
+            .context("error rendering to screencopy dmabuf")?,
             CaptureBuffer::Shm(wl_buffer) => {
                 render_to_shm(
                     renderer,
@@ -9889,68 +9905,65 @@ impl Niri {
         screencopy_state.with_queues_mut(|queue| {
             let (damage_tracker, screencopy) = queue.split();
             if let Some(screencopy) = screencopy
-                && screencopy.output() == output {
-                    let ctx = RenderCtx {
-                        renderer,
-                        target: RenderTarget::ScreenCapture,
-                        intent: RenderIntent::Normal,
-                        xray: None,
-                        shader_time: self.window_shader_start.elapsed().as_secs_f32(),
-                    };
-                    let offset = screencopy.region_loc().upscale(-1);
-                    let mut elements = Vec::new();
-                    self.render(ctx, output, screencopy.overlay_cursor(), &mut |elem| {
-                        let elem =
-                            RelocateRenderElement::from_element(elem, offset, Relocate::Relative);
-                        elements.push(elem);
+                && screencopy.output() == output
+            {
+                let ctx = RenderCtx {
+                    renderer,
+                    target: RenderTarget::ScreenCapture,
+                    intent: RenderIntent::Normal,
+                    xray: None,
+                    shader_time: self.window_shader_start.elapsed().as_secs_f32(),
+                };
+                let offset = screencopy.region_loc().upscale(-1);
+                let mut elements = Vec::new();
+                self.render(ctx, output, screencopy.overlay_cursor(), &mut |elem| {
+                    let elem =
+                        RelocateRenderElement::from_element(elem, offset, Relocate::Relative);
+                    elements.push(elem);
+                });
+
+                let (damages, states) =
+                    Self::damage_screencopy_internal(output, &elements, damage_tracker, screencopy);
+                if let Some(damages) = damages {
+                    // Convert from Physical coordinates back to Buffer coordinates.
+                    let transform = output.current_transform();
+                    let physical_size = transform.transform_size(screencopy.buffer_size());
+                    let damages = damages.iter().map(|dmg| {
+                        dmg.to_logical(1).to_buffer(
+                            1,
+                            transform.invert(),
+                            &physical_size.to_logical(1),
+                        )
                     });
 
-                    let (damages, states) = Self::damage_screencopy_internal(
-                        output,
-                        &elements,
+                    screencopy.damage(damages);
+
+                    let reference_luminance =
+                        self.output_capture_reference_luminance(screencopy.output());
+                    let render_result = Self::render_for_screencopy_internal(
+                        renderer,
                         damage_tracker,
+                        &elements,
+                        states,
                         screencopy,
+                        reference_luminance,
                     );
-                    if let Some(damages) = damages {
-                        // Convert from Physical coordinates back to Buffer coordinates.
-                        let transform = output.current_transform();
-                        let physical_size = transform.transform_size(screencopy.buffer_size());
-                        let damages = damages.iter().map(|dmg| {
-                            dmg.to_logical(1).to_buffer(
-                                1,
-                                transform.invert(),
-                                &physical_size.to_logical(1),
-                            )
-                        });
-
-                        screencopy.damage(damages);
-
-                        let reference_luminance =
-                            self.output_capture_reference_luminance(screencopy.output());
-                        let render_result = Self::render_for_screencopy_internal(
-                            renderer,
-                            damage_tracker,
-                            &elements,
-                            states,
-                            screencopy,
-                            reference_luminance,
-                        );
-                        match render_result {
-                            Ok(sync) => {
-                                queue.pop().submit_after_sync(false, sync, &self.event_loop);
-                            }
-                            Err(err) => {
-                                // Recreate damage tracker to report full damage next check.
-                                *damage_tracker =
-                                    OutputDamageTracker::new((0, 0), 1.0, Transform::Normal);
-                                queue.pop();
-                                warn!("error rendering for screencopy: {err:?}");
-                            }
+                    match render_result {
+                        Ok(sync) => {
+                            queue.pop().submit_after_sync(false, sync, &self.event_loop);
                         }
-                    } else {
-                        trace!("no damage found, waiting till next redraw");
+                        Err(err) => {
+                            // Recreate damage tracker to report full damage next check.
+                            *damage_tracker =
+                                OutputDamageTracker::new((0, 0), 1.0, Transform::Normal);
+                            queue.pop();
+                            warn!("error rendering for screencopy: {err:?}");
+                        }
                     }
-                };
+                } else {
+                    trace!("no damage found, waiting till next redraw");
+                }
+            };
         });
 
         self.screencopy_state = screencopy_state;
@@ -10851,16 +10864,15 @@ impl Niri {
         let mut elements: Vec<WindowScreenshotRenderElement<GlesRenderer>> = Vec::new();
 
         // Add pointer if requested and it's over this window.
-        if show_pointer
-            && let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
-                // Pointer elements are at output-local physical coords.
-                // Relocate by -win_pos to make them window-relative.
-                let pos = win_pos.to_physical_precise_round(scale).upscale(-1);
-                self.render_pointer(renderer, output, &mut |elem| {
-                    let elem = RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
-                    elements.push(elem.into());
-                });
-            }
+        if show_pointer && let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
+            // Pointer elements are at output-local physical coords.
+            // Relocate by -win_pos to make them window-relative.
+            let pos = win_pos.to_physical_precise_round(scale).upscale(-1);
+            self.render_pointer(renderer, output, &mut |elem| {
+                let elem = RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
+                elements.push(elem.into());
+            });
+        }
         let pointer_count = elements.len();
 
         set_sdr_capture_blend(renderer, self.output_capture_reference_luminance(output));
@@ -11090,15 +11102,15 @@ impl Niri {
             if let Some((path, create_parent)) = path {
                 debug!("saving screenshot to {path:?}");
 
-                if create_parent
-                    && let Some(parent) = path.parent() {
-                        // Relative paths with one component, i.e. "test.png", have Some("") parent.
-                        if !parent.as_os_str().is_empty()
-                            && let Err(err) = std::fs::create_dir_all(parent)
-                                && err.kind() != std::io::ErrorKind::AlreadyExists {
-                                    warn!("error creating screenshot directory: {err:?}");
-                                }
+                if create_parent && let Some(parent) = path.parent() {
+                    // Relative paths with one component, i.e. "test.png", have Some("") parent.
+                    if !parent.as_os_str().is_empty()
+                        && let Err(err) = std::fs::create_dir_all(parent)
+                        && err.kind() != std::io::ErrorKind::AlreadyExists
+                    {
+                        warn!("error creating screenshot directory: {err:?}");
                     }
+                }
 
                 match std::fs::write(&path, &*buf) {
                     Ok(()) => image_path = Some(path),
@@ -11546,16 +11558,16 @@ impl Niri {
         if let Some(surface) = surface
             && surface.cached_state().keyboard_interactivity
                 == wlr_layer::KeyboardInteractivity::OnDemand
-            {
-                if self.layer_shell_on_demand_focus.as_ref() != Some(&surface) {
-                    self.layer_shell_on_demand_focus = Some(surface);
+        {
+            if self.layer_shell_on_demand_focus.as_ref() != Some(&surface) {
+                self.layer_shell_on_demand_focus = Some(surface);
 
-                    // FIXME: granular.
-                    self.queue_redraw_all();
-                }
-
-                return;
+                // FIXME: granular.
+                self.queue_redraw_all();
             }
+
+            return;
+        }
 
         // Something else got clicked, clear on-demand layer-shell focus.
         if self.layer_shell_on_demand_focus.is_some() {
@@ -11691,9 +11703,10 @@ impl Niri {
         let current_focus = self.contents_under(prev_location);
 
         if let Some(output) = &new_focus.output
-            && current_focus.output.as_ref() != Some(output) {
-                self.layout.focus_output(output);
-            }
+            && current_focus.output.as_ref() != Some(output)
+        {
+            self.layout.focus_output(output);
+        }
 
         // Skip focusing the window/layer when outputs-only=true
         if let Some(true) = ffm.outputs_only {
@@ -11724,9 +11737,10 @@ impl Niri {
                 }
 
                 if let Some(threshold) = ffm.max_scroll_amount
-                    && self.layout.scroll_amount_to_activate(window) > threshold.0 {
-                        return;
-                    }
+                    && self.layout.scroll_amount_to_activate(window) > threshold.0
+                {
+                    return;
+                }
 
                 self.layout.activate_window_without_raising(window);
                 self.layer_shell_on_demand_focus = None;
@@ -11734,9 +11748,10 @@ impl Niri {
         }
 
         if let Some(layer) = &new_focus.layer
-            && current_focus.layer.as_ref() != Some(layer) {
-                self.layer_shell_on_demand_focus = Some(layer.clone());
-            }
+            && current_focus.layer.as_ref() != Some(layer)
+        {
+            self.layer_shell_on_demand_focus = Some(layer.clone());
+        }
     }
 
     pub fn do_screen_transition(&mut self, renderer: &mut GlesRenderer, delay_ms: Option<u16>) {
@@ -12017,9 +12032,10 @@ fn surface_tree_hdr_description(surface: &WlSurface) -> Option<ImageDescription>
                     .cached_state
                     .get::<ColorManagementSurfaceCachedState>();
                 if let Some(desc) = guard.current().description
-                    && desc.is_hdr() {
-                        found = Some(desc);
-                    }
+                    && desc.is_hdr()
+                {
+                    found = Some(desc);
+                }
             }
         },
         |_, _, _| true,
@@ -12490,9 +12506,9 @@ fn tearing_allowed(
         && types
             .iter()
             .any(|ty| content_type_allowed(*ty, content_type))
-        {
-            return true;
-        }
+    {
+        return true;
+    }
 
     // Otherwise keep the stock behavior: only what the client asked for.
     client_hint
@@ -12578,7 +12594,7 @@ mod tearing_tests {
 mod shader_throttle_tests {
     use std::time::{Duration, Instant};
 
-    use super::{decide_shader_frame, ShaderFrameDecision};
+    use super::{ShaderFrameDecision, decide_shader_frame};
 
     #[test]
     fn first_frame_is_due() {

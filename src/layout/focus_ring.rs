@@ -562,9 +562,11 @@ mod tests {
         shaders::init(&mut renderer);
         crate::render_helpers::blend::FrameBlendState::init(&mut renderer);
         shaders::set_decoration_programs(&mut renderer, &config);
-        assert!(shaders::Shaders::get(&mut renderer)
-            .decoration_light
-            .is_some());
+        assert!(
+            shaders::Shaders::get(&mut renderer)
+                .decoration_light
+                .is_some()
+        );
         let mut ring = FocusRing::new(config.layout.focus_ring);
         let owner = SolidColorBuffer::new((320., 180.), [0.12, 0.15, 0.18, 1.]);
         let neighbour = SolidColorBuffer::new((320., 160.), [0.24, 0.12, 0.05, 1.]);
@@ -728,9 +730,10 @@ mod tests {
             .as_mut()
             .unwrap()
             .enable = false;
-        assert!(ring
-            .render_light(&mut renderer, (0., 0.).into(), 1.)
-            .is_none());
+        assert!(
+            ring.render_light(&mut renderer, (0., 0.).into(), 1.)
+                .is_none()
+        );
         shaders::set_decoration_programs(&mut renderer, &niri_config::Config::default());
         assert!(
             fresh
@@ -845,10 +848,12 @@ mod tests {
         sh.write_file(&file, blue).unwrap();
         let config = load();
         shaders::set_decoration_programs(&mut renderer, &config);
-        assert!(!shaders::Shaders::get(&mut renderer)
-            .decorations
-            .borrow()
-            .contains_key(&old_key));
+        assert!(
+            !shaders::Shaders::get(&mut renderer)
+                .decorations
+                .borrow()
+                .contains_key(&old_key)
+        );
         assert_eq!(
             top_pixel(&draw(&mut renderer, first(&config), 0., 1.).0),
             [0, 0, 255, 255]

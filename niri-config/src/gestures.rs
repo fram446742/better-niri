@@ -1,5 +1,5 @@
-use crate::utils::MergeWith;
 use crate::FloatOrInt;
+use crate::utils::MergeWith;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Gestures {
@@ -217,7 +217,7 @@ where
                         ));
                     }
                     let mut args = child.arguments.iter();
-                    
+
                     if let Some(arg) = args.next() {
                         let action = knuffel::traits::DecodeScalar::decode(arg, ctx)?;
                         if let Some(arg) = args.next() {

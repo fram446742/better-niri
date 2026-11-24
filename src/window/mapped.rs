@@ -10,10 +10,10 @@ use smithay::desktop::{PopupKind, PopupManager, Window};
 use smithay::output::{self, Output};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource as _;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Serial, Size, Transform};
-use smithay::wayland::compositor::{remove_pre_commit_hook, with_states, HookId, SurfaceData};
+use smithay::wayland::compositor::{HookId, SurfaceData, remove_pre_commit_hook, with_states};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelCachedState, ToplevelConfigure, ToplevelSurface,
@@ -22,7 +22,7 @@ use smithay::wayland::shell::xdg::{
 use wayland_backend::server::Credentials;
 
 use super::{
-    resolve_window_shader_preset, ResolvedShader, ResolvedWindowRules, WindowRef, WindowShaderState,
+    ResolvedShader, ResolvedWindowRules, WindowRef, WindowShaderState, resolve_window_shader_preset,
 };
 use crate::handlers::KdeDecorationsModeState;
 use crate::layout::{
@@ -43,13 +43,12 @@ use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx};
+use crate::render_helpers::{BakedBuffer, RenderCtx, background_effect};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
-    get_credentials_for_surface, send_scale_transform, update_tiled_state,
+    ResizeEdge, get_credentials_for_surface, send_scale_transform, update_tiled_state,
     with_toplevel_last_uncommitted_configure, with_toplevel_role, with_toplevel_role_and_current,
-    ResizeEdge,
 };
 
 #[derive(Debug)]
@@ -1564,14 +1563,16 @@ impl LayoutElement for Mapped {
     fn on_commit(&mut self, commit_serial: Serial) {
         if let Some(InteractiveResize::WaitingForLastCommit { serial, .. }) =
             &self.interactive_resize
-            && commit_serial.is_no_older_than(serial) {
-                self.interactive_resize = None;
-            }
+            && commit_serial.is_no_older_than(serial)
+        {
+            self.interactive_resize = None;
+        }
 
         if let Some(RequestSizeOnce::WaitingForCommit(serial)) = &self.request_size_once
-            && commit_serial.is_no_older_than(serial) {
-                self.request_size_once = Some(RequestSizeOnce::UseWindowSize);
-            }
+            && commit_serial.is_no_older_than(serial)
+        {
+            self.request_size_once = Some(RequestSizeOnce::UseWindowSize);
+        }
 
         // "Commit" our "acked" pending windowed fullscreen state.
         self.uncommitted_windowed_fullscreen

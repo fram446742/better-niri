@@ -315,12 +315,13 @@ fn refresh_toplevel(
                             instance.output_leave(&wl_output);
                         }
                         if let Some(output) = &data.output
-                            && let Some(client) = instance.client() {
-                                for wl_output in output.client_outputs(&client) {
-                                    instance.output_enter(&wl_output);
-                                    outputs.push(wl_output);
-                                }
+                            && let Some(client) = instance.client()
+                        {
+                            for wl_output in output.client_outputs(&client) {
+                                instance.output_enter(&wl_output);
+                                outputs.push(wl_output);
                             }
+                        }
                     }
                     instance.done();
                 }

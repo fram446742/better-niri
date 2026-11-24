@@ -6,12 +6,12 @@ use smithay::input::pointer::{
     GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData as PointerGrabStartData,
     MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
 };
-use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};
 use smithay::input::tablet::TabletSeatHandler;
+use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};
 use smithay::input::touch::{
     self, GrabStartData as TouchGrabStartData, TouchGrab, TouchInnerHandle,
 };
-use smithay::input::{tablet, SeatHandler};
+use smithay::input::{SeatHandler, tablet};
 use smithay::utils::{IsAlive, Logical, Point, SERIAL_COUNTER};
 
 use crate::input::AnyStartData;

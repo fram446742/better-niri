@@ -11,17 +11,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, mem};
 
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{Context, anyhow, bail, ensure};
 use bytemuck::{bytes_of_mut, cast_slice_mut};
 use drm_ffi::drm_mode_modeinfo;
 use libc::dev_t;
 use niri_config::output::{HdrMode, Modeline};
 use niri_config::{Config, OutputName};
 use niri_ipc::{HSyncPolarity, VSyncPolarity};
+use smithay::backend::SwapBuffersError;
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{
     DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement,
 };
@@ -44,7 +45,6 @@ use smithay::backend::renderer::{
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
-use smithay::backend::SwapBuffersError;
 use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::output::{Mode, Output, OutputModeSource, PhysicalProperties};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -52,15 +52,15 @@ use smithay::reexports::calloop::{Dispatcher, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::atomic::AtomicModeReq;
 use smithay::reexports::drm::control::dumbbuffer::DumbBuffer;
 use smithay::reexports::drm::control::{
-    self, connector, crtc, plane, property, AtomicCommitFlags, Device, Mode as DrmMode, ModeFlags,
-    ModeTypeFlags, PlaneType, ResourceHandle,
+    self, AtomicCommitFlags, Device, Mode as DrmMode, ModeFlags, ModeTypeFlags, PlaneType,
+    ResourceHandle, connector, crtc, plane, property,
 };
 use smithay::reexports::gbm::Modifier;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Client;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{DeviceFd, Transform};
 use smithay::wayland::color::management::{
     Chromaticities, ImageDescription, Primaries as CmPrimaries,
@@ -77,17 +77,17 @@ use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use super::{
-    virtual_output, IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker,
+    IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker, virtual_output,
 };
 use crate::frame_clock::FrameClock;
 #[cfg(feature = "effects")]
 use crate::niri::global_shader_pass_sources;
 use crate::niri::{Niri, RedrawState, State};
-use crate::render_helpers::blend::{self, set_frame_blend, DEFAULT_REFERENCE_LUMINANCE};
+use crate::render_helpers::blend::{self, DEFAULT_REFERENCE_LUMINANCE, set_frame_blend};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
-use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
-use crate::utils::{get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation};
+use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget, resources, shaders};
+use crate::utils::{PanelOrientation, get_monotonic_time, is_laptop_panel, logical_output};
 
 // When copying from rendering Nvidia dGPU to target iGPU,
 // it only understands X/Abgr and not X/Argb.
@@ -301,9 +301,10 @@ impl OutputDevice {
                     match self.drm.get_encoder(enc) {
                         Ok(enc) => {
                             if let Some(current_crtc) = enc.crtc()
-                                && current_crtc != crtc {
-                                    has_different_crtc = true;
-                                }
+                                && current_crtc != crtc
+                            {
+                                has_different_crtc = true;
+                            }
                         }
                         Err(err) => {
                             debug!("couldn't get encoder: {err:?}");
@@ -900,7 +901,9 @@ impl Tty {
             // in VMs without 3D acceleration. The original rejection was due to dmabuf import
             // issues with mixed renderers, which doesn't apply in a single-renderer VM.
             if egl_device.is_software() {
-                warn!("software EGL renderer detected (e.g., llvmpipe); this may cause issues with DMABuf imports and DRM leasing");
+                warn!(
+                    "software EGL renderer detected (e.g., llvmpipe); this may cause issues with DMABuf imports and DRM leasing"
+                );
             }
 
             let render_node = egl_device
@@ -1466,9 +1469,10 @@ impl Tty {
 
         // Reset gamma in case it was set before.
         if let Some(gamma_props) = &mut gamma_props
-            && let Err(err) = gamma_props.set_gamma(&device.drm, None) {
-                debug!("couldn't reset gamma: {err:?}");
-            }
+            && let Err(err) = gamma_props.set_gamma(&device.drm, None)
+        {
+            debug!("couldn't reset gamma: {err:?}");
+        }
 
         let surface = device
             .drm
@@ -1905,10 +1909,12 @@ impl Tty {
         // monitors from powering off. Therefore, we avoid unconditionally powering on.
         // An isolated output that (re)connects while the rest are off with skip-isolated stays lit.
         let keep_isolated_on = niri.power_off_skip_isolated && niri.is_output_isolated(&output);
-        if !niri.monitors_active && !keep_isolated_on
-            && let Err(err) = compositor.clear() {
-                warn!("error clearing drm surface: {err:?}");
-            }
+        if !niri.monitors_active
+            && !keep_isolated_on
+            && let Err(err) = compositor.clear()
+        {
+            warn!("error clearing drm surface: {err:?}");
+        }
 
         let vrr_enabled = compositor.vrr_enabled();
 
@@ -2544,13 +2550,12 @@ impl Tty {
                         .borrow()
                         .debug
                         .wait_for_frame_completion_before_queueing;
-                if needs_sync
-                    && let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
-                        let _span = tracy_client::span!("wait for completion");
-                        if let Err(err) = element.sync.wait() {
-                            warn!("error waiting for frame completion: {err:?}");
-                        }
+                if needs_sync && let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
+                    let _span = tracy_client::span!("wait for completion");
+                    if let Err(err) = element.sync.wait() {
+                        warn!("error waiting for frame completion: {err:?}");
                     }
+                }
 
                 niri.update_primary_scanout_output(output, &res.states);
                 if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
@@ -3630,9 +3635,10 @@ impl GammaProps {
             &mut self.mode
         {
             if let Some(blob) = mem::replace(previous_blob, blob)
-                && let Err(err) = device.destroy_property_blob(blob.get()) {
-                    warn!("error destroying previous {prop_name} blob: {err:?}");
-                }
+                && let Err(err) = device.destroy_property_blob(blob.get())
+            {
+                warn!("error destroying previous {prop_name} blob: {err:?}");
+            }
         } else {
             // Legacy early-returns at the start of the function.
             unreachable!();
@@ -4416,7 +4422,7 @@ mod tests {
     use smithay::wayland::color::management::ImageDescription;
 
     use crate::backend::tty::{
-        build_hdr_metadata, calculate_drm_mode_from_modeline, calculate_mode_cvt, EdidHdrInfo,
+        EdidHdrInfo, build_hdr_metadata, calculate_drm_mode_from_modeline, calculate_mode_cvt,
     };
 
     #[test]

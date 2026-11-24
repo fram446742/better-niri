@@ -7,14 +7,14 @@ use miette::miette;
 use niri_ipc::{
     ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
 };
-use smithay::input::keyboard::keysyms::KEY_NoSymbol;
-use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
 use smithay::input::keyboard::Keysym;
+use smithay::input::keyboard::keysyms::KEY_NoSymbol;
+use smithay::input::keyboard::xkb::{KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS, keysym_from_name};
 use tracing::warn;
 
 use crate::input::ModKey;
 use crate::recent_windows::{MruDirection, MruFilter, MruScope};
-use crate::utils::{expect_only_children, MergeWith};
+use crate::utils::{MergeWith, expect_only_children};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
@@ -1341,13 +1341,16 @@ where
         }
 
         if let Some(node) = repeat_node
-            && repeat == Some(true) && press_actions.is_empty() && !release_actions.is_empty() {
-                ctx.emit_error(DecodeError::unexpected(
-                    node,
-                    "property",
-                    "release-only binds cannot repeat",
-                ));
-            }
+            && repeat == Some(true)
+            && press_actions.is_empty()
+            && !release_actions.is_empty()
+        {
+            ctx.emit_error(DecodeError::unexpected(
+                node,
+                "property",
+                "release-only binds cannot repeat",
+            ));
+        }
 
         if let Some(node) = allow_when_locked_node {
             for action in press_actions.iter().chain(release_actions.iter()) {
@@ -1637,14 +1640,16 @@ mod tests {
 
     #[test]
     fn parse_bind_with_no_actions_still_errors() {
-        assert!(crate::Config::parse_mem(
-            r#"
+        assert!(
+            crate::Config::parse_mem(
+                r#"
             binds {
                 Mod+G { }
             }
             "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1676,14 +1681,16 @@ mod tests {
 
     #[test]
     fn allow_when_locked_rejected_on_mixed_bind() {
-        assert!(crate::Config::parse_mem(
-            r#"
+        assert!(
+            crate::Config::parse_mem(
+                r#"
             binds {
                 Mod+X allow-when-locked=true { spawn "foo"; quit; }
             }
             "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]

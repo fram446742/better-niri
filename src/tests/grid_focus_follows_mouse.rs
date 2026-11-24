@@ -130,10 +130,11 @@ fn small_motion_does_not_take_focus() {
 
     // 6 px is under the default 8 px threshold.
     move_pointer(&mut f, id, &pointer, Point::from((6., 0.)));
-    assert!(f
-        .niri()
-        .window_under(start + Point::from((6., 0.)))
-        .is_some());
+    assert!(
+        f.niri()
+            .window_under(start + Point::from((6., 0.)))
+            .is_some()
+    );
     assert_eq!(grid_focus(&mut f), Some(first));
 
     // Past the threshold, the focus follows.

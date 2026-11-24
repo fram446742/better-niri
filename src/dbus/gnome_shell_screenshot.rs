@@ -6,7 +6,7 @@ use niri_ipc::PickedColor;
 use zbus::zvariant::OwnedValue;
 use zbus::{fdo, interface, zvariant};
 
-use super::{request_name, Start};
+use super::{Start, request_name};
 use crate::ui::screenshot_ui::{
     ScreenshotPathReplySender, ScreenshotPortalError, ScreenshotSelectionReplySender,
 };

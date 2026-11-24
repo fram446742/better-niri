@@ -3,13 +3,13 @@ use std::time::Duration;
 use smithay::backend::input::InputTime;
 use smithay::desktop::Window;
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
-use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};
 use smithay::input::tablet::TabletSeatHandler;
+use smithay::input::tablet::tool::{TabletToolGrab, TabletToolInnerHandle};
 use smithay::input::touch::{
     DownEvent, GrabStartData as TouchGrabStartData, MotionEvent, OrientationEvent, ShapeEvent,
     TouchGrab, TouchInnerHandle, UpEvent,
 };
-use smithay::input::{tablet, SeatHandler};
+use smithay::input::{SeatHandler, tablet};
 use smithay::output::Output;
 use smithay::utils::{IsAlive, Logical, Point, SERIAL_COUNTER};
 
@@ -84,24 +84,25 @@ impl TouchOverviewGrab {
 
         // Check if we should become interactive move.
         if matches!(self.gesture, GestureState::Recognizing)
-            && let Some(window) = self.window.as_ref().filter(|win| win.alive()) {
-                let passed = timestamp.saturating_sub(self.start_timestamp);
-                if INTERACTIVE_MOVE_THRESHOLD <= passed
-                    && layout.interactive_move_begin(
-                        window.clone(),
-                        &self.output,
-                        self.start_pos_within_output,
-                    )
-                {
-                    self.gesture = GestureState::InteractiveMove;
+            && let Some(window) = self.window.as_ref().filter(|win| win.alive())
+        {
+            let passed = timestamp.saturating_sub(self.start_timestamp);
+            if INTERACTIVE_MOVE_THRESHOLD <= passed
+                && layout.interactive_move_begin(
+                    window.clone(),
+                    &self.output,
+                    self.start_pos_within_output,
+                )
+            {
+                self.gesture = GestureState::InteractiveMove;
 
-                    if !self.start_data.is_touch() {
-                        data.niri
-                            .cursor_manager
-                            .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
-                    }
+                if !self.start_data.is_touch() {
+                    data.niri
+                        .cursor_manager
+                        .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
                 }
             }
+        }
 
         // Check if we should become a spatial scroll.
         if matches!(self.gesture, GestureState::Recognizing) {
@@ -115,16 +116,17 @@ impl TouchOverviewGrab {
 
                 if let Some(ws_id) = self.workspace_id.filter(|_| start_view_offset)
                     && let Some((ws_idx, ws)) = layout.find_workspace_by_id(ws_id)
-                        && ws.current_output() == Some(&self.output) {
-                            layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
-                            self.gesture = GestureState::ViewOffset;
+                    && ws.current_output() == Some(&self.output)
+                {
+                    layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
+                    self.gesture = GestureState::ViewOffset;
 
-                            if !self.start_data.is_touch() {
-                                data.niri.cursor_manager.set_cursor_image(
-                                    CursorImageStatus::Named(CursorIcon::AllScroll),
-                                );
-                            }
-                        }
+                    if !self.start_data.is_touch() {
+                        data.niri
+                            .cursor_manager
+                            .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
+                    }
+                }
 
                 if matches!(self.gesture, GestureState::Recognizing) {
                     layout.workspace_switch_gesture_begin(&self.output, false);
@@ -263,10 +265,11 @@ impl TouchGrab<State> for TouchOverviewGrab {
         }
 
         if matches!(self.gesture, GestureState::InteractiveMove)
-            && let Some(window) = &self.window.as_ref() {
-                data.niri.layout.toggle_window_floating(Some(window));
-                data.niri.queue_redraw_all();
-            }
+            && let Some(window) = &self.window.as_ref()
+        {
+            data.niri.layout.toggle_window_floating(Some(window));
+            data.niri.queue_redraw_all();
+        }
     }
 
     fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent) {

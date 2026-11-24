@@ -210,18 +210,19 @@ impl PickColorUi {
         rendered.set(true);
 
         if let Some(magnifier) = magnifier
-            && magnifier.output == *output {
-                push(PrimaryGpuTextureRenderElement(
-                    TextureRenderElement::from_texture_buffer(
-                        magnifier.buffer.clone(),
-                        magnifier.location,
-                        1.,
-                        None,
-                        None,
-                        Kind::Unspecified,
-                    ),
-                ));
-            }
+            && magnifier.output == *output
+        {
+            push(PrimaryGpuTextureRenderElement(
+                TextureRenderElement::from_texture_buffer(
+                    magnifier.buffer.clone(),
+                    magnifier.location,
+                    1.,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                ),
+            ));
+        }
     }
 }
 

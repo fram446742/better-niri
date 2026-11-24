@@ -365,10 +365,12 @@ impl PipeWire {
                 warn!(id, seq, res, message, "pw error");
 
                 // Reset PipeWire on connection errors.
-                if id == PW_ID_CORE && res == -32
-                    && let Err(err) = to_niri_.send(PwToNiri::FatalError) {
-                        warn!("error sending FatalError to niri: {err:?}");
-                    }
+                if id == PW_ID_CORE
+                    && res == -32
+                    && let Err(err) = to_niri_.send(PwToNiri::FatalError)
+                {
+                    warn!("error sending FatalError to niri: {err:?}");
+                }
             })
             .register();
         mem::forget(listener);

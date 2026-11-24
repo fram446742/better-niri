@@ -66,8 +66,7 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for CoordF64 {
                     Ok(CoordF64::default())
                 }
             },
-            knuffel::ast::Literal::Decimal(value) => match <f64 as TryFrom<_>>::try_from(value)
-            {
+            knuffel::ast::Literal::Decimal(value) => match <f64 as TryFrom<_>>::try_from(value) {
                 Ok(v) => Ok(CoordF64(v)),
                 Err(e) => {
                     ctx.emit_error(DecodeError::conversion(val, e));

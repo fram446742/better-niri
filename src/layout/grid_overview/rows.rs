@@ -8,7 +8,7 @@
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::bands::{squeeze_exponent, squeezed_scale};
-use super::{bisect, rect_center, GridItem, GridSource, EPSILON, MAX_SCALE};
+use super::{EPSILON, GridItem, GridSource, MAX_SCALE, bisect, rect_center};
 
 /// A window that opens goes into another row than the closest one if that lets the windows show
 /// larger by more than this.

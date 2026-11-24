@@ -100,13 +100,15 @@ fn wheel_over_dragged_window_switches_workspace() {
     let start = points_around(Point::from((960., 540.)), 960.)
         .find(|pos| niri.window_under(*pos).is_some_and(|m| m.window == window))
         .unwrap();
-    assert!(niri
-        .layout
-        .interactive_move_begin(window.clone(), &output, start));
+    assert!(
+        niri.layout
+            .interactive_move_begin(window.clone(), &output, start)
+    );
     let target = Point::from((960., 600.));
-    assert!(niri
-        .layout
-        .interactive_move_update(&window, target - start, output, target));
+    assert!(
+        niri.layout
+            .interactive_move_update(&window, target - start, output, target)
+    );
     f.niri_complete_animations();
 
     // Put the pointer in the middle of the dragged window.

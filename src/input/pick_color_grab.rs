@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use niri_ipc::PickedColor;
 use smithay::backend::input::ButtonState;
+use smithay::input::SeatHandler;
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorImageStatus, GestureHoldBeginEvent, GestureHoldEndEvent,
     GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent,
     GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData as PointerGrabStartData,
     MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
 };
-use smithay::input::SeatHandler;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::selection::data_device::set_data_device_selection;
 
@@ -114,9 +114,10 @@ impl PointerGrab<State> for PickColorGrab {
         if let Some(tx) = data.niri.pick_color.take() {
             let color = Self::pick_color_at_point(handle.current_location(), data);
             if self.copy_to_clipboard
-                && let Some(color) = &color {
-                    Self::copy_to_clipboard(color, data);
-                }
+                && let Some(color) = &color
+            {
+                Self::copy_to_clipboard(color, data);
+            }
             let _ = tx.send_blocking(color);
         }
 

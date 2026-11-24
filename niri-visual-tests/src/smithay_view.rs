@@ -73,9 +73,10 @@ mod imp {
                 let imp = self.downgrade();
                 move |_, gl_context| {
                     if let Some(imp) = imp.upgrade()
-                        && let Err(err) = imp.render(gl_context) {
-                            warn!("error rendering: {err:?}");
-                        }
+                        && let Err(err) = imp.render(gl_context)
+                    {
+                        warn!("error rendering: {err:?}");
+                    }
                     glib::Propagation::Stop
                 }
             });
@@ -84,9 +85,10 @@ mod imp {
                 let imp = obj.imp();
 
                 if let Some(case) = &mut *imp.test_case.borrow_mut()
-                    && case.are_animations_ongoing() {
-                        imp.gl_area.queue_draw();
-                    }
+                    && case.are_animations_ongoing()
+                {
+                    imp.gl_area.queue_draw();
+                }
 
                 glib::ControlFlow::Continue
             });

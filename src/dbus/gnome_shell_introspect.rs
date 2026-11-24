@@ -4,7 +4,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{SerializeDict, Type, Value};
 use zbus::{fdo, interface};
 
-use super::{request_name, Start};
+use super::{Start, request_name};
 
 pub struct Introspect {
     to_niri: calloop::channel::Sender<IntrospectToNiri>,

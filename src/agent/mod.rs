@@ -26,20 +26,20 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::desktop::{
-    find_popup_root_surface, PopupGrab, PopupKeyboardGrab, PopupKind, PopupPointerGrab, Window,
-    WindowSurfaceType,
+    PopupGrab, PopupKeyboardGrab, PopupKind, PopupPointerGrab, Window, WindowSurfaceType,
+    find_popup_root_surface,
 };
-use smithay::input::keyboard::{xkb, FilterResult, Keycode, Keysym};
+use smithay::input::keyboard::{FilterResult, Keycode, Keysym, xkb};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, CursorIcon, Focus, MotionEvent};
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, PhysicalProperties, Subpixel};
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::rustix::net::sockopt::socket_peercred;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource as _};
-use smithay::utils::{IsAlive, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER};
+use smithay::utils::{IsAlive, Physical, Point, Rectangle, SERIAL_COUNTER, Scale, Size, Transform};
 use smithay::wayland::compositor::get_role;
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XDG_POPUP_ROLE};
 use smithay::wayland::socket::ListeningSocketSource;
@@ -49,7 +49,7 @@ use crate::layout::LayoutElement as _;
 use crate::niri::{ClientState, NewClient, State};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::{
-    encompassing_geo, render_to_vec, RenderCtx, RenderIntent, RenderTarget,
+    RenderCtx, RenderIntent, RenderTarget, encompassing_geo, render_to_vec,
 };
 use crate::utils::spawning::spawn_with_env;
 
@@ -607,12 +607,12 @@ impl State {
             .is_ok_and(|client| match device {
                 Device::Pointer => {
                     let pointer = seat.get_pointer().unwrap();
-                    
+
                     pointer.client_pointers(&client).next().is_some()
                 }
                 Device::Keyboard => {
                     let keyboard = seat.get_keyboard().unwrap();
-                    
+
                     keyboard.client_keyboards(&client).next().is_some()
                 }
             });
@@ -670,9 +670,10 @@ impl State {
     fn agent_update_cursor(&mut self, toplevel: &WlSurface, update: impl FnOnce(&mut AgentCursor)) {
         let previous = self.agent().cursor_window.replace(toplevel.clone());
         if let Some(previous) = previous.filter(|previous| previous != toplevel)
-            && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&previous) {
-                mapped.agent_cursor = None;
-            }
+            && let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&previous)
+        {
+            mapped.agent_cursor = None;
+        }
 
         let Some((_, output)) = self.niri.layout.find_window_and_output(toplevel) else {
             return;
@@ -730,15 +731,16 @@ impl State {
         let mut redraw = None;
         let mut visible = false;
         if let Some((mapped, output)) = self.niri.layout.find_window_and_output_mut(&toplevel)
-            && let Some(cursor) = &mapped.agent_cursor {
-                visible = cursor.is_visible();
-                if cursor.is_animating() || !visible {
-                    redraw = Some(output.cloned());
-                }
-                if !visible {
-                    mapped.agent_cursor = None;
-                }
+            && let Some(cursor) = &mapped.agent_cursor
+        {
+            visible = cursor.is_visible();
+            if cursor.is_animating() || !visible {
+                redraw = Some(output.cloned());
             }
+            if !visible {
+                mapped.agent_cursor = None;
+            }
+        }
 
         match redraw {
             Some(Some(output)) => self.niri.queue_redraw(&output),

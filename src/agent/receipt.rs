@@ -13,15 +13,15 @@ use niri_ipc::agent::{AgentFocus, AgentReceipt, AgentRect, AgentWindow};
 use niri_ipc::{Reply, Response};
 use smithay::desktop::{PopupKind, PopupManager};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::wayland_server::Resource as _;
 use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::Resource as _;
-use smithay::utils::{IsAlive as _, Physical, Rectangle, Size, SERIAL_COUNTER};
+use smithay::utils::{IsAlive as _, Physical, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::compositor::{get_role, with_states};
-use smithay::wayland::shell::xdg::{
-    PopupSurface, ShellClient, XdgPopupSurfaceData, XDG_POPUP_ROLE,
-};
 use smithay::wayland::shell::PingError;
+use smithay::wayland::shell::xdg::{
+    PopupSurface, ShellClient, XDG_POPUP_ROLE, XdgPopupSurfaceData,
+};
 
 use crate::niri::State;
 use crate::utils::{get_monotonic_time, with_toplevel_role};
@@ -183,9 +183,10 @@ impl State {
         };
         for watch in &mut agent.watches {
             if &watch.shell == shell
-                && let Some(sent) = watch.ping_sent.take() {
-                    watch.answered = Some(sent);
-                }
+                && let Some(sent) = watch.ping_sent.take()
+            {
+                watch.answered = Some(sent);
+            }
         }
     }
 
@@ -474,10 +475,7 @@ pub(super) fn popup_surfaces(mapped: &Mapped) -> Vec<(f64, f64)> {
         .filter_map(|(popup, offset)| match popup {
             PopupKind::Xdg(ref xdg) => {
                 let origin = offset - popup.geometry().loc;
-                Some((
-                    popup_depth(xdg),
-                    (f64::from(origin.x), f64::from(origin.y)),
-                ))
+                Some((popup_depth(xdg), (f64::from(origin.x), f64::from(origin.y))))
             }
             _ => None,
         })

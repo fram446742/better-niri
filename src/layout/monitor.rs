@@ -11,6 +11,8 @@ use smithay::backend::renderer::element::{Element as _, Id};
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+#[cfg(not(feature = "navigation"))]
+use super::GridDirection;
 use super::axis::AxisMap;
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 #[cfg(feature = "navigation")]
@@ -19,26 +21,24 @@ use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
-    compute_working_area, GridRenderPass, OutputId, Workspace, WorkspaceAddWindowTarget,
-    WorkspaceId, WorkspaceRenderElement,
+    GridRenderPass, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
+    WorkspaceRenderElement, compute_working_area,
 };
-#[cfg(not(feature = "navigation"))]
-use super::GridDirection;
-use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options, RemovedTile};
+use super::{ActivateWindow, HitType, LayoutElement, Options, RemovedTile, compute_overview_zoom};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::RenderLayer;
 use crate::niri_render_elements;
+use crate::render_helpers::RenderCtx;
 use crate::render_helpers::overview_rescale::OverviewRescaleRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::RenderCtx;
 use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
-    output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
+    ResizeEdge, output_size, round_logical_in_physical, round_logical_in_physical_max1,
 };
 
 /// Amount of touchpad movement to scroll the height of one workspace.
@@ -565,9 +565,10 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if let Some(switch) = &mut self.workspace_switch
-            && idx as f64 <= switch.target_idx() {
-                switch.offset(1);
-            }
+            && idx as f64 <= switch.target_idx()
+        {
+            switch.offset(1);
+        }
     }
 
     /// Returns the index of an empty workspace at `idx` that a window can be put into.
@@ -782,14 +783,14 @@ impl<W: LayoutElement> Monitor<W> {
             && let Some(id) = self.workspaces[workspace_idx]
                 .active_window()
                 .map(|window| window.id().clone())
-            {
-                if preserve_move_animations {
-                    self.workspaces[workspace_idx]
-                        .on_window_added_in_grid_preserving_move_animations(&id);
-                } else {
-                    self.workspaces[workspace_idx].on_window_added_in_grid(&id);
-                }
+        {
+            if preserve_move_animations {
+                self.workspaces[workspace_idx]
+                    .on_window_added_in_grid_preserving_move_animations(&id);
+            } else {
+                self.workspaces[workspace_idx].on_window_added_in_grid(&id);
             }
+        }
 
         if activate {
             self.activate_workspace(workspace_idx);
@@ -865,9 +866,10 @@ impl<W: LayoutElement> Monitor<W> {
         let first_hidden_idx = self.workspaces.iter().position(|ws| ws.hidden);
 
         if let Some(hidden_idx) = first_hidden_idx
-            && (hidden_idx == 0 || self.workspaces[hidden_idx - 1].has_windows_or_name()) {
-                self.add_workspace_at(hidden_idx);
-            }
+            && (hidden_idx == 0 || self.workspaces[hidden_idx - 1].has_windows_or_name())
+        {
+            self.add_workspace_at(hidden_idx);
+        }
     }
 
     pub fn add_tile_to_column(
@@ -1430,12 +1432,8 @@ impl<W: LayoutElement> Monitor<W> {
                 }
                 for (window_id, mut pos, scale) in starts {
                     pos.y += gap_offset;
-                    self.workspaces[new_idx].set_grid_window_transition_start(
-                        &window_id,
-                        pos,
-                        scale,
-                        config,
-                    );
+                    self.workspaces[new_idx]
+                        .set_grid_window_transition_start(&window_id, pos, scale, config);
                 }
             } else {
                 let (column, new_render_pos) = self.workspaces[new_idx]
@@ -1568,9 +1566,10 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn active_window(&self) -> Option<&W> {
         if self.active_space == ActiveSpace::Sticky
-            && let Some(win) = self.sticky.active_window() {
-                return Some(win);
-            }
+            && let Some(win) = self.sticky.active_window()
+        {
+            return Some(win);
+        }
 
         self.active_workspace_ref().active_window()
     }
@@ -1602,18 +1601,20 @@ impl<W: LayoutElement> Monitor<W> {
                 }
 
                 if let Some(anim) = &mut gesture.animation
-                    && anim.is_done() {
-                        gesture.animation = None;
-                    }
+                    && anim.is_done()
+                {
+                    gesture.animation = None;
+                }
             }
             None => (),
         }
 
         // Check if zoom animation is done.
         if let Some(anim) = &self.overview_zoom_anim
-            && anim.is_done() {
-                self.overview_zoom_anim = None;
-            }
+            && anim.is_done()
+        {
+            self.overview_zoom_anim = None;
+        }
 
         for ws in &mut self.workspaces {
             ws.advance_animations();
@@ -2175,10 +2176,11 @@ impl<W: LayoutElement> Monitor<W> {
         // example when toggling the overview in the middle of an overview animation), then restart
         // the workspace switch to avoid jumps.
         if prev_render_idx != new_render_idx
-            && let Some(WorkspaceSwitch::Animation(anim)) = &mut self.workspace_switch {
-                // FIXME: maintain velocity.
-                *anim = anim.restarted(prev_render_idx, anim.to(), 0.);
-            }
+            && let Some(WorkspaceSwitch::Animation(anim)) = &mut self.workspace_switch
+        {
+            // FIXME: maintain velocity.
+            *anim = anim.restarted(prev_render_idx, anim.to(), 0.);
+        }
     }
 
     pub(super) fn is_grid_overview_open(&self) -> bool {
@@ -2223,9 +2225,10 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if let Some(ws) = self.workspaces.get_mut(workspace_idx)
-            && ws.has_windows() {
-                ws.open_grid_overview();
-            }
+            && ws.has_windows()
+        {
+            ws.open_grid_overview();
+        }
     }
 
     #[cfg(test)]
@@ -2241,11 +2244,10 @@ impl<W: LayoutElement> Monitor<W> {
             Some(OverviewProgress::Animation(progress_anim)),
         ) = (&self.workspace_switch, &self.overview_progress)
             && switch_anim.start_time() == progress_anim.start_time()
-                && (switch_anim.duration().as_secs_f64() - progress_anim.duration().as_secs_f64())
-                    .abs()
-                    <= 0.001
-            {
-                #[rustfmt::skip]
+            && (switch_anim.duration().as_secs_f64() - progress_anim.duration().as_secs_f64()).abs()
+                <= 0.001
+        {
+            #[rustfmt::skip]
                 // How this was derived:
                 //
                 // - Assume we're animating a zoom + switch. Consider switch "from" and "to".
@@ -2287,17 +2289,17 @@ impl<W: LayoutElement> Monitor<W> {
                 // - first_y = to * from_height - switch_anim.value() * from_height - to * current_height
                 // - first_y = -switch_anim.value() * from_height + to * (from_height - current_height)
                 let from = progress_anim.from();
-                let from_zoom = compute_overview_zoom(self.overview_zoom_value(), Some(from));
-                let from_ws_height_with_gap = self.workspace_cross_with_gap(from_zoom);
+            let from_zoom = compute_overview_zoom(self.overview_zoom_value(), Some(from));
+            let from_ws_height_with_gap = self.workspace_cross_with_gap(from_zoom);
 
-                let zoom = self.overview_zoom();
-                let ws_height_with_gap = self.workspace_cross_with_gap(zoom);
+            let zoom = self.overview_zoom();
+            let ws_height_with_gap = self.workspace_cross_with_gap(zoom);
 
-                let first_ws_y = -switch_anim.value() * from_ws_height_with_gap
-                    + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
+            let first_ws_y = -switch_anim.value() * from_ws_height_with_gap
+                + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
 
-                return -first_ws_y / ws_height_with_gap;
-            };
+            return -first_ws_y / ws_height_with_gap;
+        };
 
         if let Some(switch) = &self.workspace_switch {
             switch.current_idx()
@@ -2948,14 +2950,10 @@ impl<W: LayoutElement> Monitor<W> {
                             push!(),
                         );
 
-                        if !tiles_above_floating
-                            && let Some(loc) = insert_hint_loc {
-                                self.insert_hint_element.render(
-                                    ctx.renderer,
-                                    loc.location,
-                                    push!(),
-                                );
-                            }
+                        if !tiles_above_floating && let Some(loc) = insert_hint_loc {
+                            self.insert_hint_element
+                                .render(ctx.renderer, loc.location, push!());
+                        }
                     }
                     3 => {
                         ws.render_scrolling(
@@ -3100,10 +3098,11 @@ impl<W: LayoutElement> Monitor<W> {
             ws.render_floating(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
 
             if let Some(loc) = insert_hint_render_loc
-                && loc.workspace == InsertWorkspace::Existing(ws.id()) {
-                    self.insert_hint_element
-                        .render(ctx.renderer, loc.location, push!());
-                }
+                && loc.workspace == InsertWorkspace::Existing(ws.id())
+            {
+                self.insert_hint_element
+                    .render(ctx.renderer, loc.location, push!());
+            }
 
             ws.render_scrolling(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
         }

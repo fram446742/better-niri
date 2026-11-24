@@ -469,10 +469,11 @@ fn interactive_move_keeps_fullscreen_and_restore_to_floating() {
         @"size: 200 × 200, bounds: 1920 × 1080, states: [Activated]"
     );
     let niri = f.niri();
-    assert!(niri
-        .layout
-        .workspaces()
-        .any(|(_, _, ws)| ws.is_floating(&window)));
+    assert!(
+        niri.layout
+            .workspaces()
+            .any(|(_, _, ws)| ws.is_floating(&window))
+    );
 }
 
 #[test]
@@ -535,10 +536,11 @@ fn interactive_move_keeps_maximized_and_restore_to_floating() {
         @"size: 200 × 200, bounds: 1920 × 1080, states: [Activated]"
     );
     let niri = f.niri();
-    assert!(niri
-        .layout
-        .workspaces()
-        .any(|(_, _, ws)| ws.is_floating(&window)));
+    assert!(
+        niri.layout
+            .workspaces()
+            .any(|(_, _, ws)| ws.is_floating(&window))
+    );
 }
 
 #[test]

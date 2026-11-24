@@ -127,10 +127,11 @@ impl DecorationLight {
                     // visible coloured bands; prefer float, with compatible fallbacks.
                     for format in [Fourcc::Abgr16161616f, Fourcc::Abgr2101010] {
                         if let Ok(mut texture) = renderer.create_buffer(format, size)
-                            && renderer.bind(&mut texture).is_ok() {
-                                self.blur_format = Some(format);
-                                return Ok(texture);
-                            }
+                            && renderer.bind(&mut texture).is_ok()
+                        {
+                            self.blur_format = Some(format);
+                            return Ok(texture);
+                        }
                     }
                     self.blur_format = Some(Fourcc::Abgr8888);
                     renderer.create_buffer(Fourcc::Abgr8888, size)

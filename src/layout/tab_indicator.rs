@@ -4,8 +4,8 @@ use std::mem;
 use niri_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::tile::Tile;
 use super::LayoutElement;
+use super::tile::Tile;
 use crate::animation::{Animation, Clock};
 use crate::niri_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
@@ -356,29 +356,31 @@ impl TabIndicator {
             .collect();
 
         let prev = &self.shown_rects;
-        if !prev.is_empty() && prev.len() != count
-            && let Some((clock, config)) = &self.count_anim_config {
-                let mut from = prev.clone();
-                if count > from.len() {
-                    // New tabs start out empty at the end of the last one.
-                    let last = *from.last().unwrap();
-                    let (loc, size) = match self.config.position {
-                        TabIndicatorPosition::Left | TabIndicatorPosition::Right => (
-                            Point::from((last.loc.x, last.loc.y + last.size.h)),
-                            Size::from((last.size.w, 0.)),
-                        ),
-                        TabIndicatorPosition::Top | TabIndicatorPosition::Bottom => (
-                            Point::from((last.loc.x + last.size.w, last.loc.y)),
-                            Size::from((0., last.size.h)),
-                        ),
-                    };
-                    from.resize(count, Rectangle::new(loc, size));
-                } else {
-                    from.truncate(count);
-                }
-                let anim = Animation::new(clock.clone(), 0., 1., 0., *config);
-                self.count_anim = Some((from, anim));
+        if !prev.is_empty()
+            && prev.len() != count
+            && let Some((clock, config)) = &self.count_anim_config
+        {
+            let mut from = prev.clone();
+            if count > from.len() {
+                // New tabs start out empty at the end of the last one.
+                let last = *from.last().unwrap();
+                let (loc, size) = match self.config.position {
+                    TabIndicatorPosition::Left | TabIndicatorPosition::Right => (
+                        Point::from((last.loc.x, last.loc.y + last.size.h)),
+                        Size::from((last.size.w, 0.)),
+                    ),
+                    TabIndicatorPosition::Top | TabIndicatorPosition::Bottom => (
+                        Point::from((last.loc.x + last.size.w, last.loc.y)),
+                        Size::from((0., last.size.h)),
+                    ),
+                };
+                from.resize(count, Rectangle::new(loc, size));
+            } else {
+                from.truncate(count);
             }
+            let anim = Animation::new(clock.clone(), 0., 1., 0., *config);
+            self.count_anim = Some((from, anim));
+        }
 
         let rects = match &self.count_anim {
             Some((from, anim)) if from.len() == count => {

@@ -218,7 +218,7 @@ pub fn parse_action_words(words: Vec<String>) -> anyhow::Result<Action> {
 ///
 /// Argument form and stdin form must produce identical output.
 pub fn parse_actions(args: &[String], stdin: &str) -> anyhow::Result<Vec<Action>> {
-    use anyhow::{anyhow, Context as _};
+    use anyhow::{Context as _, anyhow};
 
     let sources: Vec<(String, String)> = if args.is_empty() {
         stdin

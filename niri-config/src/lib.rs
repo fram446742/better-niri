@@ -21,9 +21,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use knuffel::errors::DecodeError;
 use knuffel::Decode as _;
-use miette::{miette, Context as _, IntoDiagnostic as _};
+use knuffel::errors::DecodeError;
+use miette::{Context as _, IntoDiagnostic as _, miette};
 
 #[macro_use]
 pub mod macros;
@@ -72,9 +72,9 @@ use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
 pub use crate::region_shader::{Geometry, RegionShader, RegionShaderPart};
 pub use crate::screen_cast_picker::ScreenCastPicker;
-pub use crate::shader_presets::{builtin_preset_source, ShaderPresetRefPart, BUILTIN_PRESET_NAMES};
-use crate::utils::{expand_home_path, Flag, MergeWith as _};
+pub use crate::shader_presets::{BUILTIN_PRESET_NAMES, ShaderPresetRefPart, builtin_preset_source};
 pub use crate::utils::{BoolOrFloat, FloatOrInt};
+use crate::utils::{Flag, MergeWith as _, expand_home_path};
 pub use crate::window_rule::{
     FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, ShaderRule,
     TearingContentType, WindowRule,
@@ -338,9 +338,11 @@ where
                     // behavior.
                     if recursion == 0
                         && let Some(border) = part.border.as_mut()
-                            && !border.on && !border.off {
-                                border.on = true;
-                            }
+                        && !border.on
+                        && !border.off
+                    {
+                        border.on = true;
+                    }
 
                     config.borrow_mut().layout.merge_with(&part);
                 }

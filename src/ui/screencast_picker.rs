@@ -57,7 +57,7 @@ mod enabled {
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
     use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget};
-    use crate::ui::i18n::{messages_from_env, Messages};
+    use crate::ui::i18n::{Messages, messages_from_env};
     use crate::utils::{output_size, to_physical_precise_round};
 
     const PANEL_MAX_WIDTH: f64 = 1040.;
@@ -1494,7 +1494,6 @@ mod enabled {
         let grid_height = card_height * actual_rows as f64 + CARD_GAP * (actual_rows - 1) as f64;
         let grid_y = metrics.cards_top + (available_height - grid_height).max(0.) / 2.;
 
-        
         (0..visible_count)
             .map(|local_index| {
                 let index = first_index + local_index;

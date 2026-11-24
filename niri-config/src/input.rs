@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use knuffel::errors::DecodeError;
 use knuffel::DecodeScalar;
+use knuffel::errors::DecodeError;
 use miette::miette;
-use smithay::input::keyboard::{keysyms, Keysym, XkbConfig};
+use smithay::input::keyboard::{Keysym, XkbConfig, keysyms};
 use smithay::reexports::input;
 
 use crate::binds::Modifiers;
-use crate::utils::{expand_home_path, Flag, MergeWith, Percent};
+use crate::utils::{Flag, MergeWith, Percent, expand_home_path};
 use crate::{FloatOrInt, Includes};
 
 #[derive(Debug, Default, PartialEq)]

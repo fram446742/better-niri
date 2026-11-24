@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use niri_config::OutputName;
+use smithay::backend::allocator::Buffer;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 #[cfg(feature = "xdp-gnome-screencast")]
 use smithay::backend::allocator::gbm::GbmDevice;
-use smithay::backend::allocator::Buffer;
 #[cfg(feature = "xdp-gnome-screencast")]
 use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::drm::DrmNode;
@@ -24,8 +24,8 @@ use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{ImportDma, ImportEgl};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::input;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
@@ -35,7 +35,7 @@ use smithay::utils::Size;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal};
 use smithay::wayland::presentation::Refresh;
 
-use super::{virtual_output, IpcOutputMap, OutputId, RenderResult};
+use super::{IpcOutputMap, OutputId, RenderResult, virtual_output};
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::{resources, shaders};
 use crate::utils::{get_monotonic_time, logical_output};

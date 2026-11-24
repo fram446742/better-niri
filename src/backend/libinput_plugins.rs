@@ -10,12 +10,12 @@ use smithay::reexports::input::Libinput;
 pub(super) unsafe fn init_libinput_plugin_system(libinput: &Libinput) {
     #[cfg(have_libinput_plugin_system)]
     unsafe {
-        use std::ffi::{c_char, c_int, CString};
+        use std::ffi::{CString, c_char, c_int};
         use std::os::unix::ffi::OsStringExt;
 
         use directories::BaseDirs;
-        use input::ffi::libinput;
         use input::AsRaw as _;
+        use input::ffi::libinput;
 
         unsafe extern "C" {
             fn libinput_plugin_system_append_path(libinput: *const libinput, path: *const c_char);

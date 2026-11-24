@@ -27,8 +27,8 @@ use smithay::wayland::presentation::Refresh;
 use super::{IpcOutputMap, OutputId, RenderResult};
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
-use crate::render_helpers::{resources, shaders, RenderCtx, RenderIntent, RenderTarget};
-use crate::utils::{get_monotonic_time, logical_output, WinitScale};
+use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget, resources, shaders};
+use crate::utils::{WinitScale, get_monotonic_time, logical_output};
 
 pub struct Winit {
     config: Rc<RefCell<Config>>,

@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -8,9 +8,9 @@ use futures_util::StreamExt;
 use zbus::message::Header;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::zvariant::NoneValue;
-use zbus::{fdo, interface, Task};
+use zbus::{Task, fdo, interface};
 
-use super::{request_name, Start};
+use super::{Start, request_name};
 
 #[derive(Clone)]
 pub struct ScreenSaver {

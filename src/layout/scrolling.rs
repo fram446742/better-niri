@@ -23,12 +23,12 @@ use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::{RenderLayer, SizingMode};
 use crate::niri_render_elements;
+use crate::render_helpers::RenderCtx;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::RenderCtx;
+use crate::utils::ResizeEdge;
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::{Transaction, TransactionBlocker};
-use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
 
 /// Amount of touchpad movement to scroll the view for the width of one working area.
@@ -487,9 +487,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn advance_animations(&mut self) {
         if let ViewOffset::Animation(anim) = &self.view_offset
-            && anim.is_done() {
-                self.view_offset = ViewOffset::Static(anim.to());
-            }
+            && anim.is_done()
+        {
+            self.view_offset = ViewOffset::Static(anim.to());
+        }
 
         if let ViewOffset::Gesture(gesture) = &mut self.view_offset {
             // Make sure the last event time doesn't go too much out of date (for
@@ -510,9 +511,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
 
             if let Some(anim) = &mut gesture.animation
-                && anim.is_done() {
-                    gesture.animation = None;
-                }
+                && anim.is_done()
+            {
+                gesture.animation = None;
+            }
         }
 
         for col in &mut self.columns {
@@ -1521,15 +1523,17 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         // If one window is left, reset its weight to 1.
         if column.data.len() == 1
-            && let WindowHeight::Auto { weight } = &mut column.data[0].height {
-                *weight = 1.;
-            }
+            && let WindowHeight::Auto { weight } = &mut column.data[0].height
+        {
+            *weight = 1.;
+        }
 
         // Stop interactive resize.
         if let Some(resize) = &self.interactive_resize
-            && tile.window().id() == &resize.window {
-                self.interactive_resize = None;
-            }
+            && tile.window().id() == &resize.window
+        {
+            self.interactive_resize = None;
+        }
 
         let tile = RemovedTile {
             tile,
@@ -1639,9 +1643,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .tiles
                 .iter()
                 .any(|tile| tile.window().id() == &resize.window)
-            {
-                self.interactive_resize = None;
-            }
+        {
+            self.interactive_resize = None;
+        }
 
         if column_idx + 1 == self.active_column_idx {
             // The previous column, that we were going to activate upon removal of the active
@@ -3003,13 +3007,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         // the normal strip.
         if let Some(idx) = target_column_idx
             && !self.columns[idx].has_visible_tiles()
-                && self.columns[source_column_idx].tiles.len() > 1
-            {
-                target_column_idx = match direction {
-                    ScrollDirection::Left => self.prev_interactive_column(idx),
-                    ScrollDirection::Right => self.next_interactive_column(idx),
-                };
-            }
+            && self.columns[source_column_idx].tiles.len() > 1
+        {
+            target_column_idx = match direction {
+                ScrollDirection::Left => self.prev_interactive_column(idx),
+                ScrollDirection::Right => self.next_interactive_column(idx),
+            };
+        }
 
         let Some(target_column_idx) = target_column_idx else {
             return;
@@ -4768,9 +4772,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         for (col_idx, col) in self.columns.iter_mut().enumerate() {
             let mut col_resize_data = None;
             if let Some(resize) = &self.interactive_resize
-                && col.contains(&resize.window) {
-                    col_resize_data = Some(resize.data);
-                }
+                && col.contains(&resize.window)
+            {
+                col_resize_data = Some(resize.data);
+            }
 
             let is_tabbed = col.display_mode == ColumnDisplay::Tabbed;
             let extra_size = col.extra_size();
@@ -5265,13 +5270,15 @@ impl<W: LayoutElement> Column<W> {
 
     pub fn advance_animations(&mut self) {
         if let Some(move_) = &mut self.move_x_animation
-            && move_.anim.is_done() {
-                self.move_x_animation = None;
-            }
+            && move_.anim.is_done()
+        {
+            self.move_x_animation = None;
+        }
         if let Some(move_) = &mut self.move_y_animation
-            && move_.anim.is_done() {
-                self.move_y_animation = None;
-            }
+            && move_.anim.is_done()
+        {
+            self.move_y_animation = None;
+        }
 
         for tile in &mut self.tiles {
             tile.advance_animations();
@@ -5847,24 +5854,26 @@ impl<W: LayoutElement> Column<W> {
         // If there are multiple windows in a column, clamp the non-auto window's height according
         // to other windows' min sizes.
         let mut max_non_auto_window_height = None;
-        if self.tiles.len() > 1 && !is_tabbed
+        if self.tiles.len() > 1
+            && !is_tabbed
             && let Some(non_auto_idx) = zip(&self.data, &minimized).position(|(data, minimized)| {
                 !*minimized && !matches!(data.height, WindowHeight::Auto { .. })
-            }) {
-                let min_height_taken = min_size
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| *idx != non_auto_idx)
-                    .map(|(_, min_size)| min_size.h + self.options.layout.gaps)
-                    .sum::<f64>();
+            })
+        {
+            let min_height_taken = min_size
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != non_auto_idx)
+                .map(|(_, min_size)| min_size.h + self.options.layout.gaps)
+                .sum::<f64>();
 
-                let tile = &self.tiles[non_auto_idx];
-                let height_left = max_tile_height - min_height_taken;
-                max_non_auto_window_height = Some(f64::max(
-                    1.,
-                    tile.window_height_for_tile_height(height_left).round(),
-                ));
-            }
+            let tile = &self.tiles[non_auto_idx];
+            let height_left = max_tile_height - min_height_taken;
+            max_non_auto_window_height = Some(f64::max(
+                1.,
+                tile.window_height_for_tile_height(height_left).round(),
+            ));
+        }
 
         // Compute the tile heights. Start by converting window heights to tile heights.
         let mut heights = zip(&self.tiles, &self.data)
@@ -6984,9 +6993,10 @@ fn cancel_resize_for_column<W: LayoutElement>(
     column: &mut Column<W>,
 ) {
     if let Some(resize) = interactive_resize
-        && column.contains(&resize.window) {
-            *interactive_resize = None;
-        }
+        && column.contains(&resize.window)
+    {
+        *interactive_resize = None;
+    }
 
     for tile in &mut column.tiles {
         tile.window_mut().cancel_interactive_resize();

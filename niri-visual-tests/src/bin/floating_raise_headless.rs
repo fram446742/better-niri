@@ -6,7 +6,7 @@ use anyhow::Context;
 use niri::animation::Clock;
 use niri::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _, Options, SizingMode};
 use niri::render_helpers::{
-    copy_framebuffer, create_texture, resources, shaders, RenderCtx, RenderIntent, RenderTarget,
+    RenderCtx, RenderIntent, RenderTarget, copy_framebuffer, create_texture, resources, shaders,
 };
 use niri::utils::transaction::{Transaction, TransactionBlocker};
 use niri_config::{Color, OutputName, PresetSize};

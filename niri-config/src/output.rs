@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
+use knuffel::Decode;
 use knuffel::ast::SpannedNode;
 use knuffel::decode::Context;
 use knuffel::errors::DecodeError;
 use knuffel::traits::ErrorSpan;
-use knuffel::Decode;
 use niri_ipc::{ConfiguredMode, HSyncPolarity, Transform, VSyncPolarity};
 
 use crate::gestures::HotCorners;
@@ -409,9 +409,10 @@ impl<S: ErrorSpan> knuffel::Decode<S> for Mode {
                     if mode.refresh.is_none() {
                         return Err("no refresh rate found; required for custom mode");
                     } else if let Some(refresh) = mode.refresh
-                        && refresh <= 0. {
-                            return Err("custom mode refresh rate must be > 0");
-                        }
+                        && refresh <= 0.
+                    {
+                        return Err("custom mode refresh rate must be > 0");
+                    }
                 }
                 Ok(mode)
             });
@@ -797,14 +798,18 @@ mod tests {
         );
 
         let dp2 = shader_of("DP-2").unwrap();
-        assert!(dp2.pass_sources(&config.output_shaders, &no_files)[0]
-            .0
-            .contains("c.rgb * vec3("));
+        assert!(
+            dp2.pass_sources(&config.output_shaders, &no_files)[0]
+                .0
+                .contains("c.rgb * vec3(")
+        );
 
         let hdmi = shader_of("HDMI-A-1").unwrap();
-        assert!(hdmi.pass_sources(&config.output_shaders, &no_files)[0]
-            .0
-            .contains("bgra"));
+        assert!(
+            hdmi.pass_sources(&config.output_shaders, &no_files)[0]
+                .0
+                .contains("bgra")
+        );
 
         assert!(
             shader_of("DP-3").is_none(),

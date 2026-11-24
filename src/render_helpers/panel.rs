@@ -12,7 +12,7 @@ use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform}
 use super::panel_quad::{bounding_box, sampling_matrix};
 use super::renderer::NiriRenderer;
 use super::shader_element::ShaderRenderElement;
-use super::shaders::{mat3_uniform, ProgramType, Shaders};
+use super::shaders::{ProgramType, Shaders, mat3_uniform};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 use crate::render_helpers::renderer::AsGlesFrame as _;
 

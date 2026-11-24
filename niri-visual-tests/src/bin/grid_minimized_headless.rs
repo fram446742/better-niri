@@ -12,7 +12,7 @@ use anyhow::Context;
 use niri::animation::Clock;
 use niri::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _, Options, SizingMode};
 use niri::render_helpers::{
-    copy_framebuffer, create_texture, resources, shaders, RenderCtx, RenderIntent, RenderTarget,
+    RenderCtx, RenderIntent, RenderTarget, copy_framebuffer, create_texture, resources, shaders,
 };
 use niri_config::{OutputName, PresetSize};
 use niri_visual_tests::test_window::TestWindow;

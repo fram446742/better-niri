@@ -218,22 +218,24 @@ pub(super) fn apply_config_to_managed_virtual_outputs(
         // Apply mode changes even when off so the mode is ready when re-enabled.
         let mut mode_changed = false;
         if let Some(new_mode) = new_mode
-            && output.current_mode() != Some(new_mode) {
-                set_virtual_output_mode_single(output, new_mode);
-                mode_changed = true;
+            && output.current_mode() != Some(new_mode)
+        {
+            set_virtual_output_mode_single(output, new_mode);
+            mode_changed = true;
 
-                if let Some(ipc_outputs) = ipc_outputs
-                    && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
-                        ipc_output.modes = vec![niri_ipc::Mode {
-                            width: new_mode.size.w as u16,
-                            height: new_mode.size.h as u16,
-                            refresh_rate: new_mode.refresh as u32,
-                            is_preferred: true,
-                        }];
-                        ipc_output.current_mode = Some(0);
-                        ipc_output.is_custom_mode = true;
-                    }
+            if let Some(ipc_outputs) = ipc_outputs
+                && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id)
+            {
+                ipc_output.modes = vec![niri_ipc::Mode {
+                    width: new_mode.size.w as u16,
+                    height: new_mode.size.h as u16,
+                    refresh_rate: new_mode.refresh as u32,
+                    is_preferred: true,
+                }];
+                ipc_output.current_mode = Some(0);
+                ipc_output.is_custom_mode = true;
             }
+        }
 
         let was_connected = niri
             .global_space
@@ -278,9 +280,10 @@ pub(super) fn apply_config_to_managed_virtual_outputs(
         }
 
         if let Some(ipc_outputs) = ipc_outputs
-            && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id) {
-                ipc_output.logical = is_connected.then(|| logical_output(output));
-            }
+            && let Some(ipc_output) = ipc_outputs.lock().unwrap().get_mut(output_id)
+        {
+            ipc_output.logical = is_connected.then(|| logical_output(output));
+        }
     }
 
     if !resized_outputs.is_empty() {

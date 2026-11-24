@@ -8,7 +8,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{self, OwnedValue, Type};
 use zbus::{fdo, interface};
 
-use super::{request_name, Start};
+use super::{Start, request_name};
 use crate::backend::IpcOutputMap;
 use crate::utils::is_laptop_panel;
 use crate::utils::scale::supported_scales;
@@ -209,7 +209,7 @@ impl DisplayConfig {
                             x => {
                                 return Err(zbus::fdo::Error::Failed(format!(
                                     "Unknown transform {x}",
-                                )))
+                                )));
                             }
                         },
                         position: Some(niri_config::Position {

@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
 
+use knuffel::Decode as _;
 use knuffel::ast::SpannedNode;
 use knuffel::errors::DecodeError;
-use knuffel::Decode as _;
 
-use crate::utils::{expand_home_path, expect_only_children, parse_arg_node, MergeWith};
+use crate::utils::{MergeWith, expand_home_path, expect_only_children, parse_arg_node};
 use crate::{FloatOrInt, Includes};
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,6 +1,7 @@
 use knuffel::errors::DecodeError;
 use niri_ipc::ColumnDisplay;
 
+use crate::FloatOrInt;
 use crate::appearance::{
     BackgroundEffect, BackgroundEffectRule, BlockOutFrom, BlurPart, BorderRule, CornerRadius,
     ShadowRule, TabIndicatorRule,
@@ -8,7 +9,6 @@ use crate::appearance::{
 use crate::global_shader::GlobalShaderPassPart;
 use crate::layout::DefaultPresetSize;
 use crate::utils::{MergeWith, RegexEq};
-use crate::FloatOrInt;
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct ShaderRule {

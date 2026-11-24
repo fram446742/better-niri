@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use smithay::reexports::wayland_server;
 use smithay::wayland::compositor::{
-    get_region_attributes, with_states, Cacheable, RegionAttributes,
+    Cacheable, RegionAttributes, get_region_attributes, with_states,
 };
 use wayland_protocols_plasma::blur::server::org_kde_kwin_blur::{self, OrgKdeKwinBlur};
 use wayland_protocols_plasma::blur::server::org_kde_kwin_blur_manager::{

@@ -222,7 +222,7 @@ mod tests {
     use std::fs::{self, File, FileTimes};
     use std::io::Write;
 
-    use xshell::{cmd, Shell, TempDir};
+    use xshell::{Shell, TempDir, cmd};
 
     use super::*;
 
@@ -415,13 +415,15 @@ mod tests {
                 sh.remove_path("niri/rings/effect.frag")?;
                 test.assert_changed_to(CONFIG);
                 let missing = test.watcher.path.load().config.unwrap();
-                assert!(missing.window_rules[0]
-                    .focus_ring
-                    .shader
-                    .as_ref()
-                    .unwrap()
-                    .key()
-                    .is_none());
+                assert!(
+                    missing.window_rules[0]
+                        .focus_ring
+                        .shader
+                        .as_ref()
+                        .unwrap()
+                        .key()
+                        .is_none()
+                );
                 Ok(())
             })
     }

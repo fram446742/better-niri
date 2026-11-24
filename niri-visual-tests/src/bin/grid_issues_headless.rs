@@ -6,7 +6,7 @@ use anyhow::Context;
 use niri::animation::Clock;
 use niri::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _, Options, SizingMode};
 use niri::render_helpers::{
-    copy_framebuffer, create_texture, resources, shaders, RenderCtx, RenderIntent, RenderTarget,
+    RenderCtx, RenderIntent, RenderTarget, copy_framebuffer, create_texture, resources, shaders,
 };
 use niri_config::{Color, OutputName, PresetSize};
 use niri_visual_tests::test_window::TestWindow;
@@ -298,9 +298,9 @@ fn main() -> anyhow::Result<()> {
         layout.activate_window(&2);
 
         let step = |layout: &mut niri::layout::Layout<TestWindow>,
-                        env: &mut Env,
-                        t: u64,
-                        name: &str|
+                    env: &mut Env,
+                    t: u64,
+                    name: &str|
          -> anyhow::Result<()> {
             let now = Duration::from_millis(t);
             env.clock.set_unadjusted(now);
@@ -423,10 +423,11 @@ fn main() -> anyhow::Result<()> {
             for x in (20..1260).step_by(20) {
                 let pos = smithay::utils::Point::<f64, Logical>::from((x as f64, y as f64));
                 if let Some((win, _)) = mon.window_under(pos)
-                    && win.id() == &0 {
-                        grab_pos = Some(pos);
-                        break 'outer;
-                    }
+                    && win.id() == &0
+                {
+                    grab_pos = Some(pos);
+                    break 'outer;
+                }
             }
         }
         let grab_pos = grab_pos.expect("minimized window should be hit-testable in the grid");

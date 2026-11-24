@@ -9,13 +9,13 @@ use std::time::Duration;
 use anyhow::Context;
 use futures_util::StreamExt;
 use smithay::backend::input::{KeyState, Keycode};
-use smithay::input::keyboard::{xkb, Keysym};
+use smithay::input::keyboard::{Keysym, xkb};
 use zbus::blocking::object_server::InterfaceRef;
 use zbus::message::Header;
 use zbus::names::{BusName, OwnedUniqueName, UniqueName};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{NoneValue, OwnedObjectPath, SerializeDict, Type, Value};
-use zbus::{fdo, interface, DBusError};
+use zbus::{DBusError, fdo, interface};
 
 use super::request_name;
 use crate::niri::{PointContents, State};

@@ -338,9 +338,9 @@ impl PortalScreenCast {
             && let Err(err) = self
                 .to_niri
                 .send(ScreenCastToNiri::CancelPickSources(id.clone()))
-            {
-                warn!("error sending picker cancellation to niri: {err}");
-            }
+        {
+            warn!("error sending picker cancellation to niri: {err}");
+        }
     }
 }
 

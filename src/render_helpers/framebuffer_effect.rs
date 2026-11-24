@@ -6,7 +6,7 @@ use niri_config::CornerRadius;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles::{
-    ffi, Capability, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform,
+    Capability, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, ffi,
 };
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Frame as _, FrameContext, Offscreen, Texture as _};
@@ -21,7 +21,7 @@ use crate::render_helpers::blur::{Blur, BlurOptions};
 use crate::render_helpers::capture;
 use crate::render_helpers::liquid_glass::LiquidGlassOptions;
 use crate::render_helpers::renderer::AsGlesFrame as _;
-use crate::render_helpers::shaders::{mat3_uniform, Shaders};
+use crate::render_helpers::shaders::{Shaders, mat3_uniform};
 use crate::utils::region::TransformedRegion;
 
 #[derive(Debug)]

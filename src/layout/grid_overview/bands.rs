@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::{rect_center, GridItem, GridSource, EPSILON};
+use super::{EPSILON, GridItem, GridSource, rect_center};
 use crate::layout::LayoutElement;
 
 /// How much less small windows shrink: with everything at `scale`, a window with a fraction `a`

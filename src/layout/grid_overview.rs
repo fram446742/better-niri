@@ -2,9 +2,9 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::time::Duration;
 
-use bands::{Arrangement, BandLine, Bands, ARRANGEMENTS};
+use bands::{ARRANGEMENTS, Arrangement, BandLine, Bands};
 use niri_config::{CornerRadius, GridFocusRingTransition};
-use rows::{Rows, MAX_FLOATING_ROWS};
+use rows::{MAX_FLOATING_ROWS, Rows};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::axis::AxisMap;
@@ -726,9 +726,10 @@ impl<W: LayoutElement> GridOverview<W> {
                 window_id: wid,
                 ..
             } = item
-                && *c == col_idx {
-                    *wid = window_id.clone();
-                }
+                && *c == col_idx
+            {
+                *wid = window_id.clone();
+            }
         }
     }
 
@@ -889,19 +890,20 @@ impl<W: LayoutElement> GridOverview<W> {
 
             highlight.dim_loc = None;
             if config.dim > 0.
-                && let Some((rect, radius)) = entry.tile_rect {
-                    highlight.dim.update_render_elements(
-                        rect.size,
-                        true,
-                        false,
-                        false,
-                        Rectangle::default(),
-                        radius,
-                        scale,
-                        (config.dim * grid_alpha * fade) as f32,
-                    );
-                    highlight.dim_loc = Some(rect.loc);
-                }
+                && let Some((rect, radius)) = entry.tile_rect
+            {
+                highlight.dim.update_render_elements(
+                    rect.size,
+                    true,
+                    false,
+                    false,
+                    Rectangle::default(),
+                    radius,
+                    scale,
+                    (config.dim * grid_alpha * fade) as f32,
+                );
+                highlight.dim_loc = Some(rect.loc);
+            }
 
             self.minimized_highlights.push(highlight);
         }
@@ -1030,14 +1032,14 @@ impl<W: LayoutElement> GridOverview<W> {
                     }
                 }
                 if let Some(focus) = focus
-                    && !self.focus_rings.iter().any(|ring| &ring.window == focus) {
-                        let mut ring = new_ring(focus);
-                        if focus_moved {
-                            ring.fade =
-                                Some(Animation::new(clock.clone(), 0., 1., 0., anim_config));
-                        }
-                        self.focus_rings.push(ring);
+                    && !self.focus_rings.iter().any(|ring| &ring.window == focus)
+                {
+                    let mut ring = new_ring(focus);
+                    if focus_moved {
+                        ring.fade = Some(Animation::new(clock.clone(), 0., 1., 0., anim_config));
                     }
+                    self.focus_rings.push(ring);
+                }
                 self.drop_hidden_focus_rings();
             }
         }
@@ -1374,23 +1376,25 @@ impl<W: LayoutElement> GridOverview<W> {
     pub fn advance_animations(&mut self) {
         self.advance_focus_rings();
         if let Some(OverviewProgress::Animation(anim)) = &mut self.progress
-            && anim.is_done() {
-                self.progress = if self.open {
-                    Some(OverviewProgress::Open)
-                } else {
-                    None
-                };
-                if self.open && self.rearrange_anim.is_none() {
-                    self.sync_entries_to_layout();
-                }
-            }
-        if let Some(anim) = &mut self.rearrange_anim
-            && anim.is_done() {
-                self.rearrange_anim = None;
-                self.window_transition_starts.clear();
-                self.flying_in_windows.clear();
+            && anim.is_done()
+        {
+            self.progress = if self.open {
+                Some(OverviewProgress::Open)
+            } else {
+                None
+            };
+            if self.open && self.rearrange_anim.is_none() {
                 self.sync_entries_to_layout();
             }
+        }
+        if let Some(anim) = &mut self.rearrange_anim
+            && anim.is_done()
+        {
+            self.rearrange_anim = None;
+            self.window_transition_starts.clear();
+            self.flying_in_windows.clear();
+            self.sync_entries_to_layout();
+        }
     }
 
     fn sync_entries_to_layout(&mut self) {
@@ -1665,27 +1669,27 @@ impl<W: LayoutElement> GridLayout<W> {
 
         // The rows the windows were in, or a small change to them, rather than new rows.
         if let Some(prev) = prev
-            && let Some(kept) = rows.kept(&prev.float_rows, min_scale) {
-                let mut changes = rows.changes(kept).into_iter();
-                let kept = changes.next().unwrap();
-                let mut near = (rows.max_scale(&kept, min_scale), kept);
-                for change in changes {
-                    let change_scale = rows.max_scale(&change, min_scale);
-                    // Only a change that shows the windows clearly larger.
-                    if change_scale * KEEP_ARRANGEMENT_SCALE > near.0 {
-                        near = (change_scale, change);
-                    }
-                }
-                let (kept_scale, kept) = near;
-                if kept_scale >= scale * KEEP_ARRANGEMENT_SCALE {
-                    chosen = kept;
-                    scale = kept_scale;
-                    if prev.scale <= kept_scale && kept_scale <= prev.scale * SCALE_GROW_HYSTERESIS
-                    {
-                        scale = prev.scale;
-                    }
+            && let Some(kept) = rows.kept(&prev.float_rows, min_scale)
+        {
+            let mut changes = rows.changes(kept).into_iter();
+            let kept = changes.next().unwrap();
+            let mut near = (rows.max_scale(&kept, min_scale), kept);
+            for change in changes {
+                let change_scale = rows.max_scale(&change, min_scale);
+                // Only a change that shows the windows clearly larger.
+                if change_scale * KEEP_ARRANGEMENT_SCALE > near.0 {
+                    near = (change_scale, change);
                 }
             }
+            let (kept_scale, kept) = near;
+            if kept_scale >= scale * KEEP_ARRANGEMENT_SCALE {
+                chosen = kept;
+                scale = kept_scale;
+                if prev.scale <= kept_scale && kept_scale <= prev.scale * SCALE_GROW_HYSTERESIS {
+                    scale = prev.scale;
+                }
+            }
+        }
 
         let placed = rows.place(&chosen, scale);
         let entries = items
