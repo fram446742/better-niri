@@ -182,12 +182,16 @@ picked up without re-auditing.
    HDR fullscreen passthrough works on Vulkan (validated 2026-11-24: the DRM
    compositor came up with hdr=true, 10-bit formats, and "updated HDR
    signalling" while a fullscreen HDR10 clip played with mpv tone-mapping to
-   the display's 1083-nit peak); SDR/HDR mixed compositing still uses the GLES
-   path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
-   and desktop content look rougher/differently antialiased than the SDR
-   session, because the SDR-to-HDR blend is not applied there yet. Still open:
-   HDR mixed compositing, the screencopy/screencast paths and transition
-   capture on rotated outputs. Textured `ShaderRenderElement`s now draw on
+   the display's 1083-nit peak); SDR/HDR mixed compositing now runs on Vulkan
+   too: HDR frames install the `texture_hdr` override for default texture draws
+   (SDR greys/edges are PQ-encoded instead of raw sRGB, which fixes the rough
+   text/antialiasing seen before), solid colours are sRGB→PQ encoded on the
+   CPU, HDR-PQ content passes through on HDR frames and converts back with
+   `texture_hdr_to_sdr` for SDR captures, and niri's own Vulkan programs read
+   the frame blend state. Capture state is cleared after the output so
+   screenshots/screencasts stay SDR; 10-bit scanout formats are unchanged.
+   Still open: the screencopy/screencast paths and transition capture on
+   rotated outputs. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
@@ -261,11 +265,14 @@ picked up without re-auditing.
    sensor command, hysteresis, transform+position through `Request::Output`,
    lock/manual set), both inert by default. `better-session/` gained named
    contexts with outputs, hooks and ordered, idempotent restore that waits for
-   late apps. Remaining in the `better-*` family: full config coverage in
-   `better-settings`, richer modules in `better-sidepanels`, native PipeWire
-   backends in `better-audio`/`better-wallpaper`, cross-app adapters wired to
-   events, Phase 8 packaging
-   (Arch/AUR/profiles) and hardware validation.
+   late apps. `better-sidepanels/` gained built-in modules (clock, niri
+   workspaces with per-chip click and scroll cycling, window title, media,
+   battery, cpu, memory, network, volume, custom), safe click/scroll actions,
+   panels on all four edges (several per output), config v2 with per-output
+   overrides, validation and file-watch reload. Remaining in the `better-*`
+   family: full config coverage in `better-settings`, native PipeWire backends
+   in `better-audio`/`better-wallpaper`, cross-app adapters wired to events,
+   Phase 8 packaging (Arch/AUR/profiles) and hardware validation.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
    backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
