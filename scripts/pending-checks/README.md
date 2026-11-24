@@ -3,6 +3,10 @@
 Run these **inside** a niri session on tty3 with `NIRI_RENDERER=vulkan`
 (switch with Ctrl+Alt+F3, log in, start niri, open a terminal).
 
+Rebuild the test binary first (`cargo build -p niri`); the scripts default to
+`target/debug/niri` and will silently test a stale build otherwise. `niri msg
+version` at the start of every run shows the commit in use.
+
 ## Isolated config
 
 `isolated-session.sh [DIR]` clones `~/.config/niri` into `/tmp/niri-test-session`

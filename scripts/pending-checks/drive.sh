@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive a running niri session (run inside the session, e.g. from foot on tty3)
-# and exercise the Vulkan visuals that still have pending parity work.
+# and exercise the Vulkan visuals (windows, animations, overview, capture).
 # Usage: ./scripts/pending-checks/drive.sh [/path/to/niri]
 set -u
 TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
@@ -59,7 +59,10 @@ cat <<'CHECK'
 - If configured: blur/xray behind windows, liquid-glass focus ring.
 - Screenshot UI: open it manually with your screenshot bind, check the
   magnifier if enabled, then press Escape (it needs a real key press).
-Reported expected-degraded on Vulkan until wired: window/global/scoped
-shader effects, blur/xray, liquid glass, carousel panel contents, magnified
-screenshot capture, screen transitions.
+- Closing windows: animate with the baked snapshot; opening windows fade/scale.
+- Workspace switches on a rotated output: transition orientation is correct.
+- Popups (menus, tooltips): blurred backdrop if a background effect is set.
+Everything above, including window/global/scoped shaders, blur/xray, liquid
+glass, carousel panel contents, magnified screenshot capture and screen
+transitions, is expected to work on Vulkan; report anything missing.
 CHECK

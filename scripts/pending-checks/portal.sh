@@ -29,11 +29,39 @@ gdbus introspect --session --dest org.freedesktop.impl.portal.desktop.better \
 # and deliver results through the Request.Response signal. Driving that from a
 # shell needs a client that exports the Request; use a real portal client or
 # the portal's own integration tests instead of hand-written gdbus calls.
-say "portal integration tests"
-if [ -f better-portal/Cargo.toml ]; then
-  cargo test --manifest-path better-portal/Cargo.toml --quiet 2>&1 | tail -5
+say "screenshot through xdg-desktop-portal"
+if gdbus introspect --session --dest org.freedesktop.portal.Desktop \
+    --object-path /org/freedesktop/portal/desktop >/dev/null 2>&1; then
+  monitor=/tmp/pending-portal-response.log
+  : >"$monitor"
+  timeout 25 dbus-monitor --session \
+    "type='signal',interface='org.freedesktop.portal.Request',member='Response'" \
+    >"$monitor" 2>&1 &
+  mon_pid=$!
+  sleep 1
+  gdbus call --session --dest org.freedesktop.portal.Desktop \
+    --object-path /org/freedesktop/portal/desktop \
+    --method org.freedesktop.portal.Screenshot.Screenshot \
+    "" "{'interactive': <false>}" 2>&1 || true
+  sleep 6
+  kill "$mon_pid" 2>/dev/null
+  grep -A2 "member=Response" "$monitor" | head -8
+  if grep -q "uint32 0" "$monitor"; then
+    echo "Screenshot request succeeded (response 0)"
+    grep -o "'uri': <'[^']*'>" "$monitor" | head -1
+  else
+    echo "No successful Response seen; check the frontend's portal selection and /tmp/better-portal.log"
+  fi
+else
+  echo "xdg-desktop-portal frontend is not running on this bus; backend-only checks above."
+  echo "Start a session with xdg-desktop-portal and configure better via portals.conf."
 fi
 
-echo "Screenshot/PickColor/ScreenCast need a portal client that exports a Request object;"
-echo "use a real app (screenshot keybind in a portal-aware app, OBS for ScreenCast) or the tests above."
-echo "The full ScreenCast stream needs PipeWire and niri running in this session; the portal proxies niri."
+say "portal integration tests"
+if [ -f better-portal/Cargo.toml ]; then
+  cargo test --manifest-path better-portal/Cargo.toml 2>&1 | grep -E '^test result|Running|FAILED' | tail -12
+fi
+
+echo "Direct impl calls need a client that exports a Request object; the frontend screenshot"
+echo "above covers that path. The full ScreenCast stream needs PipeWire and niri in this"
+echo "session (OBS, or a portal test app); the portal proxies niri."
