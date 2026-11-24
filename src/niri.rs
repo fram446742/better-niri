@@ -207,9 +207,9 @@ use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    CaptureBuffer, RenderCtx, RenderIntent, RenderTarget, copy_tty_texture_to_vec,
-    encompassing_geo, render_to_dmabuf, render_to_encompassing_tty_texture, render_to_shm,
-    render_to_texture, render_to_tty_texture, shaders,
+    CaptureBuffer, CaptureRenderer, RenderCtx, RenderIntent, RenderTarget, copy_tty_texture_to_vec,
+    encompassing_geo, render_to_encompassing_tty_texture, render_to_texture, render_to_tty_texture,
+    shaders,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
@@ -1492,9 +1492,18 @@ impl State {
                 }
 
                 let render_node = self.backend.primary_render_node();
+                let mut constraints = None;
                 self.backend.with_primary_renderer(|renderer| {
-                    window_capture_constraints(renderer, render_node, mapped, output)
-                })
+                    constraints = Some(window_capture_constraints(
+                        Some(renderer),
+                        render_node,
+                        mapped,
+                        output,
+                    ));
+                });
+                Some(constraints.unwrap_or_else(|| {
+                    window_capture_constraints(None, render_node, mapped, output)
+                }))
             } else if let Some(output) = live_output(&self.niri, &source) {
                 let Some(mode) = output.current_mode() else {
                     return false;
@@ -1507,11 +1516,11 @@ impl State {
                 // The size changed, so build the full constraints and send them to the client
                 // below.
                 let render_node = self.backend.primary_render_node();
-                self.backend
-                    .with_primary_renderer(|renderer| {
-                        output_capture_constraints(renderer, render_node, &output)
-                    })
-                    .flatten()
+                let mut constraints = None;
+                self.backend.with_primary_renderer(|renderer| {
+                    constraints = output_capture_constraints(Some(renderer), render_node, &output);
+                });
+                constraints.or_else(|| output_capture_constraints(None, render_node, &output))
             } else {
                 return false;
             };
@@ -9274,9 +9283,11 @@ impl Niri {
             self.send_frame_callbacks(output);
         }
 
-        backend.with_primary_renderer(|renderer| {
-            #[cfg(feature = "xdp-gnome-screencast")]
-            {
+        // Screencast is separate from the other capture paths because its element type is
+        // feature-gated; at this concrete call site both renderer instances satisfy its bounds.
+        #[cfg(feature = "xdp-gnome-screencast")]
+        {
+            let rendered = backend.with_primary_renderer(|renderer| {
                 // Render and send to PipeWire screencast streams.
                 self.render_for_screen_cast(renderer, output, target_presentation_time);
 
@@ -9285,13 +9296,27 @@ impl Niri {
                 // unimplemented, but happens to work by chance, since output
                 // redrawing is more eager than it should be.
                 self.render_windows_for_screen_cast(renderer, output, target_presentation_time);
+            });
+            if rendered.is_none() {
+                backend.with_primary_tty_renderer(|renderer| {
+                    self.render_for_screen_cast(renderer, output, target_presentation_time);
+                    self.render_windows_for_screen_cast(renderer, output, target_presentation_time);
+                });
             }
+        }
 
-            self.render_for_screencopy_with_damage(renderer, output);
-            self.render_for_image_copy_capture(renderer, output, target_presentation_time);
-            self.render_windows_for_image_copy_capture(renderer, output, target_presentation_time);
-            self.render_for_image_copy_cursor_capture(renderer, output, target_presentation_time);
-        });
+        // Prefer the GLES renderer as before; Vulkan-only TTY sessions fall back to the TTY
+        // renderer abstraction, which runs the same capture paths on the Vulkan renderer.
+        if backend
+            .with_primary_renderer(|renderer| {
+                self.render_capture_paths(renderer, output, target_presentation_time);
+            })
+            .is_none()
+        {
+            backend.with_primary_tty_renderer(|renderer| {
+                self.render_capture_paths(renderer, output, target_presentation_time);
+            });
+        }
     }
 
     pub fn refresh_on_demand_vrr(&mut self, backend: &mut Backend, output: &Output) {
@@ -10148,35 +10173,70 @@ impl Niri {
         feedback
     }
 
+    /// Runs the wlr-screencopy and ext-image-copy-capture paths against one renderer.
+    ///
+    /// The screencast paths are feature-gated and run next to this from `redraw()`.
+    ///
+    /// Generic over [`NiriRenderer`] so the TTY backend can call it with its GLES or Vulkan
+    /// renderer. `redraw()` prefers [`Backend::with_primary_renderer`] and falls back to
+    /// [`Backend::with_primary_tty_renderer`] on Vulkan-only sessions, mirroring
+    /// [`Niri::with_screenshot_renderer`].
     #[allow(clippy::type_complexity)]
-    fn render_for_screencopy_internal(
-        renderer: &mut GlesRenderer,
+    pub fn render_capture_paths<R>(
+        &mut self,
+        renderer: &mut R,
+        output: &Output,
+        target_presentation_time: Duration,
+    ) where
+        R: NiriRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        PointerRenderElements<R>: RenderElement<R>,
+        WindowCastRenderElements<R>: RenderElement<R>,
+        WindowCaptureRenderElement<R>: RenderElement<R>,
+        R: CaptureRenderer,
+    {
+        self.render_for_screencopy_with_damage(renderer, output);
+        self.render_for_image_copy_capture(renderer, output, target_presentation_time);
+        self.render_windows_for_image_copy_capture(renderer, output, target_presentation_time);
+        self.render_for_image_copy_cursor_capture(renderer, output, target_presentation_time);
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn render_for_screencopy_internal<R>(
+        renderer: &mut R,
         damage_tracker: &mut OutputDamageTracker,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
         states: RenderElementStates,
         screencopy: &Screencopy,
         reference_luminance: f64,
-    ) -> anyhow::Result<SyncPoint> {
+    ) -> anyhow::Result<SyncPoint>
+    where
+        R: CaptureRenderer,
+    {
         let sync = match screencopy.buffer() {
-            CaptureBuffer::Dma(dmabuf) => render_to_dmabuf(
-                renderer,
-                damage_tracker,
-                dmabuf.clone(),
-                elements,
-                states,
-                reference_luminance,
-            )
-            .context("error rendering to screencopy dmabuf")?,
-            CaptureBuffer::Shm(wl_buffer) => {
-                render_to_shm(
-                    renderer,
+            CaptureBuffer::Dma(dmabuf) => renderer
+                .render_capture_to_dmabuf(
                     damage_tracker,
-                    wl_buffer,
+                    dmabuf.clone(),
                     elements,
                     states,
                     reference_luminance,
                 )
-                .context("error rendering to screencopy shm buffer")?;
+                .context("error rendering to screencopy dmabuf")?,
+            CaptureBuffer::Shm(wl_buffer) => {
+                renderer
+                    .render_capture_to_shm(
+                        damage_tracker,
+                        wl_buffer,
+                        elements,
+                        states,
+                        reference_luminance,
+                    )
+                    .context("error rendering to screencopy shm buffer")?;
                 SyncPoint::signaled()
             }
         };
@@ -10184,11 +10244,16 @@ impl Niri {
         Ok(sync)
     }
 
-    pub fn render_for_screencopy_with_damage(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        output: &Output,
-    ) {
+    pub fn render_for_screencopy_with_damage<R>(&mut self, renderer: &mut R, output: &Output)
+    where
+        R: NiriRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        R: CaptureRenderer,
+    {
         let _span = tracy_client::span!("Niri::render_for_screencopy_with_damage");
 
         let mut screencopy_state = mem::take(&mut self.screencopy_state);
@@ -10260,12 +10325,21 @@ impl Niri {
         self.screencopy_state = screencopy_state;
     }
 
-    pub fn render_for_screencopy_without_damage(
+    pub fn render_for_screencopy_without_damage<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         manager: &ZwlrScreencopyManagerV1,
         screencopy: Screencopy,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        R: NiriRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        R: CaptureRenderer,
+    {
         let _span = tracy_client::span!("Niri::render_for_screencopy");
 
         let output = screencopy.output();
@@ -10319,17 +10393,21 @@ impl Niri {
     /// Renders the elements into the frame's buffer and completes the frame.
     ///
     /// Returns `true` if it succeeded and `false` otherwise.
-    fn capture_image_copy_frame(
+    fn capture_image_copy_frame<R>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         s: &mut ImageCopySession,
         damage: Vec<Rectangle<i32, BufferCoords>>,
         transform: Transform,
         buffer_size: Size<i32, BufferCoords>,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
         states: RenderElementStates,
         target_presentation_time: Duration,
-    ) -> bool {
+    ) -> bool
+    where
+        R: NiriRenderer,
+        R: CaptureRenderer,
+    {
         let frame = s.pending_frame.take().unwrap();
         let buffer = frame.buffer();
         let Some(capture_buffer) = image_copy_capture_impl::capture_buffer(&buffer, buffer_size)
@@ -10359,12 +10437,20 @@ impl Niri {
         }
     }
 
-    pub fn render_for_image_copy_capture(
+    pub fn render_for_image_copy_capture<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         target_presentation_time: Duration,
-    ) {
+    ) where
+        R: NiriRenderer,
+        OutputRenderElements<R>: RenderElement<R>,
+        LayoutElementRenderElement<R>: RenderElement<R>,
+        crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
+            RenderElement<R>,
+        crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        R: CaptureRenderer,
+    {
         let Some(mode) = output.current_mode() else {
             return;
         };
@@ -10453,12 +10539,17 @@ impl Niri {
         self.image_copy_sessions = sessions;
     }
 
-    pub fn render_windows_for_image_copy_capture(
+    pub fn render_windows_for_image_copy_capture<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         target_presentation_time: Duration,
-    ) {
+    ) where
+        R: CaptureRenderer,
+        PointerRenderElements<R>: RenderElement<R>,
+        WindowCastRenderElements<R>: RenderElement<R>,
+        WindowCaptureRenderElement<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render_windows_for_image_copy_capture");
 
         let scale: Scale<f64> = output.current_scale().fractional_scale().into();
@@ -10554,12 +10645,15 @@ impl Niri {
         self.image_copy_sessions = sessions;
     }
 
-    pub fn render_for_image_copy_cursor_capture(
+    pub fn render_for_image_copy_cursor_capture<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
         target_presentation_time: Duration,
-    ) {
+    ) where
+        R: CaptureRenderer,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render_for_image_copy_cursor_capture");
 
         let scale: Scale<f64> = output.current_scale().fractional_scale().into();
@@ -10627,8 +10721,7 @@ impl Niri {
                 continue;
             }
 
-            let res = render_to_shm(
-                renderer,
+            let res = renderer.render_capture_to_shm(
                 &mut s.damage_tracker,
                 &buffer,
                 elements,
@@ -10662,14 +10755,18 @@ impl Niri {
         self.image_copy_cursor_sessions = sessions;
     }
 
-    pub fn render_cursor_for_capture(
+    pub fn render_cursor_for_capture<R>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         output: &Output,
     ) -> (
-        Vec<RelocateRenderElement<PointerRenderElements<GlesRenderer>>>,
+        Vec<RelocateRenderElement<PointerRenderElements<R>>>,
         CursorCaptureGeometry,
-    ) {
+    )
+    where
+        R: NiriRenderer,
+        PointerRenderElements<R>: RenderElement<R>,
+    {
         let output_scale = output.current_scale();
         let scale = Scale::from(output_scale.fractional_scale());
 

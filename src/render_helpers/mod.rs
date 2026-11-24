@@ -23,7 +23,7 @@ use solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
 use self::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use self::texture::{TextureBuffer, TextureRenderElement};
-use crate::backend::tty::TtyOffscreen;
+use crate::backend::tty::{TtyOffscreen, TtyRenderer};
 use crate::render_helpers::blend::{DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend};
 use crate::render_helpers::renderer::{AsGlesRenderer, NiriRenderer};
 use crate::render_helpers::xray::Xray;
@@ -445,6 +445,310 @@ pub fn copy_tty_texture_to_vec<R: NiriRenderer>(
     bail!("renderer does not support texture readback")
 }
 
+/// Applies the SDR capture blend to the concrete backend behind `renderer`.
+///
+/// Capture buffers always hold SDR content on both backends; on Vulkan this also carries the
+/// reference luminance used to tone-map HDR scene content back into SDR.
+pub fn set_capture_blend<R: NiriRenderer>(renderer: &mut R, reference_luminance: f64) {
+    if let Some(gles) = renderer.as_gles_renderer() {
+        set_sdr_capture_blend(gles, reference_luminance);
+    }
+    #[cfg(feature = "vulkan")]
+    if let Some(vulkan) = renderer.as_vulkan_renderer() {
+        crate::render_helpers::blend::set_sdr_capture_blend_vulkan(vulkan, reference_luminance);
+    }
+}
+
+/// Renders `elements` with the state of `damage_tracker` into a fresh offscreen texture and reads
+/// it back as `fourcc` pixels.
+///
+/// Returns `None` when the tracker produced no damage and the render was skipped, mirroring the
+/// GLES direct-to-target path where the client buffer is left untouched in that case.
+pub(crate) fn render_capture_frame_to_vec<R: NiriRenderer>(
+    renderer: &mut R,
+    damage_tracker: &mut OutputDamageTracker,
+    elements: &[impl RenderElement<R>],
+    states: RenderElementStates,
+    fourcc: Fourcc,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
+    let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+
+    let mut texture = renderer
+        .create_buffer(fourcc, buffer_size)
+        .context("error creating capture texture")?;
+
+    let result = {
+        let mut target = renderer
+            .bind(&mut texture)
+            .context("error binding capture texture")?;
+        damage_tracker
+            .render_output_with_states(
+                renderer,
+                &mut target,
+                0,
+                elements,
+                Color32F::TRANSPARENT,
+                states,
+            )
+            .context("error rendering capture frame")?
+    };
+    if result.damage.is_none() {
+        return Ok(None);
+    }
+
+    let texture = R::wrap_offscreen(texture);
+    let pixels = copy_tty_texture_to_vec(
+        renderer,
+        &texture,
+        Rectangle::from_size(buffer_size),
+        fourcc,
+    )?;
+    Ok(Some(pixels))
+}
+
+/// A renderer that can render capture frames into client buffers.
+///
+/// This exists because the dma-buf path cannot be a plain generic function over
+/// [`NiriRenderer`]: the renderer binds a dma-buf through [`Bind`], and that trait does not relate
+/// `Bind::Framebuffer` to `Renderer::Framebuffer`. The two concrete capture renderers of niri
+/// (GLES and the TTY renderer, which covers both backends) implement this trait, so generic
+/// capture paths only need `R: CaptureRenderer` while `render_output_with_states()` still gets
+/// the right target type.
+///
+/// GLES keeps its direct-to-client-buffer paths; the TTY/Vulkan implementation uses
+/// [`render_to_tty_shm`] for `wl_shm` targets and imports dma-bufs as render targets.
+pub trait CaptureRenderer: NiriRenderer + Sized {
+    fn render_capture_to_dmabuf(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        dmabuf: Dmabuf,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<SyncPoint>;
+
+    /// Renders a capture frame into a client `wl_shm` buffer.
+    ///
+    /// GLES keeps its direct-to-buffer render; other backends use the generic offscreen readback
+    /// in [`render_to_tty_shm`].
+    fn render_capture_to_shm(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        buffer: &WlBuffer,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<()>;
+
+    /// Clears a dma-buf capture buffer to transparent black.
+    fn clear_capture_dmabuf(&mut self, dmabuf: Dmabuf) -> anyhow::Result<SyncPoint>;
+}
+
+impl CaptureRenderer for GlesRenderer {
+    fn render_capture_to_dmabuf(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        dmabuf: Dmabuf,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<SyncPoint> {
+        render_to_dmabuf(
+            self,
+            damage_tracker,
+            dmabuf,
+            elements,
+            states,
+            reference_luminance,
+        )
+    }
+
+    fn render_capture_to_shm(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        buffer: &WlBuffer,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<()> {
+        render_to_shm(
+            self,
+            damage_tracker,
+            buffer,
+            elements,
+            states,
+            reference_luminance,
+        )
+    }
+
+    fn clear_capture_dmabuf(&mut self, dmabuf: Dmabuf) -> anyhow::Result<SyncPoint> {
+        clear_dmabuf(self, dmabuf)
+    }
+}
+
+impl CaptureRenderer for TtyRenderer<'_> {
+    fn render_capture_to_dmabuf(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        mut dmabuf: Dmabuf,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<SyncPoint> {
+        let _span = tracy_client::span!();
+        set_capture_blend(self, reference_luminance);
+
+        let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
+        ensure!(
+            dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32,
+            "invalid buffer size"
+        );
+
+        let mut target = self.bind(&mut dmabuf).context("error binding dmabuf")?;
+        let result = damage_tracker
+            .render_output_with_states(
+                self,
+                &mut target,
+                0,
+                elements,
+                Color32F::TRANSPARENT,
+                states,
+            )
+            .context("error rendering to dmabuf")?;
+        Ok(result.sync)
+    }
+
+    fn render_capture_to_shm(
+        &mut self,
+        damage_tracker: &mut OutputDamageTracker,
+        buffer: &WlBuffer,
+        elements: &[impl RenderElement<Self>],
+        states: RenderElementStates,
+        reference_luminance: f64,
+    ) -> anyhow::Result<()> {
+        render_to_tty_shm(
+            self,
+            damage_tracker,
+            buffer,
+            elements,
+            states,
+            reference_luminance,
+        )
+    }
+
+    fn clear_capture_dmabuf(&mut self, mut dmabuf: Dmabuf) -> anyhow::Result<SyncPoint> {
+        let size = dmabuf.size();
+        let size = size.to_logical(1, Transform::Normal).to_physical(1);
+        let mut target = self.bind(&mut dmabuf).context("error binding dmabuf")?;
+        let mut frame = self
+            .render(&mut target, size, Transform::Normal)
+            .context("error starting frame")?;
+        frame
+            .clear(Color32F::TRANSPARENT, &[Rectangle::from_size(size)])
+            .context("error clearing")?;
+        frame.finish().context("error finishing frame")
+    }
+}
+
+/// Generic counterpart of [`render_to_shm`] for any [`NiriRenderer`].
+///
+/// The frame is rendered to an offscreen texture on the active backend, read back, and copied
+/// into the client's `wl_shm` pool honoring the client-chosen format, stride and pool offset.
+/// On Vulkan this is the only option because the renderer cannot bind a client `wl_shm` buffer
+/// as a render target; [`CaptureRenderer`] keeps GLES on the original direct path.
+pub fn render_to_tty_shm<R: NiriRenderer>(
+    renderer: &mut R,
+    damage_tracker: &mut OutputDamageTracker,
+    buffer: &WlBuffer,
+    elements: &[impl RenderElement<R>],
+    states: RenderElementStates,
+    reference_luminance: f64,
+) -> anyhow::Result<()> {
+    let _span = tracy_client::span!();
+    set_capture_blend(renderer, reference_luminance);
+
+    shm::with_buffer_contents_mut(buffer, |pool, pool_len, buffer_data| {
+        let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
+        let fourcc = match buffer_data.format {
+            wl_shm::Format::Xrgb8888 => Fourcc::Xrgb8888,
+            wl_shm::Format::Argb8888 => Fourcc::Argb8888,
+            _ => bail!("unsupported shm format: {:?}", buffer_data.format),
+        };
+
+        ensure!(
+            buffer_data.width == size.w && buffer_data.height == size.h,
+            "invalid buffer size"
+        );
+
+        let row_len = size.w as usize * 4;
+        let height = size.h as usize;
+        let offset = usize::try_from(buffer_data.offset).context("negative buffer offset")?;
+        let stride = usize::try_from(buffer_data.stride).context("negative buffer stride")?;
+
+        let end = stride
+            .checked_mul(height.saturating_sub(1))
+            .and_then(|len| len.checked_add(row_len))
+            .and_then(|len| len.checked_add(offset));
+        ensure!(
+            stride >= row_len && end.is_some_and(|end| end <= pool_len),
+            "buffer does not fit in its shm pool"
+        );
+
+        let Some(bytes) =
+            render_capture_frame_to_vec(renderer, damage_tracker, elements, states, fourcc)
+                .context("error rendering capture frame")?
+        else {
+            // No damage: leave the client's buffer untouched, like the GLES path.
+            return Ok(());
+        };
+
+        ensure!(bytes.len() >= row_len * height, "short texture mapping");
+
+        // SAFETY: `pool`, `offset`, `stride` and `height` were validated against `pool_len`
+        // above, and `bytes` is at least `row_len * height` long.
+        unsafe {
+            copy_frame_to_shm_pool(&bytes, pool, offset, stride, row_len, height);
+        }
+
+        Ok(())
+    })
+    .context("expected shm buffer, but didn't get one")?
+}
+
+/// Copies a tightly packed frame into the destination region of a client shm pool.
+///
+/// The client chooses the pool offset and stride, and rows may have padding, so only the first
+/// `row_len` bytes of each source row are copied.
+///
+/// # Safety
+/// `dst` must be valid for writes covering
+/// `offset + stride * (height - 1) + row_len` bytes.
+unsafe fn copy_frame_to_shm_pool(
+    bytes: &[u8],
+    dst: *mut u8,
+    offset: usize,
+    stride: usize,
+    row_len: usize,
+    height: usize,
+) {
+    let _span = tracy_client::span!("copy_nonoverlapping");
+    let dst = unsafe { dst.add(offset) };
+    if stride == row_len {
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), dst, row_len * height) };
+    } else {
+        for y in 0..height {
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    bytes.as_ptr().add(y * row_len),
+                    dst.add(y * stride),
+                    row_len,
+                );
+            }
+        }
+    }
+}
+
 pub fn render_to_dmabuf(
     renderer: &mut GlesRenderer,
     damage_tracker: &mut OutputDamageTracker,
@@ -621,36 +925,39 @@ fn render_elements(
 }
 
 impl CaptureBuffer {
-    pub fn render(
+    pub fn render<R>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         damage_tracker: &mut OutputDamageTracker,
-        elements: &[impl RenderElement<GlesRenderer>],
+        elements: &[impl RenderElement<R>],
         states: RenderElementStates,
-    ) -> anyhow::Result<SyncPoint> {
+    ) -> anyhow::Result<SyncPoint>
+    where
+        R: CaptureRenderer,
+    {
         match self {
             CaptureBuffer::Dma(dmabuf) => {
-                let sync = render_to_dmabuf(
-                    renderer,
-                    damage_tracker,
-                    dmabuf.clone(),
-                    elements,
-                    states,
-                    DEFAULT_REFERENCE_LUMINANCE,
-                )
-                .context("error rendering to screencopy dmabuf")?;
+                let sync = renderer
+                    .render_capture_to_dmabuf(
+                        damage_tracker,
+                        dmabuf.clone(),
+                        elements,
+                        states,
+                        DEFAULT_REFERENCE_LUMINANCE,
+                    )
+                    .context("error rendering to screencopy dmabuf")?;
                 Ok(sync)
             }
             CaptureBuffer::Shm(wl_buffer) => {
-                render_to_shm(
-                    renderer,
-                    damage_tracker,
-                    wl_buffer,
-                    elements,
-                    states,
-                    DEFAULT_REFERENCE_LUMINANCE,
-                )
-                .context("error rendering to screencopy shm buffer")?;
+                renderer
+                    .render_capture_to_shm(
+                        damage_tracker,
+                        wl_buffer,
+                        elements,
+                        states,
+                        DEFAULT_REFERENCE_LUMINANCE,
+                    )
+                    .context("error rendering to screencopy shm buffer")?;
                 Ok(SyncPoint::signaled())
             }
         }
@@ -664,7 +971,9 @@ impl CaptureBuffer {
 mod capture_tests {
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::Texture as _;
-    use smithay::backend::renderer::element::Kind;
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
+    use smithay::backend::renderer::element::{Kind, RenderElement};
     use smithay::backend::renderer::vulkan::VulkanRenderer;
     use smithay::backend::vulkan::version::Version;
     use smithay::backend::vulkan::{Instance, PhysicalDevice};
@@ -676,8 +985,8 @@ mod capture_tests {
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
     use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
     use crate::render_helpers::{
-        copy_tty_texture_to_vec, encompassing_geo, render_to_encompassing_tty_texture,
-        render_to_tty_texture,
+        copy_frame_to_shm_pool, copy_tty_texture_to_vec, encompassing_geo,
+        render_capture_frame_to_vec, render_to_encompassing_tty_texture, render_to_tty_texture,
     };
 
     fn vulkan_renderer() -> Option<VulkanRenderer> {
@@ -814,5 +1123,150 @@ mod capture_tests {
 
         let right = read_region(&mut renderer, Point::from((8, 4)));
         assert_rgba(&right, [0, 0, 255], "right region");
+    }
+
+    /// Renders one frame through the damage tracker used by the capture paths and reads it back.
+    fn capture_frame(
+        renderer: &mut VulkanRenderer,
+        size: Size<i32, Physical>,
+        scale: Scale<f64>,
+        elements: &[impl RenderElement<VulkanRenderer>],
+        fourcc: Fourcc,
+    ) -> Vec<u8> {
+        let mut tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
+        let (damage, states) = tracker.damage_output(1, elements).unwrap();
+        assert!(damage.is_some(), "fresh tracker must report damage");
+        render_capture_frame_to_vec(renderer, &mut tracker, elements, states, fourcc)
+            .expect("render capture frame")
+            .expect("fresh tracker must not skip the render")
+    }
+
+    #[test]
+    fn vulkan_output_capture_into_client_shaped_shm() {
+        let Some(mut renderer) = vulkan_renderer() else {
+            return;
+        };
+
+        let size = Size::<i32, Physical>::from((8, 8));
+        let scale = Scale::<f64>::from(1.);
+        let green = SolidColorBuffer::new((8., 8.), [0., 1., 0., 1.]);
+        let elements = [SolidColorRenderElement::from_buffer(
+            &green,
+            (0., 0.),
+            1.,
+            Kind::Unspecified,
+        )];
+
+        // Capture as XRGB8888, the wlr-screencopy SHM offering.
+        let bytes = capture_frame(&mut renderer, size, scale, &elements, Fourcc::Xrgb8888);
+        assert_eq!(bytes.len(), 8 * 8 * 4);
+
+        // Lay the frame out like a client wl_shm buffer: a non-zero pool offset, rows padded to
+        // a larger client-chosen stride, and guard bytes around the used region.
+        let row_len = 8 * 4;
+        let stride = 40;
+        let offset = 16;
+        let mut pool = vec![0x5Au8; offset + stride * 8 + 16];
+        // SAFETY: `pool` is large enough for `offset + stride * (height - 1) + row_len`.
+        unsafe {
+            copy_frame_to_shm_pool(&bytes, pool.as_mut_ptr(), offset, stride, row_len, 8);
+        }
+
+        let pixel = |x: usize, y: usize| &pool[offset + y * stride + x * 4..][..4];
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(
+                    &pixel(x, y)[..3],
+                    &[0, 255, 0],
+                    "pixel ({x}, {y}) should be green"
+                );
+            }
+            assert_eq!(
+                &pool[offset + y * stride + row_len..offset + (y + 1) * stride],
+                &[0x5A; 8],
+                "row padding must stay untouched"
+            );
+        }
+        assert!(pool[..offset].iter().all(|b| *b == 0x5A));
+        assert!(pool[offset + stride * 8..].iter().all(|b| *b == 0x5A));
+    }
+
+    #[test]
+    fn vulkan_region_and_window_capture_offsets() {
+        let Some(mut renderer) = vulkan_renderer() else {
+            return;
+        };
+
+        let scale = Scale::<f64>::from(1.);
+        let size = Size::<i32, Physical>::from((8, 8));
+        let red = SolidColorBuffer::new((8., 8.), [1., 0., 0., 1.]);
+        let blue = SolidColorBuffer::new((8., 8.), [0., 0., 1., 1.]);
+        let red = SolidColorRenderElement::from_buffer(&red, (8., 0.), 1., Kind::Unspecified);
+        let blue = SolidColorRenderElement::from_buffer(&blue, (8., 0.), 1., Kind::Unspecified);
+
+        // Region capture: `render_for_screencopy_*` relocates the output-local elements by
+        // `-region_loc` and tracks a region-sized buffer.
+        let shifted_blue =
+            RelocateRenderElement::from_element(&blue, Point::from((-8, 0)), Relocate::Relative);
+        let bytes = capture_frame(
+            &mut renderer,
+            size,
+            scale,
+            std::slice::from_ref(&shifted_blue),
+            Fourcc::Abgr8888,
+        );
+        assert_rgba(&bytes, [0, 0, 255], "region at x=8");
+
+        // Window capture: window content lives at the window bbox origin and is rendered into a
+        // bbox-sized buffer with the same relocation.
+        let shifted_red =
+            RelocateRenderElement::from_element(&red, Point::from((-8, 0)), Relocate::Relative);
+        let bytes = capture_frame(
+            &mut renderer,
+            size,
+            scale,
+            std::slice::from_ref(&shifted_red),
+            Fourcc::Abgr8888,
+        );
+        assert_rgba(&bytes, [255, 0, 0], "window at bbox x=8");
+    }
+
+    #[test]
+    fn vulkan_screencast_frame_generation() {
+        let Some(mut renderer) = vulkan_renderer() else {
+            return;
+        };
+
+        let size = Size::<i32, Physical>::from((16, 16));
+        let scale = Scale::<f64>::from(1.);
+        let background = SolidColorBuffer::new((16., 16.), [0., 0., 1., 1.]);
+        let cursor = SolidColorBuffer::new((4., 4.), [1., 0., 0., 1.]);
+
+        // Front-to-back order, like `CastRenderElement`: the cursor first, main content after.
+        let elements = [
+            SolidColorRenderElement::from_buffer(&cursor, (8., 8.), 1., Kind::Unspecified),
+            SolidColorRenderElement::from_buffer(&background, (0., 0.), 1., Kind::Unspecified),
+        ];
+
+        let bytes = capture_frame(&mut renderer, size, scale, &elements, Fourcc::Xrgb8888);
+        assert_eq!(bytes.len(), 16 * 16 * 4);
+
+        // Screencast SHM buffers are tightly packed; reuse the client copy for the layout.
+        let row_len = 16 * 4;
+        let mut cast_buf = vec![0u8; row_len * 16];
+        // SAFETY: `cast_buf` is exactly `row_len * height` bytes.
+        unsafe {
+            copy_frame_to_shm_pool(&bytes, cast_buf.as_mut_ptr(), 0, row_len, row_len, 16);
+        }
+
+        // XRGB8888 is little-endian BGRA on the wire.
+        let pixel = |x: usize, y: usize| &cast_buf[(y * 16 + x) * 4..][..4];
+        assert_eq!(&pixel(0, 0)[..3], &[255, 0, 0], "background should be blue");
+        assert_eq!(&pixel(8, 8)[..3], &[0, 0, 255], "cursor should be red");
+        assert_eq!(
+            &pixel(15, 15)[..3],
+            &[255, 0, 0],
+            "background should be blue"
+        );
     }
 }
