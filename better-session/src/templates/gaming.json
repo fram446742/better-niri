@@ -1,0 +1,40 @@
+{
+  "command_map": {
+    "{{game_app}}": "{{game_cmd}}",
+    "{{chat_app}}": "{{chat_cmd}}"
+  },
+  "workspaces": [
+    {
+      "id": 1,
+      "name": "game",
+      "idx": 1,
+      "is_active": true,
+      "is_focused": true
+    },
+    {
+      "id": 2,
+      "name": "chat",
+      "idx": 2
+    }
+  ],
+  "windows": [
+    {
+      "app_id": "{{game_app}}",
+      "title": "",
+      "workspace_id": 1,
+      "workspace_name": "game",
+      "workspace_idx": 1,
+      "is_floating": false,
+      "is_focused": true
+    },
+    {
+      "app_id": "{{chat_app}}",
+      "title": "",
+      "workspace_id": 2,
+      "workspace_name": "chat",
+      "workspace_idx": 2,
+      "is_floating": true,
+      "is_focused": false
+    }
+  ]
+}
