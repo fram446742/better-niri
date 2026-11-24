@@ -7,11 +7,12 @@ LOG=${PENDING_LOG:-/tmp/pending-hdr.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
 CLIP=${HDR_CLIP:-/tmp/hdr10-test.mp4}
+DURATION=${HDR_SECONDS:-20}
 command -v mpv >/dev/null || { echo "mpv missing"; exit 1; }
-if [ ! -f "$CLIP" ]; then
+if [ ! -s "$CLIP" ]; then
   command -v ffmpeg >/dev/null || { echo "ffmpeg missing and $CLIP not present"; exit 1; }
   FILTER="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le"
-  COMMON=(-hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=20" -vf "$FILTER")
+  COMMON=(-hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=$DURATION" -vf "$FILTER")
   TAGS=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc)
   echo "generating HDR10 test clip at $CLIP"
   # x265 10-bit is the ideal HDR10 carrier; fall back to VP9 10-bit with HDR
