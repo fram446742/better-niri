@@ -334,7 +334,12 @@ compositor IPC fallback.
   it logs the reason and falls back to GLES. `niri --check-vulkan` prints
   preference, active path, render-tree capability, per-device support and the
   fallback reason as JSON. Core output rendering (windows, layers, UI textures)
-  is renderer-agnostic; GLSL-only visuals (niri shader programs, blur/xray,
-  liquid glass, carousel panels, decoration light, magnified screenshot
-  capture, screen transitions) are skipped on Vulkan and keep their GLES path.
+  is renderer-agnostic. Border and shadow GLSL programs are compiled to SPIR-V
+  at renderer init (`VulkanShaders`, custom pixel pipeline) and draw on both
+  backends; a test compiles them on a real `VulkanRenderer`. The remaining
+  GLSL-only visuals (window/global/scoped shaders, decoration light, blur/xray,
+  liquid glass, carousel panels, rounded-corner clipping, magnified screenshot
+  capture, screen transitions) keep their GLES path and skip on Vulkan;
+  animated resize stretches also stay GLES-only, with the window drawing
+  normally on Vulkan during a resize.
 - `agent` (off by default): the automation seat.

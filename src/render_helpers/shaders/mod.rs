@@ -9,6 +9,11 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName,
     UniformType, UniformValue,
 };
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{
+    CustomUniformDecl, CustomUniformKind, VulkanPixelProgram, VulkanRenderer,
+    texture_bindings_glsl, uniform_block_glsl,
+};
 use smithay::utils::Size;
 
 use super::renderer::NiriRenderer;
@@ -315,13 +320,18 @@ impl Shaders {
             .expect("shaders::init() must be called when creating the renderer")
     }
 
-    /// Whether the renderer has a compiled program of this type. Always false
-    /// on renderers without GLES (Vulkan), where niri's GLSL programs are not
-    /// compiled.
+    /// Whether the renderer has a compiled program of this type, on either backend.
     pub fn has_program(renderer: &mut impl NiriRenderer, program: ProgramType) -> bool {
-        renderer
-            .as_gles_renderer()
-            .is_some_and(|renderer| Self::get(renderer).program(program).is_some())
+        if let Some(renderer) = renderer.as_gles_renderer() {
+            return Self::get(renderer).program(program).is_some();
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(renderer) = renderer.as_vulkan_renderer() {
+            return get_vulkan_renderer(renderer)
+                .and_then(|shaders| shaders.program(program))
+                .is_some();
+        }
+        false
     }
 
     pub fn get(renderer: &mut GlesRenderer) -> &Self {
@@ -740,6 +750,209 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 }
 
 /// Custom and legacy rings share a coordinate contract and the same editable wax source.
+/// Vulkan-compiled niri shader programs.
+///
+/// The TTY Vulkan renderer draws the same GLSL sources as GLES, compiled to
+/// SPIR-V through better-smithay's custom pixel pipeline. Only the programs that
+/// do not depend on GLES offscreen textures live here; textured effects keep
+/// their GLES path.
+#[cfg(feature = "vulkan")]
+pub struct VulkanShaders {
+    pub border: Option<VulkanPixelProgram>,
+    pub shadow: Option<VulkanPixelProgram>,
+}
+
+#[cfg(feature = "vulkan")]
+impl VulkanShaders {
+    fn compile(renderer: &mut VulkanRenderer) -> Self {
+        let _span = tracy_client::span!("VulkanShaders::compile");
+
+        let mut border_src = String::from(
+            "#define WAX_STRENGTH rainbow_ripple.y\n\
+             #define WAX_BRIGHTNESS rainbow_ripple.z\n\
+             #define WAX_PHASE rainbow_ripple.x\n",
+        );
+        border_src.push_str(include_str!("border.frag"));
+        border_src.push_str(include_str!("rounding_alpha.frag"));
+        border_src.push_str(include_str!(
+            "../../../resources/shaders/focus-ring/rainbow-ripple.frag"
+        ));
+        let border = compile_vulkan_program(
+            renderer,
+            &border_src,
+            &[
+                UniformName::new("colorspace", UniformType::_1f),
+                UniformName::new("hue_interpolation", UniformType::_1f),
+                UniformName::new("color_from", UniformType::_4f),
+                UniformName::new("color_to", UniformType::_4f),
+                UniformName::new("grad_offset", UniformType::_2f),
+                UniformName::new("grad_width", UniformType::_1f),
+                UniformName::new("grad_vec", UniformType::_2f),
+                UniformName::new("input_to_geo", UniformType::Matrix3x3),
+                UniformName::new("geo_size", UniformType::_2f),
+                UniformName::new("outer_radius", UniformType::_4f),
+                UniformName::new("border_width", UniformType::_1f),
+                UniformName::new("rainbow_ripple", UniformType::_4f),
+                UniformName::new("ring_width", UniformType::_1f),
+                UniformName::new("emission_threshold", UniformType::_1f),
+                UniformName::new("niri_time", UniformType::_1f),
+            ],
+            &[],
+        )
+        .map_err(|err| warn!("error compiling Vulkan border shader: {err:?}"))
+        .ok();
+
+        let shadow = compile_vulkan_program(
+            renderer,
+            concat!(
+                include_str!("shadow.frag"),
+                include_str!("rounding_alpha.frag")
+            ),
+            &[
+                UniformName::new("shadow_color", UniformType::_4f),
+                UniformName::new("sigma", UniformType::_1f),
+                UniformName::new("input_to_geo", UniformType::Matrix3x3),
+                UniformName::new("geo_size", UniformType::_2f),
+                UniformName::new("corner_radius", UniformType::_4f),
+                UniformName::new("window_input_to_geo", UniformType::Matrix3x3),
+                UniformName::new("window_geo_size", UniformType::_2f),
+                UniformName::new("window_corner_radius", UniformType::_4f),
+            ],
+            &[],
+        )
+        .map_err(|err| warn!("error compiling Vulkan shadow shader: {err:?}"))
+        .ok();
+
+        Self { border, shadow }
+    }
+
+    pub fn program(&self, program: ProgramType) -> Option<VulkanPixelProgram> {
+        match program {
+            ProgramType::Border => self.border.clone(),
+            ProgramType::Shadow => self.shadow.clone(),
+            _ => None,
+        }
+    }
+}
+
+/// Compiles and stores the Vulkan shaders on the renderer.
+#[cfg(feature = "vulkan")]
+pub fn init_vulkan(renderer: &mut VulkanRenderer) {
+    if renderer.user_data().get::<VulkanShaders>().is_none() {
+        let shaders = VulkanShaders::compile(renderer);
+        renderer.user_data().insert_if_missing(|| shaders);
+    }
+}
+
+#[cfg(feature = "vulkan")]
+pub fn get_vulkan_frame<'a>(
+    frame: &'a smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+) -> Option<&'a VulkanShaders> {
+    frame.user_data().get()
+}
+
+#[cfg(feature = "vulkan")]
+pub fn get_vulkan_renderer(renderer: &VulkanRenderer) -> Option<&VulkanShaders> {
+    renderer.user_data().get()
+}
+
+/// Maps a GLES uniform declaration to a custom Vulkan uniform declaration.
+#[cfg(feature = "vulkan")]
+fn uniform_name_to_decl(uniform: &UniformName<'_>) -> Option<CustomUniformDecl> {
+    let kind = match uniform.type_ {
+        UniformType::_1f => CustomUniformKind::Float,
+        UniformType::_2f => CustomUniformKind::Vec2,
+        UniformType::_3f => CustomUniformKind::Vec3,
+        UniformType::_4f => CustomUniformKind::Vec4,
+        UniformType::Matrix3x3 => CustomUniformKind::Mat3,
+        _ => return None,
+    };
+    Some(CustomUniformDecl {
+        name: uniform.name.clone().into_owned(),
+        kind,
+    })
+}
+
+/// Transforms a GLES-dialect niri fragment shader into Vulkan GLSL.
+#[cfg(feature = "vulkan")]
+fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str]) -> String {
+    let mut out = String::from(
+        "#version 450
+         #define DEBUG_FLAGS
+         #define texture2D texture
+",
+    );
+    out.push_str(&texture_bindings_glsl(textures));
+    out.push_str(&uniform_block_glsl(decls));
+    out.push_str(
+        "layout(location = 0) in vec2 niri_v_coords;
+         layout(location = 0) out vec4 niri_frag_color;
+         #define gl_FragColor niri_frag_color
+         layout(push_constant) uniform NiriPush {
+             vec4 niri_pc0; vec4 niri_pc1; vec4 niri_pc2; vec4 niri_pc3; vec4 niri_pc4; vec4 niri_pc5;
+         };
+         #define niri_alpha niri_pc2.z
+         #define niri_tint niri_pc2.w
+         #define v_coords niri_v_coords
+",
+    );
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#version")
+            || trimmed.starts_with("#extension")
+            || trimmed.starts_with("precision ")
+            || trimmed.starts_with("varying ")
+            || (trimmed.starts_with("uniform ") && trimmed.trim_end().ends_with(';'))
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Compiles a niri shader program for the Vulkan renderer from its GLES-dialect
+/// source. Must be given the same uniforms as the GLES compile, including the
+/// six blend-space ones that `hdr.frag` references.
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_program(
+    renderer: &mut VulkanRenderer,
+    src: &str,
+    uniforms: &[UniformName<'_>],
+    texture_uniforms: &[&str],
+) -> anyhow::Result<VulkanPixelProgram> {
+    let mut uniforms = uniforms.to_vec();
+    uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
+    uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
+    uniforms.push(UniformName::new("niri_linear", UniformType::_1f));
+    uniforms.push(UniformName::new("niri_linear_scale", UniformType::_1f));
+    uniforms.push(UniformName::new("niri_linear_to_ref", UniformType::_1f));
+    uniforms.push(UniformName::new("niri_hdr_to_sdr", UniformType::_1f));
+
+    let mut decls: Vec<CustomUniformDecl> =
+        uniforms.iter().filter_map(uniform_name_to_decl).collect();
+    for extra in ["niri_size", "niri_scale"] {
+        if !decls.iter().any(|d| d.name == extra) {
+            decls.push(CustomUniformDecl {
+                name: extra.to_owned(),
+                kind: if extra == "niri_scale" {
+                    CustomUniformKind::Float
+                } else {
+                    CustomUniformKind::Vec2
+                },
+            });
+        }
+    }
+
+    let mut full = src.to_string();
+    full.push_str(include_str!("hdr.frag"));
+    let vulkan_src = vulkanize_fragment(&full, &decls, texture_uniforms);
+    renderer
+        .compile_custom_pixel_shader(&vulkan_src, &decls, texture_uniforms)
+        .map_err(|err| anyhow::anyhow!("error compiling vulkan shader: {err}"))
+}
+
 fn compile_decoration_program(
     renderer: &mut GlesRenderer,
     source: Option<&str>,
@@ -839,6 +1052,50 @@ pub fn set_decoration_programs(renderer: &mut GlesRenderer, config: &niri_config
             Err(err) => {
                 warn!(path = ?shader.path, "error compiling decoration shader; using configured colours: {err:?}")
             }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod tests {
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+
+    use super::*;
+
+    /// Compiles the border and shadow GLSL sources through the Vulkan custom
+    /// pixel pipeline. Skips silently on machines without a usable Vulkan
+    /// device; on real hardware this catches GLSL→SPIR-V regressions without
+    /// needing a compositor.
+    #[test]
+    fn vulkan_border_and_shadow_shaders_compile() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            init_vulkan(&mut renderer);
+            let shaders = renderer.user_data().get::<VulkanShaders>().unwrap();
+            assert!(
+                shaders.border.is_some(),
+                "border shader failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.shadow.is_some(),
+                "shadow shader failed to compile on {}",
+                device.name()
+            );
+            eprintln!(
+                "compiled Vulkan border and shadow shaders on {}",
+                device.name()
+            );
+            return;
         }
     }
 }

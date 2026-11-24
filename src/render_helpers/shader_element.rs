@@ -37,7 +37,14 @@ pub struct ShaderRenderElement {
 }
 
 #[derive(Debug, Clone)]
-pub struct ShaderProgram(Rc<ShaderProgramInner>);
+pub enum ShaderProgram {
+    Gles(GlesShaderProgram),
+    #[cfg(feature = "vulkan")]
+    Vulkan(smithay::backend::renderer::vulkan::VulkanPixelProgram),
+}
+
+#[derive(Debug, Clone)]
+pub struct GlesShaderProgram(Rc<ShaderProgramInner>);
 
 #[derive(Debug)]
 struct ShaderProgramInner {
@@ -62,6 +69,17 @@ struct ShaderProgramInternal {
 
 impl PartialEq for ShaderProgram {
     fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ShaderProgram::Gles(a), ShaderProgram::Gles(b)) => Rc::ptr_eq(&a.0, &b.0),
+            #[cfg(feature = "vulkan")]
+            (ShaderProgram::Vulkan(a), ShaderProgram::Vulkan(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for GlesShaderProgram {
+    fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
@@ -72,7 +90,7 @@ unsafe fn compile_program(
     additional_uniforms: &[UniformName<'_>],
     texture_uniforms: &[&str],
     // destruction_callback_sender: Sender<CleanupResource>,
-) -> Result<ShaderProgram, GlesError> {
+) -> Result<GlesShaderProgram, GlesError> {
     let shader = format!("#version 100\n{src}");
     let program = unsafe { link_program(gl, include_str!("shaders/texture.vert"), &shader)? };
     let debug_shader = format!("#version 100\n#define DEBUG_FLAGS\n{src}");
@@ -95,7 +113,7 @@ unsafe fn compile_program(
     let tint = c"niri_tint";
 
     unsafe {
-        Ok(ShaderProgram(Rc::new(ShaderProgramInner {
+        Ok(GlesShaderProgram(Rc::new(ShaderProgramInner {
             normal: ShaderProgramInternal {
                 program,
                 uniform_matrix: gl.GetUniformLocation(program, matrix.as_ptr()),
@@ -168,6 +186,27 @@ unsafe fn compile_program(
 }
 
 impl ShaderProgram {
+    pub fn compile(
+        renderer: &mut GlesRenderer,
+        src: &str,
+        additional_uniforms: &[UniformName<'_>],
+        texture_uniforms: &[&str],
+    ) -> Result<Self, GlesError> {
+        GlesShaderProgram::compile(renderer, src, additional_uniforms, texture_uniforms)
+            .map(ShaderProgram::Gles)
+    }
+
+    /// Destroys the GLES program. Vulkan programs free themselves on drop.
+    pub fn destroy(self, renderer: &mut GlesRenderer) -> Result<(), GlesError> {
+        match self {
+            ShaderProgram::Gles(program) => program.destroy(renderer),
+            #[cfg(feature = "vulkan")]
+            ShaderProgram::Vulkan(_) => Ok(()),
+        }
+    }
+}
+
+impl GlesShaderProgram {
     pub fn compile(
         renderer: &mut GlesRenderer,
         src: &str,
@@ -346,7 +385,9 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
     ) -> Result<(), GlesError> {
         let _span = tracy_client::span!("ShaderRenderElement::draw");
 
-        let Some(shader) = Shaders::get_from_frame(frame).program(self.program) else {
+        let Some(ShaderProgram::Gles(shader)) =
+            Shaders::get_from_frame(frame).program(self.program)
+        else {
             return Ok(());
         };
 
@@ -609,6 +650,109 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
     }
 }
 
+#[cfg(feature = "vulkan")]
+impl ShaderRenderElement {
+    /// Draws this element with the Vulkan renderer, using the SPIR-V program
+    /// compiled from the same GLSL source as the GLES path.
+    ///
+    /// Only elements without texture inputs are supported; textured shader
+    /// effects (resize snapshots, clipped surfaces) keep their GLES path.
+    pub(super) fn draw_vulkan(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        use smithay::backend::renderer::vulkan::{CustomUniform, CustomUniformValue};
+
+        let _span = tracy_client::span!("ShaderRenderElement::draw_vulkan");
+
+        if !self.textures.is_empty() {
+            return Ok(());
+        }
+
+        let Some(program) = super::shaders::get_vulkan_frame(frame)
+            .and_then(|shaders| shaders.program(self.program))
+        else {
+            return Ok(());
+        };
+
+        let mut uniforms: Vec<CustomUniform<'_>> = self
+            .additional_uniforms
+            .iter()
+            .filter_map(uniform_to_custom)
+            .collect();
+        uniforms.push(CustomUniform {
+            name: "niri_size",
+            value: CustomUniformValue::Vec2([dst.size.w as f32, dst.size.h as f32]),
+        });
+        uniforms.push(CustomUniform {
+            name: "niri_scale",
+            value: CustomUniformValue::Float(self.scale),
+        });
+        // SDR blend-space defaults; Vulkan HDR output is not wired yet.
+        for (name, value) in [
+            ("niri_hdr_pq", 0.0),
+            ("niri_ref_lum_scale", 1.0),
+            ("niri_linear", 0.0),
+            ("niri_linear_scale", 0.0),
+            ("niri_linear_to_ref", 0.0),
+            ("niri_hdr_to_sdr", 0.0),
+        ] {
+            uniforms.push(CustomUniform {
+                name,
+                value: CustomUniformValue::Float(value),
+            });
+        }
+
+        frame.render_custom(&program, dst, damage, &uniforms, &[], self.alpha)
+    }
+}
+
+/// Converts a GLES uniform value into a custom shader uniform, skipping unsupported types.
+#[cfg(feature = "vulkan")]
+fn uniform_to_custom<'a>(
+    uniform: &'a Uniform<'_>,
+) -> Option<smithay::backend::renderer::vulkan::CustomUniform<'a>> {
+    use smithay::backend::renderer::gles::UniformValue;
+    use smithay::backend::renderer::vulkan::{CustomUniform, CustomUniformValue};
+
+    let value = match &uniform.value {
+        UniformValue::_1f(a) => CustomUniformValue::Float(*a),
+        UniformValue::_2f(a, b) => CustomUniformValue::Vec2([*a, *b]),
+        UniformValue::_3f(a, b, c) => CustomUniformValue::Vec3([*a, *b, *c]),
+        UniformValue::_4f(a, b, c, d) => CustomUniformValue::Vec4([*a, *b, *c, *d]),
+        UniformValue::Matrix3x3 { matrices, .. } => CustomUniformValue::Mat3(*matrices.first()?),
+        _ => return None,
+    };
+    Some(CustomUniform {
+        name: &uniform.name,
+        value,
+    })
+}
+
+#[cfg(feature = "vulkan")]
+impl RenderElement<smithay::backend::renderer::vulkan::VulkanRenderer> for ShaderRenderElement {
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        self.draw_vulkan(frame, dst, damage)
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut smithay::backend::renderer::vulkan::VulkanRenderer,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
 impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
     fn draw(
         &self,
@@ -619,7 +763,15 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        // niri shader programs are GLSL; the Vulkan renderer skips them.
+        #[cfg(feature = "vulkan")]
+        if let TtyFrame::Vulkan(multi) = frame {
+            let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
+                multi.as_mut();
+            return self.draw_vulkan(vk_frame, dst, damage).map_err(|err| {
+                TtyRendererError::Vulkan(smithay::backend::renderer::multigpu::Error::Render(err))
+            });
+        }
+
         let Some(frame) = frame.as_gles_frame() else {
             return Ok(());
         };

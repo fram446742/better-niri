@@ -102,12 +102,13 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 829 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 833 tests (1 order-dependent EGL golden test ignored) |
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
-| `cargo test --workspace --no-default-features` | pass, 829 tests |
+| `cargo test --workspace --no-default-features` | pass, 833 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
 | `cargo check -p niri --no-default-features --features vulkan` | pass |
 | `niri --check-vulkan` | pass, probes two RADV devices; `NIRI_RENDERER=vulkan` resolves to `path: vulkan` |
+| Vulkan on a real TTY | pass (2026-11-24): Vulkan renderer active, border/shadow SPIR-V compiled, DP-1 4K output created |
 | `cargo test -p niri --no-default-features` | pass, 403 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
@@ -168,11 +169,17 @@ picked up without re-auditing.
 3. **Portrait / vertical main axis** — biri `b30284c7` (rewrites the scrolling
    axis; large).
 4. **Vulkan renderer** — wired for the TTY backend (`TtyGpuManager`/`TtyRenderer`
-   over GLES or Vulkan, `NIRI_RENDERER`). Still open: runtime validation on a
-   real TTY, HDR output on Vulkan, and Vulkan implementations for the GLSL-only
-   visuals that currently skip themselves (borders/shadows/resize/window and
-   global shaders/decoration light, blur/xray, liquid glass, carousel panels,
-   magnified screenshot capture, screen transitions).
+   over GLES or Vulkan, `NIRI_RENDERER`). Borders and shadows now also render on
+   Vulkan: their GLSL sources are compiled to SPIR-V through better-smithay's
+   custom pixel pipeline at renderer init, and a test compiles both on a real
+   `VulkanRenderer`. Resize animations keep their animated stretch on GLES; on
+   Vulkan the window renders normally during a resize (no red fallback, no
+   stretch). Runtime validation on a real TTY passed on 2026-11-24 (Vulkan
+   renderer active, border/shadow shaders compiled, 4K DP-1 output created).
+   Still open: HDR output on Vulkan, and Vulkan paths for the remaining
+   GLSL-only visuals (window/global/
+   scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
+   rounded-corner clipping, magnified screenshot capture, screen transitions).
 5. **KDE screenshot2 — done.** `src/dbus/kwin_screenshot.rs` serves
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker
@@ -227,10 +234,11 @@ picked up without re-auditing.
    `TtyRenderer`/`TtyFrame` enums, so `NIRI_RENDERER=vulkan` drives outputs with
    the Vulkan renderer (windows, layer surfaces, UI textures, screenshots'
    texture path). GLSL-only visuals keep their GLES path and are skipped on
-   Vulkan with a warning: niri shader programs (borders, shadows, resize,
-   window/global/scoped shaders, decoration light), blur/xray background
-   effects, liquid glass, carousel panels, the magnified screenshot UI capture
-   and screen transitions. The probe has been validated on real hardware
+   Vulkan with a warning: window/global/scoped shaders, decoration light,
+   blur/xray background effects, liquid glass, carousel panels, rounded-corner
+   clipping, the magnified screenshot UI capture and screen transitions. Borders
+   and shadows are compiled for Vulkan; resize animations render the window
+   normally on Vulkan instead of the GLES stretch. The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,
    default). Runtime TTY validation of the Vulkan output path still needs a

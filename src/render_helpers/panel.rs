@@ -269,18 +269,22 @@ impl RenderElement<GlesRenderer> for PanelRenderElement {
 impl<'render> RenderElement<TtyRenderer<'render>> for PanelRenderElement {
     fn draw(
         &self,
-        frame: &mut TtyFrame<'_, '_, '_>,
+        frame: &mut TtyFrame<'render, '_, '_>,
         src: Rectangle<f64, Buffer>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        let Some(frame) = frame.as_gles_frame() else {
-            return Ok(());
-        };
-        RenderElement::<GlesRenderer>::draw(self, frame, src, dst, damage, opaque_regions, cache)?;
-        Ok(())
+        RenderElement::<TtyRenderer<'render>>::draw(
+            &self.inner,
+            frame,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            cache,
+        )
     }
 
     fn underlying_storage(

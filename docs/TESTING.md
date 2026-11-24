@@ -51,8 +51,10 @@ Additional CI gates:
   and on user machines when diagnosing drivers.
 - Vulkan TTY output: start niri on a spare TTY with `NIRI_RENDERER=vulkan`.
   Expect core window/layer rendering to work and a startup log naming any
-  GLSL-only visual that is disabled. This is a manual check because it owns a
-  DRM device and cannot run in the normal test suite.
+  GLSL-only visual that is disabled. **Passed on 2026-11-24**: "using the Vulkan
+  renderer", border/shadow pixel shaders compiled, 4K DP-1 output created. This
+  stays a manual check because it owns a DRM device and cannot run in the
+  normal test suite.
 
 Debug and release must both build; debug for tests, release for the performance
 smoke.

@@ -1361,7 +1361,7 @@ impl<W: LayoutElement> Tile<W> {
                 }
             }
 
-            if !pushed_resize {
+            if !pushed_resize && ctx.renderer.as_gles_renderer().is_some() {
                 let fallback_buffer = SolidColorBuffer::new(area.size, [1., 0., 0., 1.]);
                 let elem = SolidColorRenderElement::from_buffer(
                     &fallback_buffer,
