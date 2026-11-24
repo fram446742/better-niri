@@ -4,19 +4,30 @@
 //! configuration, module refresh, layout/hit testing and the cairo software
 //! renderer. `main.rs` is the thin Wayland layer-shell daemon on top.
 //!
-//! Panels are a vertical list of rows. A row has a label, an optional click
-//! command, and an optional module (a shell command whose first output line is
-//! shown on the right and refreshed every `interval_secs`).
+//! Panels are a list of rows. Vertical panels stack rows top to bottom;
+//! horizontal panels (top/bottom bars) lay rows out left to right. A row has a
+//! label, an optional icon, an optional module (a built-in value or a shell
+//! command), and optional click/scroll actions.
 
+pub mod action;
+pub mod modules;
+pub mod niri;
+pub mod system;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Instant, SystemTime};
 
+pub use action::ActionSpec;
 use cairo::{Context, FontSlant, FontWeight, Format, ImageSurface};
+pub use modules::{ModuleKind, ModuleOutput, ModuleSpec, ModuleState, OutputItem};
+pub use niri::NiriAction;
 use serde::{Deserialize, Serialize};
+pub use system::{Env, RealEnv};
 
 pub const HEADER_HEIGHT: u32 = 46;
 pub const ROW_GAP: u32 = 4;
+pub const CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -24,6 +35,28 @@ pub enum Side {
     #[default]
     Left,
     Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    /// True for left/right panels, where rows stack vertically.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    pub fn is_horizontal(self) -> bool {
+        !self.is_vertical()
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +115,7 @@ impl Rgba {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Theme {
     #[serde(default = "default_bg")]
     pub bg: String,
@@ -94,6 +127,12 @@ pub struct Theme {
     pub accent: String,
     #[serde(default = "default_row")]
     pub row: String,
+    /// Font family used for labels and module values.
+    #[serde(default = "default_font")]
+    pub font: String,
+    /// Multiplier applied to the theme alpha, 0.0 (invisible) to 1.0 (opaque).
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
 }
 
 fn default_bg() -> String {
@@ -111,6 +150,12 @@ fn default_accent() -> String {
 fn default_row() -> String {
     "#1d2027".to_owned()
 }
+fn default_font() -> String {
+    "Sans".to_owned()
+}
+fn default_opacity() -> f64 {
+    1.0
+}
 
 impl Default for Theme {
     fn default() -> Self {
@@ -120,6 +165,8 @@ impl Default for Theme {
             dim: default_dim(),
             accent: default_accent(),
             row: default_row(),
+            font: default_font(),
+            opacity: default_opacity(),
         }
     }
 }
@@ -148,7 +195,28 @@ impl Theme {
             dim: self.dim()?,
             accent: self.accent()?,
             row: self.row()?,
+            opacity: self.opacity,
         })
+    }
+
+    fn validate(&self, errors: &mut Vec<String>) {
+        for (name, value) in [
+            ("bg", &self.bg),
+            ("fg", &self.fg),
+            ("dim", &self.dim),
+            ("accent", &self.accent),
+            ("row", &self.row),
+        ] {
+            if let Err(err) = Rgba::parse(value) {
+                errors.push(format!("theme `{name}`: {err}"));
+            }
+        }
+        if self.font.trim().is_empty() {
+            errors.push("theme `font` must not be empty".to_owned());
+        }
+        if !(0.0..=1.0).contains(&self.opacity) || !self.opacity.is_finite() {
+            errors.push("theme `opacity` must be between 0.0 and 1.0".to_owned());
+        }
     }
 }
 
@@ -158,35 +226,62 @@ struct Colors {
     dim: Rgba,
     accent: Rgba,
     row: Rgba,
+    opacity: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModuleSpec {
-    pub command: String,
-    #[serde(default = "default_interval")]
-    pub interval_secs: u64,
-}
-
-fn default_interval() -> u64 {
-    30
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A row of a panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Row {
+    #[serde(default)]
     pub label: String,
+    /// Optional prefix drawn before the label, e.g. a Nerd Font glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// v1 click command, kept for backwards compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module: Option<ModuleSpec>,
+    /// Click action; overrides `command` when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<ActionSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_up: Option<ActionSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_down: Option<ActionSpec>,
+    /// Draws a divider instead of a label, and is not clickable.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub separator: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Row {
     pub fn label(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
+            icon: None,
             command: None,
             module: None,
+            click: None,
+            scroll_up: None,
+            scroll_down: None,
+            separator: false,
         }
+    }
+
+    pub fn separator() -> Self {
+        Self {
+            separator: true,
+            ..Self::label("")
+        }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
     }
 
     pub fn with_command(mut self, command: impl Into<String>) -> Self {
@@ -194,17 +289,69 @@ impl Row {
         self
     }
 
+    /// v1 custom command module.
     pub fn with_module(mut self, command: impl Into<String>, interval_secs: u64) -> Self {
-        self.module = Some(ModuleSpec {
-            command: command.into(),
-            interval_secs,
-        });
+        self.module = Some(ModuleSpec::custom(command, interval_secs));
         self
+    }
+
+    /// Built-in module.
+    pub fn with_kind(mut self, kind: ModuleKind, interval_secs: u64) -> Self {
+        self.module = Some(ModuleSpec::of(kind, interval_secs));
+        self
+    }
+
+    pub fn with_click(mut self, action: ActionSpec) -> Self {
+        self.click = Some(action);
+        self
+    }
+
+    pub fn on_scroll(mut self, up: ActionSpec, down: ActionSpec) -> Self {
+        self.scroll_up = Some(up);
+        self.scroll_down = Some(down);
+        self
+    }
+
+    fn click_action(&self) -> Option<ActionSpec> {
+        self.click
+            .clone()
+            .or_else(|| self.command.as_ref().map(ActionSpec::command))
+    }
+
+    fn validate(&self, errors: &mut Vec<String>) {
+        if self.separator {
+            return;
+        }
+        if self.label.trim().is_empty() && self.module.is_none() {
+            errors.push(format!(
+                "row `{}` has neither a label nor a module",
+                self.label
+            ));
+        }
+        if let Some(module) = &self.module
+            && let Err(err) = module.validate()
+        {
+            errors.push(format!("row `{}`: {err}", self.label));
+        }
+        for (name, action) in [
+            ("click", &self.click),
+            ("scroll_up", &self.scroll_up),
+            ("scroll_down", &self.scroll_down),
+        ] {
+            if let Some(ActionSpec::Niri(action)) = action
+                && let Err(err) = action.request()
+            {
+                errors.push(format!("row `{}` {name}: {err}", self.label));
+            }
+        }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PanelConfig {
+    /// Output name this panel belongs to; `None` or `"*"` means every output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
     #[serde(default)]
     pub side: Side,
     #[serde(default = "default_width")]
@@ -238,10 +385,14 @@ fn default_row_height() -> u32 {
 fn default_title() -> String {
     "BETTER".to_owned()
 }
+pub fn default_interval() -> u64 {
+    30
+}
 
 impl Default for PanelConfig {
     fn default() -> Self {
         Self {
+            output: None,
             side: Side::Left,
             width: default_width(),
             margin: default_margin(),
@@ -258,6 +409,7 @@ impl Default for PanelConfig {
 }
 
 impl PanelConfig {
+    /// Loads a single panel (version 1 file shape).
     pub fn load(path: &Path) -> Result<Self, String> {
         match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -268,18 +420,282 @@ impl PanelConfig {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
-        }
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|err| format!("cannot serialize config: {err}"))?;
-        std::fs::write(path, bytes).map_err(|err| format!("cannot write {}: {err}", path.display()))
+        write_config_file(path, &bytes)
     }
 
-    /// Panel width including margins; used as the exclusive zone.
+    /// Space reserved on the output edge; used as the exclusive zone.
     pub fn exclusive_zone(&self) -> u32 {
-        self.width + self.margin
+        match self.side {
+            Side::Left | Side::Right => self.width + self.margin,
+            Side::Top | Side::Bottom => self.bar_height() + self.margin,
+        }
+    }
+
+    /// Height of a horizontal (top/bottom) panel.
+    pub fn bar_height(&self) -> u32 {
+        self.padding * 2 + self.row_height
+    }
+
+    pub fn matches_output(&self, output: &str) -> bool {
+        match self.output.as_deref() {
+            None | Some("*") | Some("") => true,
+            Some(name) => name == output,
+        }
+    }
+
+    /// Validates colours, sizes, modules and actions. All problems are returned.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if let Some(output) = &self.output
+            && output.trim().is_empty()
+            && output != "*"
+        {
+            errors.push(
+                "panel `output` must not be blank; omit it or use `*` for every output".to_owned(),
+            );
+        }
+        if self.width < 80 {
+            errors.push("panel `width` must be at least 80".to_owned());
+        }
+        if self.padding.saturating_mul(2) >= self.width {
+            errors.push("panel `padding` leaves no row width".to_owned());
+        }
+        if self.row_height < 16 {
+            errors.push("panel `row_height` must be at least 16".to_owned());
+        }
+        self.theme.validate(&mut errors);
+        if self.rows.is_empty() {
+            errors.push("panel has no rows".to_owned());
+        }
+        for row in &self.rows {
+            row.validate(&mut errors);
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn write_config_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
+    }
+    std::fs::write(path, bytes).map_err(|err| format!("cannot write {}: {err}", path.display()))
+}
+
+/// Partial per-output theme overrides.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeOverrides {
+    pub bg: Option<String>,
+    pub fg: Option<String>,
+    pub dim: Option<String>,
+    pub accent: Option<String>,
+    pub row: Option<String>,
+    pub font: Option<String>,
+    pub opacity: Option<f64>,
+}
+
+impl ThemeOverrides {
+    fn apply(&self, theme: &mut Theme) {
+        if let Some(bg) = &self.bg {
+            theme.bg = bg.clone();
+        }
+        if let Some(fg) = &self.fg {
+            theme.fg = fg.clone();
+        }
+        if let Some(dim) = &self.dim {
+            theme.dim = dim.clone();
+        }
+        if let Some(accent) = &self.accent {
+            theme.accent = accent.clone();
+        }
+        if let Some(row) = &self.row {
+            theme.row = row.clone();
+        }
+        if let Some(font) = &self.font {
+            theme.font = font.clone();
+        }
+        if let Some(opacity) = self.opacity {
+            theme.opacity = opacity;
+        }
+    }
+}
+
+/// Per-output panel overrides, keyed by the output name from niri/Wayland.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PanelOverrides {
+    pub side: Option<Side>,
+    pub width: Option<u32>,
+    pub margin: Option<u32>,
+    pub padding: Option<u32>,
+    pub row_height: Option<u32>,
+    pub title: Option<String>,
+    pub theme: Option<ThemeOverrides>,
+}
+
+impl PanelOverrides {
+    pub fn apply(&self, panel: &mut PanelConfig) {
+        if let Some(side) = self.side {
+            panel.side = side;
+        }
+        if let Some(width) = self.width {
+            panel.width = width;
+        }
+        if let Some(margin) = self.margin {
+            panel.margin = margin;
+        }
+        if let Some(padding) = self.padding {
+            panel.padding = padding;
+        }
+        if let Some(row_height) = self.row_height {
+            panel.row_height = row_height;
+        }
+        if let Some(title) = &self.title {
+            panel.title = title.clone();
+        }
+        if let Some(theme) = &self.theme {
+            theme.apply(&mut panel.theme);
+        }
+    }
+}
+
+/// Versioned config file.
+///
+/// A v1 file (a bare panel object with `rows`) is still accepted and wrapped in
+/// a single panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default = "default_version")]
+    pub version: u32,
+    /// Per-output overrides keyed by output connector name, e.g. `DP-1`.
+    #[serde(default)]
+    pub outputs: BTreeMap<String, PanelOverrides>,
+    #[serde(default)]
+    pub panels: Vec<PanelConfig>,
+}
+
+fn default_version() -> u32 {
+    CONFIG_VERSION
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            version: CONFIG_VERSION,
+            outputs: BTreeMap::new(),
+            panels: vec![PanelConfig {
+                title: "BETTER".to_owned(),
+                rows: vec![
+                    Row::label("Workspaces").with_kind(ModuleKind::Workspaces, 1),
+                    Row::label("Window").with_kind(ModuleKind::WindowTitle, 1),
+                    Row::separator(),
+                    Row::label("Media").with_kind(ModuleKind::Media, 2),
+                    Row::separator(),
+                    Row::label("CPU").with_kind(ModuleKind::Cpu, 2),
+                    Row::label("Memory").with_kind(ModuleKind::Memory, 5),
+                    Row::label("Battery").with_kind(ModuleKind::Battery, 30),
+                    Row::label("Network").with_kind(ModuleKind::Network, 2),
+                    Row::label("Volume").with_kind(ModuleKind::Volume, 5),
+                    Row::separator(),
+                    Row::label("Clock").with_kind(ModuleKind::Clock, 1),
+                ],
+                ..PanelConfig::default()
+            }],
+        }
+    }
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) => return Err(format!("cannot read {}: {err}", path.display())),
+        };
+        Self::from_slice(&bytes).map_err(|err| format!("cannot parse {}: {err}", path.display()))
+    }
+
+    /// Parses v2 (`panels`) or v1 (bare panel) JSON.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, String> {
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|err| err.to_string())?;
+        if value.get("panels").is_some() {
+            return serde_json::from_value(value).map_err(|err| err.to_string());
+        }
+        let panel: PanelConfig = serde_json::from_value(value).map_err(|err| err.to_string())?;
+        Ok(Self {
+            version: 1,
+            outputs: BTreeMap::new(),
+            panels: vec![panel],
+        })
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(self)
+            .map_err(|err| format!("cannot serialize config: {err}"))?;
+        write_config_file(path, &bytes)
+    }
+
+    /// Panels for one output, with per-output overrides applied.
+    pub fn panels_for(&self, output: &str) -> Vec<PanelConfig> {
+        let overrides = self.outputs.get(output);
+        self.panels
+            .iter()
+            .filter(|panel| panel.matches_output(output))
+            .map(|panel| {
+                let mut panel = panel.clone();
+                if let Some(overrides) = overrides {
+                    overrides.apply(&mut panel);
+                }
+                panel
+            })
+            .collect()
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.version == 0 || self.version > CONFIG_VERSION {
+            errors.push(format!(
+                "config `version` must be between 1 and {CONFIG_VERSION}, got {}",
+                self.version
+            ));
+        }
+        for (name, overrides) in &self.outputs {
+            if name.trim().is_empty() {
+                errors.push("output override name must not be empty".to_owned());
+            }
+            for (index, panel) in self.panels.iter().enumerate() {
+                let mut panel = panel.clone();
+                overrides.apply(&mut panel);
+                if let Err(problems) = panel.validate() {
+                    for problem in problems {
+                        errors.push(format!("panel {index} on output `{name}`: {problem}"));
+                    }
+                }
+            }
+        }
+        if self.panels.is_empty() {
+            errors.push("config defines no panels".to_owned());
+        }
+        for (index, panel) in self.panels.iter().enumerate() {
+            if let Err(problems) = panel.validate() {
+                for problem in problems {
+                    errors.push(format!("panel {index}: {problem}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -289,6 +705,44 @@ pub fn config_path() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_default();
     base.join("better-sidepanels/config.json")
+}
+
+type FileStamp = (Option<SystemTime>, u64);
+
+fn file_stamp(path: &Path) -> FileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => (metadata.modified().ok(), metadata.len()),
+        Err(_) => (None, 0),
+    }
+}
+
+/// Polls the config file's mtime and size; used to reload without restarting.
+#[derive(Debug, Clone)]
+pub struct ConfigWatcher {
+    path: PathBuf,
+    stamp: FileStamp,
+}
+
+impl ConfigWatcher {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let stamp = file_stamp(&path);
+        Self { path, stamp }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns true once when the file changed since the last poll.
+    pub fn poll(&mut self) -> bool {
+        let stamp = file_stamp(&self.path);
+        if stamp == self.stamp {
+            return false;
+        }
+        self.stamp = stamp;
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,27 +762,90 @@ impl Rect {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    Up,
+    Down,
+}
+
+/// A clickable region: a whole row, or a module item inside one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HitRegion {
+    pub row: usize,
+    pub rect: Rect,
+    pub action: Option<ActionSpec>,
+}
+
+/// Clickable geometry of a rendered panel.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InteractionMap {
+    pub regions: Vec<HitRegion>,
+}
+
+impl InteractionMap {
+    /// Topmost region at a point (module items win over their row).
+    pub fn at(&self, x: f64, y: f64) -> Option<&HitRegion> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|region| region.rect.contains(x, y))
+    }
+
+    pub fn row_at(&self, x: f64, y: f64) -> Option<usize> {
+        self.at(x, y).map(|region| region.row)
+    }
+}
+
 /// Runtime panel state: config plus refreshed module output.
 #[derive(Debug, Clone)]
 pub struct Panel {
     pub config: PanelConfig,
+    output: Option<String>,
     outputs: Vec<String>,
+    items: Vec<Vec<OutputItem>>,
     updated: Vec<Option<Instant>>,
+    states: Vec<ModuleState>,
 }
 
 impl Panel {
     pub fn new(config: PanelConfig) -> Self {
-        let outputs = vec![String::new(); config.rows.len()];
-        let updated = vec![None; config.rows.len()];
+        let len = config.rows.len();
         Self {
             config,
-            outputs,
-            updated,
+            output: None,
+            outputs: vec![String::new(); len],
+            items: vec![Vec::new(); len],
+            updated: vec![None; len],
+            states: vec![ModuleState::Idle; len],
         }
+    }
+
+    /// Panel bound to the output it is displayed on (workspace filtering).
+    pub fn with_output(mut self, output: impl Into<String>) -> Self {
+        self.output = Some(output.into());
+        self
+    }
+
+    pub fn output_name(&self) -> Option<&str> {
+        self.output.as_deref()
+    }
+
+    /// Replaces the configuration, resetting module output and deltas.
+    pub fn set_config(&mut self, config: PanelConfig) {
+        let len = config.rows.len();
+        self.config = config;
+        self.outputs = vec![String::new(); len];
+        self.items = vec![Vec::new(); len];
+        self.updated = vec![None; len];
+        self.states = vec![ModuleState::Idle; len];
     }
 
     pub fn output(&self, index: usize) -> Option<&str> {
         self.outputs.get(index).map(String::as_str)
+    }
+
+    pub fn output_items(&self, index: usize) -> &[OutputItem] {
+        self.items.get(index).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Runs every module whose interval elapsed. Returns true if anything
@@ -338,6 +855,10 @@ impl Panel {
     }
 
     pub fn refresh_at(&mut self, now: Instant) -> bool {
+        self.refresh_with(&mut RealEnv::new(), now)
+    }
+
+    pub fn refresh_with(&mut self, env: &mut dyn Env, now: Instant) -> bool {
         let mut changed = false;
         for (index, row) in self.config.rows.iter().enumerate() {
             let Some(module) = &row.module else {
@@ -345,43 +866,76 @@ impl Panel {
             };
             let due = match self.updated[index] {
                 None => true,
-                Some(last) => now.duration_since(last) >= Duration::from_secs(module.interval_secs),
+                Some(last) => now.duration_since(last) >= module.interval(),
             };
             if !due {
                 continue;
             }
-            let output = run_module(&module.command);
-            if self.outputs[index] != output {
-                self.outputs[index] = output;
+            let output =
+                modules::evaluate(module, env, &mut self.states[index], self.output.as_deref());
+            self.updated[index] = Some(now);
+            if self.outputs[index] != output.text {
+                self.outputs[index] = output.text;
                 changed = true;
             }
-            self.updated[index] = Some(now);
+            if self.items[index] != output.items {
+                self.items[index] = output.items;
+                changed = true;
+            }
         }
         changed
     }
 
     /// Runs every module immediately (startup and config reload).
     pub fn refresh_all(&mut self) -> bool {
-        for index in 0..self.config.rows.len() {
-            self.updated[index] = None;
-        }
-        self.refresh()
+        self.refresh_all_with(&mut RealEnv::new())
+    }
+
+    pub fn refresh_all_with(&mut self, env: &mut dyn Env) -> bool {
+        self.updated.fill(None);
+        self.refresh_with(env, Instant::now())
     }
 
     /// Row rectangles in panel-local coordinates.
     pub fn row_rects(&self) -> Vec<Rect> {
+        self.row_rects_for(self.config.width)
+    }
+
+    /// Row rectangles for a concrete surface width.
+    pub fn row_rects_for(&self, width: u32) -> Vec<Rect> {
+        let count = self.config.rows.len() as u32;
+        if count == 0 {
+            return Vec::new();
+        }
         let inset = self.config.padding;
-        let width = self.config.width.saturating_sub(inset * 2);
         let height = self.config.row_height;
-        self.config
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, _)| Rect {
-                x: inset,
-                y: HEADER_HEIGHT + index as u32 * (height + ROW_GAP),
-                width,
-                height,
+        if self.config.side.is_vertical() {
+            let row_width = self.config.width.saturating_sub(inset * 2);
+            return (0..count)
+                .map(|index| Rect {
+                    x: inset,
+                    y: HEADER_HEIGHT + index * (height + ROW_GAP),
+                    width: row_width,
+                    height,
+                })
+                .collect();
+        }
+        let available = width.saturating_sub(inset * 2);
+        let cell = available / count;
+        (0..count)
+            .map(|index| {
+                let x = inset + index * cell;
+                let cell_width = if index + 1 == count {
+                    available.saturating_sub(index * cell)
+                } else {
+                    cell
+                };
+                Rect {
+                    x,
+                    y: inset,
+                    width: cell_width,
+                    height,
+                }
             })
             .collect()
     }
@@ -390,24 +944,89 @@ impl Panel {
         self.row_rects().iter().position(|rect| rect.contains(x, y))
     }
 
-    /// Executes a row's click command, if it has one.
+    /// Executes a row's click action, if it has one.
     pub fn activate(&self, index: usize) -> Result<Option<String>, String> {
+        self.activate_with(index, &mut RealEnv::new())
+    }
+
+    pub fn activate_with(&self, index: usize, env: &mut dyn Env) -> Result<Option<String>, String> {
         let row = self
             .config
             .rows
             .get(index)
             .ok_or_else(|| format!("row {index} does not exist"))?;
-        match &row.command {
-            Some(command) => {
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .spawn()
-                    .map_err(|err| format!("cannot run `{command}`: {err}"))?;
-                Ok(Some(command.clone()))
+        match row.click_action() {
+            Some(action) => {
+                action.run_with(env)?;
+                Ok(Some(action.describe()))
             }
             None => Ok(None),
         }
+    }
+
+    /// Runs an arbitrary action (used for module item clicks).
+    pub fn run_action(&self, action: &ActionSpec) -> Result<(), String> {
+        action.run_with(&mut RealEnv::new())
+    }
+
+    /// Explicit scroll action, or workspace cycling for workspace modules.
+    pub fn scroll_action(&self, index: usize, direction: ScrollDirection) -> Option<ActionSpec> {
+        let row = self.config.rows.get(index)?;
+        let explicit = match direction {
+            ScrollDirection::Up => row.scroll_up.clone(),
+            ScrollDirection::Down => row.scroll_down.clone(),
+        };
+        explicit.or_else(|| {
+            let workspaces = row
+                .module
+                .as_ref()
+                .is_some_and(|module| module.kind == ModuleKind::Workspaces);
+            workspaces.then(|| {
+                ActionSpec::Niri(match direction {
+                    ScrollDirection::Up => NiriAction::up(),
+                    ScrollDirection::Down => NiriAction::down(),
+                })
+            })
+        })
+    }
+
+    /// Clickable geometry for the current output and config.
+    pub fn interaction_map(&self, width: u32, height: u32) -> Result<InteractionMap, String> {
+        if width == 0 || height == 0 {
+            return Ok(InteractionMap::default());
+        }
+        let surface = ImageSurface::create(Format::ARgb32, 1, 1)
+            .map_err(|err| format!("cannot create surface: {err}"))?;
+        let ctx = Context::new(&surface).map_err(|err| format!("cairo: {err}"))?;
+        let parts = self.compute_parts(&ctx, width)?;
+        let mut regions = Vec::new();
+        for part in parts {
+            if part.separator {
+                continue;
+            }
+            let row = &self.config.rows[part.row];
+            regions.push(HitRegion {
+                row: part.row,
+                rect: part.rect,
+                action: row.click_action(),
+            });
+            for item in part.items {
+                let Some(action) = item.action else {
+                    continue;
+                };
+                regions.push(HitRegion {
+                    row: part.row,
+                    rect: Rect {
+                        x: item.x.max(0.) as u32,
+                        y: part.rect.y,
+                        width: item.width.ceil().max(1.) as u32,
+                        height: part.rect.height,
+                    },
+                    action: Some(action),
+                });
+            }
+        }
+        Ok(InteractionMap { regions })
     }
 
     /// Renders the panel into an ARGB32 buffer.
@@ -437,26 +1056,79 @@ impl Panel {
 
         {
             let ctx = Context::new(&surface).map_err(|err| format!("cairo: {err}"))?;
-            let (r, g, b, a) = colors.bg.cairo();
+            let (r, g, b, a) = colors.bg.with_alpha(colors.opacity);
             ctx.set_source_rgba(r, g, b, a);
             ctx.paint().map_err(|err| format!("cairo: {err}"))?;
 
             let padding = self.config.padding as f64;
-            // Header title.
-            ctx.set_source_rgba_tuple(colors.fg.cairo());
-            ctx.select_font_face("Sans", FontSlant::Normal, FontWeight::Bold);
-            ctx.set_font_size(15.);
-            ctx.move_to(padding, padding + 16.);
-            ctx.show_text(&self.config.title)
-                .map_err(|err| format!("cairo: {err}"))?;
+            if self.config.side.is_vertical() {
+                // Header title.
+                ctx.set_source_rgba_tuple(colors.fg.cairo());
+                ctx.select_font_face(&self.config.theme.font, FontSlant::Normal, FontWeight::Bold);
+                ctx.set_font_size(15.);
+                ctx.move_to(padding, padding + 16.);
+                ctx.show_text(&self.config.title)
+                    .map_err(|err| format!("cairo: {err}"))?;
 
-            // Accent line under the header.
-            ctx.set_source_rgba_tuple(colors.accent.cairo());
-            ctx.rectangle(0., HEADER_HEIGHT as f64 - 1., width as f64, 1.);
-            ctx.fill().map_err(|err| format!("cairo: {err}"))?;
+                // Accent line under the header.
+                ctx.set_source_rgba_tuple(colors.accent.cairo());
+                ctx.rectangle(0., HEADER_HEIGHT as f64 - 1., width as f64, 1.);
+                ctx.fill().map_err(|err| format!("cairo: {err}"))?;
+            }
 
-            for (index, rect) in self.row_rects().iter().enumerate() {
-                self.paint_row(&ctx, index, rect, hovered == Some(index), &colors)?;
+            let parts = self.compute_parts(&ctx, width)?;
+            for part in &parts {
+                if part.separator {
+                    let y = part.rect.y as f64 + part.rect.height as f64 / 2.;
+                    ctx.set_source_rgba_tuple(colors.dim.with_alpha(0.4));
+                    ctx.rectangle(part.rect.x as f64 + 8., y, part.rect.width as f64 - 16., 1.);
+                    ctx.fill().map_err(|err| format!("cairo: {err}"))?;
+                    continue;
+                }
+                self.paint_row_background(&ctx, &part.rect, hovered == Some(part.row), &colors)?;
+                if let Some(label) = &part.label {
+                    ctx.set_source_rgba_tuple(colors.fg.cairo());
+                    ctx.select_font_face(
+                        &self.config.theme.font,
+                        FontSlant::Normal,
+                        FontWeight::Normal,
+                    );
+                    ctx.set_font_size(label.size);
+                    ctx.move_to(label.x, label.baseline);
+                    ctx.show_text(&label.text)
+                        .map_err(|err| format!("cairo: {err}"))?;
+                }
+                for item in &part.items {
+                    let color = if item.active {
+                        colors.accent
+                    } else if item.dim {
+                        colors.dim
+                    } else if item.occupied {
+                        colors.fg
+                    } else {
+                        colors.dim
+                    };
+                    ctx.set_source_rgba_tuple(color.cairo());
+                    ctx.select_font_face(
+                        &self.config.theme.font,
+                        FontSlant::Normal,
+                        FontWeight::Normal,
+                    );
+                    ctx.set_font_size(item.size);
+                    ctx.move_to(item.x, item.baseline);
+                    ctx.show_text(&item.text)
+                        .map_err(|err| format!("cairo: {err}"))?;
+                }
+            }
+
+            if self.config.side.is_horizontal() {
+                let y = match self.config.side {
+                    Side::Top => 0.,
+                    _ => height as f64 - 3.,
+                };
+                ctx.set_source_rgba_tuple(colors.accent.cairo());
+                ctx.rectangle(0., y, width as f64, 3.);
+                ctx.fill().map_err(|err| format!("cairo: {err}"))?;
             }
         }
 
@@ -471,10 +1143,9 @@ impl Panel {
         })
     }
 
-    fn paint_row(
+    fn paint_row_background(
         &self,
         ctx: &Context,
-        index: usize,
         rect: &Rect,
         hovered: bool,
         colors: &Colors,
@@ -491,43 +1162,185 @@ impl Panel {
         ctx.fill().map_err(|err| format!("cairo: {err}"))?;
 
         // Accent stripe on the panel's outer edge.
-        let stripe = 3.;
-        let stripe_x = match self.config.side {
-            Side::Left => x,
-            Side::Right => x + w - stripe,
-        };
-        ctx.set_source_rgba_tuple(colors.accent.cairo());
-        ctx.rectangle(stripe_x, y, stripe, h);
-        ctx.fill().map_err(|err| format!("cairo: {err}"))?;
-
-        let row = &self.config.rows[index];
-        let text_x = x + 12.;
-        let baseline = y + h / 2. + 5.;
-
-        ctx.set_source_rgba_tuple(colors.fg.cairo());
-        ctx.select_font_face("Sans", FontSlant::Normal, FontWeight::Normal);
-        ctx.set_font_size(13.);
-        let available = w - 24. - if row.module.is_some() { 80. } else { 0. };
-        let label = truncate(ctx, &row.label, available.max(20.))?;
-        ctx.move_to(text_x, baseline);
-        ctx.show_text(&label)
-            .map_err(|err| format!("cairo: {err}"))?;
-
-        if row.module.is_some()
-            && let Some(output) = self.outputs.get(index).filter(|out| !out.is_empty())
-        {
-            ctx.set_source_rgba_tuple(colors.dim.cairo());
-            ctx.set_font_size(12.);
-            let text = truncate(ctx, output, 90.)?;
-            let extents = ctx
-                .text_extents(&text)
-                .map_err(|err| format!("cairo: {err}"))?;
-            ctx.move_to(x + w - 12. - extents.width(), baseline);
-            ctx.show_text(&text)
-                .map_err(|err| format!("cairo: {err}"))?;
+        if self.config.side.is_vertical() {
+            let stripe = 3.;
+            let stripe_x = match self.config.side {
+                Side::Left => x,
+                _ => x + w - stripe,
+            };
+            ctx.set_source_rgba_tuple(colors.accent.cairo());
+            ctx.rectangle(stripe_x, y, stripe, h);
+            ctx.fill().map_err(|err| format!("cairo: {err}"))?;
         }
         Ok(())
     }
+
+    /// Measures labels and module items once for rendering and hit testing.
+    fn compute_parts(&self, ctx: &Context, width: u32) -> Result<Vec<RowParts>, String> {
+        let rects = self.row_rects_for(width);
+        let horizontal = self.config.side.is_horizontal();
+        let padding = if horizontal { 8. } else { 12. };
+        let font_size = if horizontal { 12. } else { 13. };
+        let gap = 8.0;
+        let baseline_offset = if horizontal { 4. } else { 5. };
+        let mut parts = Vec::with_capacity(rects.len());
+
+        for (index, rect) in rects.into_iter().enumerate() {
+            if index >= self.config.rows.len() || rect.height == 0 {
+                continue;
+            }
+            let row = &self.config.rows[index];
+            if row.separator {
+                parts.push(RowParts {
+                    row: index,
+                    rect,
+                    label: None,
+                    items: Vec::new(),
+                    separator: true,
+                });
+                continue;
+            }
+
+            ctx.select_font_face(
+                &self.config.theme.font,
+                FontSlant::Normal,
+                FontWeight::Normal,
+            );
+            ctx.set_font_size(font_size);
+
+            let mut runs: Vec<TextPart> = if self.items[index].is_empty() {
+                match self.outputs.get(index).filter(|text| !text.is_empty()) {
+                    Some(text) => vec![TextPart {
+                        text: text.clone(),
+                        x: 0.,
+                        baseline: 0.,
+                        width: 0.,
+                        size: font_size,
+                        active: false,
+                        occupied: false,
+                        dim: true,
+                        action: None,
+                    }],
+                    None => Vec::new(),
+                }
+            } else {
+                self.items[index]
+                    .iter()
+                    .map(|item| TextPart {
+                        text: item.label.clone(),
+                        x: 0.,
+                        baseline: 0.,
+                        width: 0.,
+                        size: font_size,
+                        active: item.active,
+                        occupied: item.occupied,
+                        dim: false,
+                        action: item.action.clone(),
+                    })
+                    .collect()
+            };
+
+            let row_width = rect.width as f64;
+            let module_budget = (row_width * if horizontal { 0.6 } else { 0.55 })
+                .max(20.)
+                .min(row_width - padding * 2. - 4.);
+            let mut widths = Vec::with_capacity(runs.len());
+            for run in &runs {
+                widths.push(measure(ctx, &run.text)?);
+            }
+            let total = widths.iter().sum::<f64>() + gap * runs.len().saturating_sub(1) as f64;
+            if total > module_budget && !runs.is_empty() {
+                let per = ((module_budget - gap * runs.len().saturating_sub(1) as f64)
+                    / runs.len() as f64)
+                    .max(16.);
+                for (run, width) in runs.iter_mut().zip(widths.iter_mut()) {
+                    run.text = truncate(ctx, &run.text, per)?;
+                    *width = measure(ctx, &run.text)?;
+                }
+            }
+            let module_total =
+                widths.iter().sum::<f64>() + gap * runs.len().saturating_sub(1) as f64;
+            let module_end = rect.x as f64 + row_width - padding;
+            let baseline = rect.y as f64 + rect.height as f64 / 2. + baseline_offset;
+            let mut x = (module_end - module_total).max(rect.x as f64 + padding);
+            for (run, part_width) in runs.iter_mut().zip(widths) {
+                run.x = x;
+                run.baseline = baseline;
+                run.width = part_width;
+                x += part_width + gap;
+            }
+
+            let icon_prefix = row
+                .icon
+                .as_deref()
+                .map(|icon| format!("{icon} "))
+                .unwrap_or_default();
+            let label_text = format!("{icon_prefix}{}", row.label);
+            let label_x = rect.x as f64 + padding;
+            let module_start = if runs.is_empty() {
+                rect.x as f64 + row_width - padding
+            } else {
+                runs[0].x
+            };
+            let available = (module_start - gap - label_x).max(12.);
+            let label_text = if label_text.is_empty() {
+                String::new()
+            } else {
+                truncate(ctx, &label_text, available)?
+            };
+            let label = if label_text.is_empty() {
+                None
+            } else {
+                Some(TextPart {
+                    text: label_text,
+                    x: label_x,
+                    baseline,
+                    width: 0.,
+                    size: font_size,
+                    active: false,
+                    occupied: false,
+                    dim: false,
+                    action: None,
+                })
+            };
+
+            parts.push(RowParts {
+                row: index,
+                rect,
+                label,
+                items: runs,
+                separator: false,
+            });
+        }
+        Ok(parts)
+    }
+}
+
+struct RowParts {
+    row: usize,
+    rect: Rect,
+    label: Option<TextPart>,
+    items: Vec<TextPart>,
+    separator: bool,
+}
+
+struct TextPart {
+    text: String,
+    x: f64,
+    baseline: f64,
+    width: f64,
+    size: f64,
+    active: bool,
+    occupied: bool,
+    dim: bool,
+    action: Option<ActionSpec>,
+}
+
+fn measure(ctx: &Context, text: &str) -> Result<f64, String> {
+    Ok(ctx
+        .text_extents(text)
+        .map_err(|err| format!("cairo: {err}"))?
+        .width())
 }
 
 trait CairoSource {
@@ -564,21 +1377,6 @@ fn truncate(ctx: &Context, text: &str, max_width: f64) -> Result<String, String>
     Ok(out)
 }
 
-fn run_module(command: &str) -> String {
-    let output = Command::new("sh").arg("-c").arg(command).output();
-    match output {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .chars()
-            .take(48)
-            .collect(),
-        _ => String::new(),
-    }
-}
-
 /// A rendered panel: ARGB32 bytes, row-major, `stride` bytes per row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelImage {
@@ -605,8 +1403,13 @@ impl PanelImage {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
+
+    use serde_json::json;
 
     use super::*;
+    use crate::modules::ModuleOutput;
+    use crate::system::mock::MockEnv;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -626,6 +1429,28 @@ mod tests {
             ..PanelConfig::default()
         };
         Panel::new(config)
+    }
+
+    fn workspace_panel() -> Panel {
+        let mut env = MockEnv::new(1_709_251_200).reply(
+            "Workspaces",
+            json!({
+                "Ok": {
+                    "Workspaces": [
+                        { "id": 10, "idx": 1, "output": "DP-1", "is_active": true, "active_window_id": 3 },
+                        { "id": 11, "idx": 2, "output": "DP-1" },
+                        { "id": 12, "idx": 3, "output": "DP-1", "name": "web" }
+                    ]
+                }
+            }),
+        );
+        let config = PanelConfig {
+            rows: vec![Row::label("Workspaces").with_kind(ModuleKind::Workspaces, 1)],
+            ..PanelConfig::default()
+        };
+        let mut panel = Panel::new(config).with_output("DP-1");
+        panel.refresh_all_with(&mut env);
+        panel
     }
 
     #[test]
@@ -671,6 +1496,162 @@ mod tests {
     }
 
     #[test]
+    fn config_v2_round_trips_and_wraps_v1() {
+        let dir = temp_dir("config-v2");
+        let path = dir.join("config.json");
+        let config = Config {
+            panels: vec![
+                PanelConfig {
+                    side: Side::Left,
+                    rows: vec![Row::label("A").with_kind(ModuleKind::Clock, 1)],
+                    ..PanelConfig::default()
+                },
+                PanelConfig {
+                    side: Side::Bottom,
+                    rows: vec![Row::label("B")],
+                    ..PanelConfig::default()
+                },
+            ],
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded, config);
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert!(loaded.validate().is_ok());
+
+        std::fs::write(
+            &path,
+            r#"{"side":"right","rows":[{"label":"Legacy","command":"true"}]}"#,
+        )
+        .unwrap();
+        let legacy = Config::load(&path).unwrap();
+        assert_eq!(legacy.version, 1);
+        assert_eq!(legacy.panels.len(), 1);
+        assert_eq!(legacy.panels[0].side, Side::Right);
+        assert_eq!(legacy.panels[0].rows[0].label, "Legacy");
+        assert!(legacy.validate().is_ok());
+    }
+
+    #[test]
+    fn per_output_overrides_apply_to_matching_panels() {
+        let config = Config {
+            panels: vec![PanelConfig {
+                rows: vec![Row::label("A")],
+                ..PanelConfig::default()
+            }],
+            outputs: BTreeMap::from([(
+                "DP-1".to_owned(),
+                PanelOverrides {
+                    width: Some(320),
+                    theme: Some(ThemeOverrides {
+                        bg: Some("#000000".to_owned()),
+                        ..ThemeOverrides::default()
+                    }),
+                    ..PanelOverrides::default()
+                },
+            )]),
+            ..Config::default()
+        };
+        let dp1 = config.panels_for("DP-1");
+        assert_eq!(dp1[0].width, 320);
+        assert_eq!(dp1[0].theme.bg, "#000000");
+        assert_eq!(dp1[0].theme.fg, default_fg());
+
+        let hdmi = config.panels_for("HDMI-A-1");
+        assert_eq!(hdmi[0].width, default_width());
+
+        let mut config = config;
+        config.panels[0].output = Some("DP-1".to_owned());
+        assert_eq!(config.panels_for("HDMI-A-1").len(), 0);
+        assert_eq!(config.panels_for("DP-1").len(), 1);
+    }
+
+    #[test]
+    fn multiple_panels_per_output_and_override_validation() {
+        let config = Config {
+            panels: vec![
+                PanelConfig {
+                    side: Side::Left,
+                    rows: vec![Row::label("Left")],
+                    ..PanelConfig::default()
+                },
+                PanelConfig {
+                    side: Side::Top,
+                    rows: vec![Row::label("Bar")],
+                    ..PanelConfig::default()
+                },
+            ],
+            ..Config::default()
+        };
+        assert_eq!(config.panels_for("DP-1").len(), 2);
+        assert_eq!(config.panels_for("DP-1")[1].side, Side::Top);
+        assert!(Config::default().validate().is_ok());
+
+        let mut bad = config;
+        bad.outputs.insert(
+            "DP-1".to_owned(),
+            PanelOverrides {
+                theme: Some(ThemeOverrides {
+                    accent: Some("#zzzzzz".to_owned()),
+                    ..ThemeOverrides::default()
+                }),
+                ..PanelOverrides::default()
+            },
+        );
+        let errors = bad.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("panel 0 on output `DP-1`")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn validation_reports_every_problem() {
+        let config = Config {
+            panels: vec![PanelConfig {
+                width: 20,
+                padding: 12,
+                row_height: 4,
+                theme: Theme {
+                    bg: "#nope".to_owned(),
+                    opacity: 2.0,
+                    ..Theme::default()
+                },
+                rows: vec![
+                    Row::label("Bad").with_kind(ModuleKind::Custom, 1),
+                    Row::label("Focus").with_click(ActionSpec::Niri(NiriAction {
+                        niri: niri::NiriVerb::FocusWorkspace,
+                        index: None,
+                        name: None,
+                        id: None,
+                    })),
+                ],
+                ..PanelConfig::default()
+            }],
+            ..Config::default()
+        };
+        let errors = config.validate().unwrap_err();
+        let joined = errors.join("\n");
+        for expected in [
+            "width",
+            "padding",
+            "row_height",
+            "theme `bg`",
+            "opacity",
+            "needs a non-empty `command`",
+            "focus-workspace needs",
+        ] {
+            assert!(
+                joined.contains(expected),
+                "missing `{expected}` in:\n{joined}"
+            );
+        }
+    }
+
+    #[test]
     fn exclusive_zone_covers_panel_and_margin() {
         let config = PanelConfig {
             width: 240,
@@ -678,6 +1659,16 @@ mod tests {
             ..PanelConfig::default()
         };
         assert_eq!(config.exclusive_zone(), 250);
+
+        let bar = PanelConfig {
+            side: Side::Top,
+            padding: 6,
+            row_height: 30,
+            margin: 4,
+            ..PanelConfig::default()
+        };
+        assert_eq!(bar.bar_height(), 42);
+        assert_eq!(bar.exclusive_zone(), 46);
     }
 
     #[test]
@@ -695,6 +1686,32 @@ mod tests {
         assert_eq!(inside, Some(1));
         assert_eq!(panel.hit(0., 0.), None);
         assert_eq!(panel.hit(rect.x as f64 + rect.width as f64 + 1., 60.), None);
+    }
+
+    #[test]
+    fn horizontal_panels_lay_rows_side_by_side() {
+        let config = PanelConfig {
+            side: Side::Bottom,
+            padding: 10,
+            row_height: 30,
+            rows: vec![Row::label("A"), Row::label("B"), Row::separator()],
+            ..PanelConfig::default()
+        };
+        let panel = Panel::new(config);
+        let rects = panel.row_rects_for(320);
+        assert_eq!(rects.len(), 3);
+        assert_eq!(
+            rects[0],
+            Rect {
+                x: 10,
+                y: 10,
+                width: 100,
+                height: 30
+            }
+        );
+        assert_eq!(rects[1].x, 110);
+        assert_eq!(rects[2].width, 100);
+        assert_eq!(panel.config.bar_height(), 50);
     }
 
     #[test]
@@ -829,5 +1846,190 @@ mod tests {
     fn rejects_empty_render_size() {
         assert!(panel().render(0, 10).is_err());
         assert!(panel().render(10, 0).is_err());
+    }
+
+    #[test]
+    fn workspace_module_renders_and_clicks_focus_the_right_workspace() {
+        let panel = workspace_panel();
+        assert_eq!(panel.output(0), Some("1 2 web"));
+        assert_eq!(panel.output_items(0).len(), 3);
+
+        let image = panel.render(260, 120).unwrap();
+        assert!(!image.is_solid(260, 120));
+
+        let map = panel.interaction_map(260, 120).unwrap();
+        let item_regions: Vec<_> = map
+            .regions
+            .iter()
+            .filter(|region| region.action.is_some())
+            .collect();
+        assert_eq!(item_regions.len(), 3);
+        let second = item_regions[1];
+        let point = (
+            second.rect.x as f64 + second.rect.width as f64 / 2.,
+            second.rect.y as f64 + 4.,
+        );
+        let hit = map.at(point.0, point.1).unwrap();
+        assert_eq!(hit.action, Some(ActionSpec::Niri(NiriAction::focus_id(11))));
+
+        let mut env = MockEnv::new(0);
+        hit.action.clone().unwrap().run_with(&mut env).unwrap();
+        assert_eq!(
+            env.niri_requests(),
+            vec![json!({ "Action": { "FocusWorkspace": { "reference": { "Id": 11 } } } })]
+        );
+        assert!(env.spawned().is_empty());
+    }
+
+    #[test]
+    fn scroll_uses_explicit_actions_then_workspace_cycling() {
+        let panel = workspace_panel();
+        assert_eq!(
+            panel.scroll_action(0, ScrollDirection::Down),
+            Some(ActionSpec::Niri(NiriAction::down()))
+        );
+
+        let config = PanelConfig {
+            rows: vec![
+                Row::label("Volume")
+                    .with_kind(ModuleKind::Volume, 5)
+                    .on_scroll(
+                        ActionSpec::command("volume up"),
+                        ActionSpec::command("volume down"),
+                    ),
+                Row::label("Inert"),
+            ],
+            ..PanelConfig::default()
+        };
+        let panel = Panel::new(config);
+        assert_eq!(
+            panel.scroll_action(0, ScrollDirection::Up),
+            Some(ActionSpec::command("volume up"))
+        );
+        assert_eq!(panel.scroll_action(1, ScrollDirection::Up), None);
+    }
+
+    #[test]
+    fn row_commands_are_used_as_click_actions_in_the_interaction_map() {
+        let panel = panel();
+        let map = panel.interaction_map(260, 200).unwrap();
+        let row = map.regions.iter().find(|region| region.row == 0).unwrap();
+        assert_eq!(row.action, Some(ActionSpec::command("true")));
+
+        let mut env = MockEnv::new(0);
+        row.action.clone().unwrap().run_with(&mut env).unwrap();
+        assert_eq!(env.spawned(), vec!["true".to_owned()]);
+    }
+
+    #[test]
+    fn horizontal_panels_render_all_four_sides() {
+        for side in [Side::Top, Side::Bottom] {
+            let config = PanelConfig {
+                side,
+                rows: vec![
+                    Row::label("CPU").with_kind(ModuleKind::Cpu, 1),
+                    Row::separator(),
+                    Row::label("Clock").with_kind(ModuleKind::Clock, 1),
+                ],
+                ..PanelConfig::default()
+            };
+            let panel = Panel::new(config);
+            let height = panel.config.bar_height();
+            let image = panel.render(320, height).unwrap();
+            assert!(!image.is_solid(320, height));
+            let map = panel.interaction_map(320, height).unwrap();
+            assert!(!map.regions.is_empty());
+        }
+    }
+
+    #[test]
+    fn icons_labels_and_opacity_are_applied() {
+        let config = PanelConfig {
+            rows: vec![Row::label("Clock").with_icon("")],
+            theme: Theme {
+                opacity: 0.5,
+                font: "Sans".to_owned(),
+                ..Theme::default()
+            },
+            ..PanelConfig::default()
+        };
+        let panel = Panel::new(config);
+        let image = panel.render(260, 120).unwrap();
+        // cairo's ARGB32 is premultiplied, so only the alpha is predictable.
+        let bg = image.rgba(250, 110);
+        assert!(bg[3] > 0);
+        assert!(bg[3] < 0xff);
+    }
+
+    #[test]
+    fn untrusted_window_titles_never_reach_a_command() {
+        let mut env = MockEnv::new(0).reply(
+            "FocusedWindow",
+            json!({
+                "Ok": {
+                    "FocusedWindow": {
+                        "id": 1,
+                        "title": "$(touch /tmp/pwned); `id`",
+                        "app_id": "evil"
+                    }
+                }
+            }),
+        );
+        let config = PanelConfig {
+            rows: vec![
+                Row::label("Window")
+                    .with_kind(ModuleKind::WindowTitle, 1)
+                    .with_click(ActionSpec::command("notify-send focus")),
+            ],
+            ..PanelConfig::default()
+        };
+        let mut panel = Panel::new(config);
+        panel.refresh_all_with(&mut env);
+        assert_eq!(panel.output(0), Some("evil - $(touch /tmp/pwned); `id`"));
+        panel.activate_with(0, &mut env).unwrap();
+        assert_eq!(env.spawned(), vec!["notify-send focus".to_owned()]);
+    }
+
+    #[test]
+    fn config_watcher_reports_changes_once() {
+        let dir = temp_dir("watch");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{}").unwrap();
+        let mut watcher = ConfigWatcher::new(&path);
+        assert!(!watcher.poll());
+        std::fs::write(&path, r#"{"panels":[]}"#).unwrap();
+        assert!(watcher.poll());
+        assert!(!watcher.poll());
+        assert_eq!(watcher.path(), path.as_path());
+    }
+
+    #[test]
+    fn reload_updates_panel_in_place() {
+        let dir = temp_dir("reload");
+        let path = dir.join("config.json");
+        Config::default().save(&path).unwrap();
+        let first = Config::load(&path).unwrap();
+        let mut panel = Panel::new(first.panels[0].clone());
+        let mut watcher = ConfigWatcher::new(&path);
+
+        let mut second = first.clone();
+        second.panels[0].rows = vec![Row::label("Replaced").with_module("echo ok", 1)];
+        second.save(&path).unwrap();
+
+        assert!(watcher.poll());
+        let reloaded = Config::load(&path).unwrap();
+        panel.set_config(reloaded.panels[0].clone());
+        panel.refresh();
+        assert_eq!(panel.config.rows[0].label, "Replaced");
+        assert_eq!(panel.output(0), Some("ok"));
+    }
+
+    #[test]
+    fn module_output_keeps_text_and_items_in_sync() {
+        let output = ModuleOutput {
+            text: "1 2".to_owned(),
+            items: vec![OutputItem::text("1"), OutputItem::text("2")],
+        };
+        assert_eq!(output.text, "1 2");
     }
 }
