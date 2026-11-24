@@ -4,25 +4,46 @@
 use std::path::PathBuf;
 
 use crate::annotate::Annotation;
+use crate::editor::{self, AnnotateOptions};
 use crate::hdr::HdrRequest;
+use crate::history::{self, HistoryOptions};
+use crate::ocr::{self, OcrOptions};
 use crate::output::OutputFormat;
+use crate::pin::{self, PinOptions};
 use crate::record::RecordOptions;
+use crate::stitch::StitchLayout;
 use crate::{Mode, Options};
 
 pub const USAGE: &str = r#"better-shot [--socket PATH] <ui|screen|window> [options]
-better-shot record [options]        (see `better-shot record --help`)
+better-shot annotate PATH [options]     (see `better-shot annotate --help`)
+better-shot history [list|show|prune|clear] [options]
+better-shot pin PATH|list|unpin ID [options]
+better-shot ocr PATH [options]
+better-shot record [options]            (see `better-shot record --help`)
 
   Options:
     --path PATH         Save here (default: Screenshots/better-shot-<epoch>.<ext>)
     --id ID             Window id for `window` (default: focused)
     --no-pointer        Hide the pointer
     --pointer           Show the pointer (default)
+    --cursor            Alias for --pointer (niri decides whether the pointer is
+                        on the captured output; better-shot cannot add it)
+    --no-cursor         Alias for --no-pointer
     --copy              Pipe the saved image to wl-copy (always as PNG)
     --annotate          Open the saved image in satty (interactive)
     --annotate=SPEC     Draw an annotation without a GUI (repeatable):
-                          rect:x,y,w,h
-                          text:x,y,STRING
-                          arrow:x1,y1,x2,y2
+                          rect:x,y,w,h | text:x,y,STRING | arrow:x1,y1,x2,y2
+                          line | ellipse | highlight | blur | pixelate
+                          solid-redaction | spotlight | zoom | crop
+                          (see `better-shot annotate --list-ops`)
+    --annotations FILE  Apply operations from a JSON script (repeatable)
+    --output NAME       Capture this output; repeatable/comma-separated. `--path`
+                        then needs a `{output}` placeholder. `screen` only.
+    --stitch[=LAYOUT]   Stitch multiple outputs: horizontal (default), vertical
+    --stitch-path PATH  Where to write the stitched image
+    --ocr               Run tesseract on each saved image (needs tesseract)
+    --ocr-sidecar       Also write <image>.ocr.json
+    --no-history        Do not append to capture history
     --hdr=MODE          keep (default) | sdr | tonemap
     --format=FORMAT     png | jpeg | webp (default: from --path, else png)
     --quality N         JPEG quality 1-100 (default: 90)
@@ -42,6 +63,10 @@ pub struct ParsedCli {
 pub enum CliAction {
     Run(ParsedCli),
     Record(RecordOptions),
+    Annotate(AnnotateOptions),
+    History(HistoryOptions),
+    Pin(PinOptions),
+    Ocr(OcrOptions),
     Help,
 }
 
@@ -52,17 +77,52 @@ where
     S: Into<String>,
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
-    if let Some(index) = record_mode_index(&args) {
+    if let Some((index, word)) = subcommand_index(&args) {
         let remaining = args
             .iter()
             .enumerate()
             .filter(|(candidate, _)| *candidate != index)
             .map(|(_, arg)| arg.clone())
             .collect::<Vec<_>>();
-        return Ok(match crate::record::parse_cli(remaining)? {
-            crate::record::RecordCli::Run(options) => CliAction::Record(options),
-            crate::record::RecordCli::Help => CliAction::Help,
-        });
+        match word.as_str() {
+            "record" => {
+                return Ok(match crate::record::parse_cli(remaining)? {
+                    crate::record::RecordCli::Run(options) => CliAction::Record(options),
+                    crate::record::RecordCli::Help => CliAction::Help,
+                });
+            }
+            "annotate" => {
+                return Ok(match editor::parse_cli(remaining)? {
+                    editor::AnnotateCli::Run(options) => CliAction::Annotate(options),
+                    editor::AnnotateCli::Help => CliAction::Help,
+                });
+            }
+            "history" => {
+                return Ok(match history::parse_cli(remaining)? {
+                    history::HistoryCli::Run(options) => CliAction::History(options),
+                    history::HistoryCli::Help => CliAction::Help,
+                });
+            }
+            "pin" => {
+                return Ok(match pin::parse_cli(remaining)? {
+                    pin::PinCli::Run(options) => CliAction::Pin(options),
+                    pin::PinCli::Help => CliAction::Help,
+                });
+            }
+            "ocr" => {
+                return Ok(match ocr::parse_cli(remaining)? {
+                    ocr::OcrCli::Run(options) => CliAction::Ocr(options),
+                    ocr::OcrCli::Help => CliAction::Help,
+                });
+            }
+            "ui" | "screen" | "window" => {}
+            other => {
+                return Err(format!(
+                    "unexpected argument `{other}` (expected ui, screen, window, annotate, \
+                     history, pin, ocr or record)\n\n{USAGE}"
+                ));
+            }
+        }
     }
     let mut iter = args.into_iter().peekable();
     let mut socket = None;
@@ -89,11 +149,11 @@ where
                         .map_err(|_| format!("--id needs a number, got `{value}`"))?,
                 );
             }
-            "--no-pointer" => {
+            "--no-pointer" | "--no-cursor" => {
                 no_value(flag.as_str(), inline)?;
                 options.show_pointer = false;
             }
-            "--pointer" => {
+            "--pointer" | "--cursor" => {
                 no_value(flag.as_str(), inline)?;
                 options.show_pointer = true;
             }
@@ -105,6 +165,46 @@ where
                 Some(spec) => options.annotations.push(Annotation::parse(&spec)?),
                 None => options.annotate = true,
             },
+            "--annotations" => {
+                options.annotation_files.push(PathBuf::from(value(
+                    flag.as_str(),
+                    inline,
+                    &mut iter,
+                )?));
+            }
+            "--output" => {
+                let raw = value(flag.as_str(), inline, &mut iter)?;
+                for name in raw.split(',') {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err(format!("--output has an empty output name in `{raw}`"));
+                    }
+                    options.outputs.push(name.to_owned());
+                }
+            }
+            "--stitch" => {
+                options.stitch = Some(match inline {
+                    Some(layout) => StitchLayout::parse(&layout).ok_or_else(|| {
+                        format!("--stitch needs horizontal or vertical, got `{layout}`")
+                    })?,
+                    None => StitchLayout::Horizontal,
+                });
+            }
+            "--stitch-path" => {
+                options.stitch_path = Some(PathBuf::from(value(flag.as_str(), inline, &mut iter)?));
+            }
+            "--ocr" => {
+                no_value(flag.as_str(), inline)?;
+                options.ocr = true;
+            }
+            "--ocr-sidecar" => {
+                no_value(flag.as_str(), inline)?;
+                options.ocr_sidecar = true;
+            }
+            "--no-history" => {
+                no_value(flag.as_str(), inline)?;
+                options.no_history = true;
+            }
             "--hdr" => {
                 let value = value(flag.as_str(), inline, &mut iter)?;
                 options.hdr = HdrRequest::parse(&value)
@@ -157,25 +257,61 @@ where
         Some("ui") | None => Mode::Ui,
         _ => unreachable!(),
     };
+    validate_options(&options)?;
+    Ok(CliAction::Run(ParsedCli { socket, options }))
+}
+
+fn validate_options(options: &Options) -> Result<(), String> {
     if options.mode == Mode::Ui
         && (options.copy
             || options.annotate
             || !options.annotations.is_empty()
+            || !options.annotation_files.is_empty()
             || options.metadata
             || options.format.is_some()
-            || options.hdr != HdrRequest::Keep)
+            || options.hdr != HdrRequest::Keep
+            || options.ocr
+            || options.ocr_sidecar
+            || !options.outputs.is_empty()
+            || options.stitch.is_some())
     {
         return Err(
-            "--copy/--annotate/--metadata/--format/--hdr are not supported with the \
-             interactive UI mode (it saves asynchronously)"
+            "--copy/--annotate/--annotations/--metadata/--format/--hdr/--ocr/--output are not \
+             supported with the interactive UI mode (it saves asynchronously)"
                 .to_owned(),
         );
     }
-
-    Ok(CliAction::Run(ParsedCli { socket, options }))
+    if !options.outputs.is_empty() && options.mode != Mode::Screen {
+        return Err("--output is only supported with `screen`".to_owned());
+    }
+    if options.ocr_sidecar && !options.ocr {
+        return Err("--ocr-sidecar requires --ocr".to_owned());
+    }
+    if options.stitch_path.is_some() && options.stitch.is_none() {
+        return Err("--stitch-path requires --stitch".to_owned());
+    }
+    if options.stitch.is_some() && options.outputs.len() < 2 {
+        return Err("--stitch needs at least two --output values".to_owned());
+    }
+    if options.outputs.len() > 1 && options.stitch.is_none() && options.copy {
+        return Err("--copy with multiple outputs needs --stitch".to_owned());
+    }
+    if options.outputs.len() > 1 && options.stitch.is_none() && options.annotate {
+        return Err("--annotate with multiple outputs needs --stitch".to_owned());
+    }
+    if options.outputs.len() > 1
+        && let Some(path) = &options.path
+        && !path.to_string_lossy().contains("{output}")
+    {
+        return Err("--path needs a `{output}` placeholder for multiple outputs".to_owned());
+    }
+    Ok(())
 }
 
-fn record_mode_index(args: &[String]) -> Option<usize> {
+/// Finds the first positional token, skipping option values. A positional
+/// `record`, `annotate`, `history`, `pin` or `ocr` selects a subcommand; the
+/// screenshot modes are left for the main parser.
+fn subcommand_index(args: &[String]) -> Option<(usize, String)> {
     let takes_value = |flag: &str| {
         matches!(
             flag,
@@ -194,6 +330,13 @@ fn record_mode_index(args: &[String]) -> Option<usize> {
                 | "--duration"
                 | "--backend"
                 | "--command"
+                | "--annotations"
+                | "--stitch-path"
+                | "--op"
+                | "--viewer"
+                | "--keep"
+                | "--older-than"
+                | "--limit"
         )
     };
     let mut index = 0;
@@ -206,7 +349,12 @@ fn record_mode_index(args: &[String]) -> Option<usize> {
             }
             continue;
         }
-        return (arg == "record").then_some(index);
+        return match arg.as_str() {
+            "record" | "annotate" | "history" | "pin" | "ocr" | "ui" | "screen" | "window" => {
+                Some((index, arg.clone()))
+            }
+            _ => Some((index, arg.clone())),
+        };
     }
     None
 }
@@ -247,6 +395,10 @@ mod tests {
         match parse(args.iter().copied()).unwrap() {
             CliAction::Run(cli) => cli,
             CliAction::Record(_) => panic!("expected a screenshot run, got a recording"),
+            CliAction::Annotate(_) => panic!("expected a screenshot run, got annotate"),
+            CliAction::History(_) => panic!("expected a screenshot run, got history"),
+            CliAction::Pin(_) => panic!("expected a screenshot run, got pin"),
+            CliAction::Ocr(_) => panic!("expected a screenshot run, got ocr"),
             CliAction::Help => panic!("expected a run, got help"),
         }
     }
@@ -260,6 +412,11 @@ mod tests {
         assert!(cli.options.show_pointer);
         assert!(!cli.options.copy);
         assert!(cli.options.annotations.is_empty());
+        assert!(cli.options.annotation_files.is_empty());
+        assert!(cli.options.outputs.is_empty());
+        assert_eq!(cli.options.stitch, None);
+        assert!(!cli.options.ocr);
+        assert!(!cli.options.no_history);
         assert!(cli.socket.is_none());
     }
 
@@ -324,6 +481,41 @@ mod tests {
     }
 
     #[test]
+    fn parses_multi_output_ocr_and_cursor_flags() {
+        let cli = run(&[
+            "screen",
+            "--output=DP-1,HDMI-A-1",
+            "--output",
+            "eDP-1",
+            "--path",
+            "/tmp/shot-{output}.png",
+            "--stitch=vertical",
+            "--stitch-path",
+            "/tmp/stitched.png",
+            "--annotations",
+            "ops.json",
+            "--ocr",
+            "--ocr-sidecar",
+            "--no-history",
+            "--cursor",
+        ]);
+        assert_eq!(cli.options.outputs, ["DP-1", "HDMI-A-1", "eDP-1"]);
+        assert_eq!(cli.options.stitch, Some(StitchLayout::Vertical));
+        assert_eq!(
+            cli.options.stitch_path.as_deref(),
+            Some(std::path::Path::new("/tmp/stitched.png"))
+        );
+        assert_eq!(cli.options.annotation_files, [PathBuf::from("ops.json")]);
+        assert!(cli.options.ocr);
+        assert!(cli.options.ocr_sidecar);
+        assert!(cli.options.no_history);
+        assert!(cli.options.show_pointer);
+
+        let cli = run(&["ui", "--no-cursor"]);
+        assert!(!cli.options.show_pointer);
+    }
+
+    #[test]
     fn separates_satty_from_builtin_annotations() {
         let cli = run(&["window", "--id", "42", "--annotate"]);
         assert!(cli.options.annotate);
@@ -336,6 +528,13 @@ mod tests {
     fn help_is_not_a_run() {
         assert_eq!(parse(["--help"]).unwrap(), CliAction::Help);
         assert_eq!(parse(["-h"]).unwrap(), CliAction::Help);
+        for command in ["annotate", "history", "pin", "ocr", "record"] {
+            assert_eq!(
+                parse([command, "--help"]).unwrap(),
+                CliAction::Help,
+                "{command}"
+            );
+        }
     }
 
     #[test]
@@ -357,6 +556,17 @@ mod tests {
             vec!["ui", "--metadata"],
             vec!["ui", "--format=webp"],
             vec!["ui", "--hdr=sdr"],
+            vec!["ui", "--ocr"],
+            vec!["ui", "--output=DP-1"],
+            vec!["window", "--output=DP-1"],
+            vec!["screen", "--stitch"],
+            vec!["screen", "--stitch-path", "/tmp/x.png"],
+            vec!["screen", "--ocr-sidecar"],
+            vec!["screen", "--output", "DP-1,DP-2", "--copy"],
+            vec!["screen", "--output", "DP-1,DP-2", "--annotate"],
+            vec!["screen", "--output", "DP-1,DP-2", "--path", "/tmp/x.png"],
+            vec!["screen", "--stitch=grid", "--output", "a,b"],
+            vec!["screen", "--output", ",,"],
         ] {
             assert!(parse(args.clone()).is_err(), "accepted {args:?}");
         }
@@ -410,6 +620,35 @@ mod tests {
         assert_eq!(options.codec, crate::record::Codec::Av1);
 
         assert_eq!(parse(["record", "--help"]).unwrap(), CliAction::Help);
+    }
+
+    #[test]
+    fn delegates_subcommands() {
+        let CliAction::Annotate(options) =
+            parse(["annotate", "shot.png", "--op", "rect:0,0,2,2"]).unwrap()
+        else {
+            panic!("expected annotate");
+        };
+        assert_eq!(
+            options.path.as_deref(),
+            Some(std::path::Path::new("shot.png"))
+        );
+
+        let CliAction::History(options) = parse(["history", "list", "--json"]).unwrap() else {
+            panic!("expected history");
+        };
+        assert!(options.json);
+        assert_eq!(options.action, crate::history::HistoryAction::List);
+
+        let CliAction::Pin(options) = parse(["pin", "list"]).unwrap() else {
+            panic!("expected pin");
+        };
+        assert_eq!(options.command, crate::pin::PinCommand::List);
+
+        let CliAction::Ocr(options) = parse(["ocr", "shot.png", "--text"]).unwrap() else {
+            panic!("expected ocr");
+        };
+        assert!(options.text);
     }
 
     #[test]

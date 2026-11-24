@@ -1,22 +1,28 @@
 # better-shot
 
-Screenshot capture and screen recording for niri with optional clipboard,
-non-interactive annotations, HDR handling, multiple output formats and JSON
-metadata. Part of the Better Desktop ecosystem; lives inside this repository so
-no new repository is created (excluded from niri's Cargo workspace).
+Screenshot capture, a display-free annotation editor, capture history, pins,
+optional OCR and screen recording for niri. Supports clipboard output, HDR
+handling, multiple output formats, multi-output stitching and JSON metadata.
+Part of the Better Desktop ecosystem; lives inside this repository so no new
+repository is created (excluded from niri's Cargo workspace).
 
-## Modes
+## Modes and commands
 
 - `ui` — open niri's interactive screenshot UI (the path is used by the UI).
-- `screen` — capture the focused output.
+- `screen` — capture the focused output (or several with `--output`).
 - `window` — capture a window (`--id`, default focused).
+- `annotate` — edit an existing image with a persistent annotation log.
+- `history` — list, show, prune or clear capture history.
+- `pin` — register a stable copy and open it in an external viewer.
+- `ocr` — run tesseract on an existing image.
 - `record` — record an output, region or (via a generic backend) a window.
   See [Recording](#recording).
 
 Screenshots go to `$XDG_PICTURES_DIR/Screenshots` (or
 `$HOME/Pictures/Screenshots`) as `better-shot-<epoch>.<ext>`, or `--path`.
-`--copy`, annotations, `--metadata`, `--format` and `--hdr` are rejected with
-`ui` because that mode saves asynchronously and cannot be post-processed.
+`--copy`, annotations, `--metadata`, `--format`, `--hdr`, `--ocr` and
+`--output` are rejected with `ui` because that mode saves asynchronously and
+cannot be post-processed. `--no-history` is accepted everywhere.
 
 ## Recording
 
@@ -220,38 +226,209 @@ in `--metadata` sidecars.
 `--annotate` without a value keeps the interactive satty workflow
 (`satty -f <file>`, override with `BETTER_SHOT_ANNOTATE`).
 
-`--annotate=SPEC` draws directly on the captured image with no GUI, display, or
-font dependency. It is repeatable:
+`--annotate=SPEC` draws directly on the captured image with no GUI, display,
+font server, or GPU dependency. It is repeatable and operations apply in
+command-line order:
 
-```
---annotate=rect:x,y,w,h
---annotate=text:x,y,STRING
---annotate=arrow:x1,y1,x2,y2
-```
+| Spec | Effect |
+| --- | --- |
+| `rect:x,y,w,h` | 3 px red outline. |
+| `text:x,y,STRING` | Built-in 5×7 bitmap font, scaled 3×, red with a drop shadow. |
+| `arrow:x1,y1,x2,y2` | 3 px shaft and a spread head. |
+| `line:x1,y1,x2,y2` | 3 px line without a head. |
+| `ellipse:cx,cy,rx,ry` | 3 px red elliptical outline. |
+| `highlight:x,y,w,h` | Translucent yellow marker fill. |
+| `blur:x,y,w,h[,RADIUS]` | Box blur inside the rectangle. Radius 1–64, default 8. |
+| `pixelate:x,y,w,h[,BLOCK]` | Average-colour blocks. Block 1–256, default 12. |
+| `solid-redaction:x,y,w,h[,RRGGBB]` | Opaque filled rectangle, default black. `redact` is an alias. |
+| `spotlight:x,y,w,h[,DIM]` | Dim everything outside the rectangle by 1–100%, default 60. |
+| `zoom:x,y,w,h[,CORNER[,SCALE]]` | Magnify a region into a corner, with source/destination borders. `CORNER` is `top-left`, `top-right` (default), `bottom-left` or `bottom-right`; `SCALE` is 2–8 (default 2). |
+| `crop:x,y,w,h` | Crop the canvas. Later coordinates use the cropped image. |
 
-- Coordinates are physical pixels in the captured image (after scale/transform).
-- Rectangles are 3 px red outlines. Arrows have a 3 px shaft and a spread head.
-- Text uses a built-in 5×7 bitmap font scaled 3×, red with a one-pixel drop
-  shadow. Lowercase is rendered uppercase; unsupported characters render as
-  `?`. Everything after the second comma is the text, so commas and spaces are
-  allowed (quote the whole argument in a shell).
-- Geometry that does not fit in the image is rejected with an error rather than
-  silently clipped. Text may extend past the right edge and is clipped.
+- Coordinates are physical pixels in the image they apply to.
+- Brute-force validation runs before any write: geometry must fit the current
+  canvas (text may be clipped at the right/bottom), radii/scale/dim ranges are
+  checked, and unknown kinds are rejected.
+- Redaction, blur and pixelation are applied to the pixels that are encoded to
+  the final file. They are not overlays: the saved PNG/JPEG/WebP contains the
+  redacted or blurred data.
+- Text lowercases as uppercase; unsupported characters render as `?`.
+  Everything after the second comma is the text, so commas and spaces are
+  allowed (quote the whole argument).
+- `zoom` uses nearest-neighbour scaling and needs its scaled rectangle to fit
+  with an 8 px margin. `crop` changes the image size, so metadata and history
+  record the resulting dimensions.
 
 Example:
 
 ```sh
 better-shot screen --annotate=rect:120,80,640,360 \
-  --annotate=arrow:700,500,420,240 --annotate=text:130,60,Step 1
+  --annotate=arrow:700,500,420,240 --annotate=text:130,60,Step 1 \
+  --annotate=blur:900,120,320,80,16 \
+  --annotate=solid-redaction:40,700,500,40
 ```
 
-The built-in pipeline lets niri write a PNG, decodes it, draws, then rewrites the
-requested format in place. `satty` can be combined with built-in annotations: the
-annotations are baked in first, then satty opens the result.
+The built-in pipeline lets niri write a PNG, decodes it, applies every operation
+in memory, then rewrites the requested format in place. `satty` can be combined
+with built-in annotations: annotations are baked in first, then satty opens the
+result.
+
+### Batch scripts: `--annotations FILE`
+
+`--annotations FILE` (repeatable) loads a JSON script. Inline `--annotate` specs
+are applied first, then each file in command-line order. Both a bare array and
+an object with `ops` are accepted:
+
+```json
+{
+  "version": 1,
+  "ops": [
+    "crop:0,0,1280,720",
+    {"op": "blur", "x": 40, "y": 60, "w": 320, "h": 80, "radius": 12},
+    {"op": "solid-redaction", "x": 0, "y": 700, "w": 1280, "h": 20},
+    {"op": "zoom", "x": 900, "y": 40, "w": 300, "h": 200, "corner": "top-right", "scale": 2}
+  ]
+}
+```
+
+Object operations are strict: unknown fields are errors, so a typo cannot
+silently change a redaction. Colours accept `#rrggbb`, `rrggbb`, `black`,
+`white`, `red`, or a `[r,g,b]` array. Operation names and fields are listed by
+`better-shot annotate --list-ops`.
+
+## Annotation editor
+
+```sh
+better-shot annotate PATH --op blur:100,100,400,200,12 \
+  --op solid-redaction:0,520,1280,40
+better-shot annotate PATH --annotations steps.json
+better-shot annotate PATH --undo 2
+better-shot annotate PATH --redo
+better-shot annotate PATH --preview --op crop:0,0,800,600
+better-shot annotate PATH --history
+better-shot annotate PATH --clear-log
+better-shot annotate --list-ops
+```
+
+- Operations are validated and rendered in memory before the image is replaced;
+  a failing batch writes nothing.
+- The persistent log is `PATH.annotations.json`; the untouched pre-edit image is
+  `PATH.annotations.baseline`. Every render replays the log from the baseline,
+  so undo/redo are exact. Adding an operation after undo discards the redo tail.
+- `--preview` writes `PATH.preview.EXT` and changes neither the image nor the
+  log. `--history` prints the log as JSON (ops, applied count, pending redo).
+- `--clear-log` removes the log and baseline but keeps the current image. Use it
+  after redacting when the pre-redaction baseline must not remain. Without a
+  baseline, undo is impossible; better-shot reports that instead of guessing.
+- `--undo`/`--redo` cannot be combined with new operations or `--preview`;
+  `--history` and `--clear-log` are also exclusive with edits.
+- The editor never needs a display, and works the same on a capture from
+  `better-shot screen`.
+
+## Capture history
+
+Every successful capture appends one entry per saved file (including a stitched
+image) to `$XDG_STATE_HOME/better-shot/history.json`, falling back to
+`~/.local/state/better-shot/history.json`. `--no-history` opts out. History
+stores paths, source, timestamp, dimensions, format, HDR detection, annotation
+specs and the metadata sidecar path — never pixels.
+
+```sh
+better-shot history                     # list, newest first
+better-shot history list --limit 5 --json
+better-shot history show 1              # 1 = newest
+better-shot history show /path/shot.png
+better-shot history prune --keep 50 --older-than 30 --missing --dry-run
+better-shot history clear
+```
+
+- The file is bounded to 200 entries; appending removes the oldest.
+- `show` accepts a 1-based newest-first index or an exact path.
+- `prune` combines `--keep N`, `--older-than DAYS` and `--missing` (image no
+  longer exists). `--dry-run` reports without writing.
+- `clear` empties the list. A corrupt history file is an error, not silently
+  reset.
+- History write failures are reported on stderr but do not discard a saved
+  screenshot.
+
+## Pins
+
+```sh
+better-shot pin /path/shot.png --no-open
+better-shot pin /path/shot.png --viewer imv
+better-shot pin list --json
+better-shot pin unpin pin-...
+```
+
+A real always-on-top pin needs a Wayland layer-shell surface. niri's IPC has no
+request to create one and better-shot does not ship a layer-shell client to fake
+it. `pin` therefore copies the image to a stable path under
+`$XDG_STATE_HOME/better-shot/pins/<id>/`, registers it in
+`$XDG_STATE_HOME/better-shot/pins.json`, and opens that copy with
+`$BETTER_SHOT_VIEWER`, then `xdg-open`. The viewer window is managed normally:
+it can be covered and is not guaranteed to stay on top. `--no-open` only
+registers the stable copy. If the viewer cannot be launched, the new pin is
+rolled back and the error points at `--no-open`. `pin unpin` removes the
+registry entry and the copy.
+
+## OCR
+
+```sh
+better-shot screen --ocr --ocr-sidecar
+better-shot ocr /path/shot.png --json
+better-shot ocr /path/shot.png --text
+better-shot ocr /path/shot.png --sidecar
+```
+
+OCR uses an installed `tesseract`: `$BETTER_SHOT_TESSERACT` when set, otherwise
+`tesseract` from `PATH`. It runs `tesseract IMAGE stdout` and returns JSON with
+the full text and lines. `--ocr` runs it for each saved capture (and a stitched
+image); `--ocr-sidecar` writes `<image>.ocr.json`. A missing or failing
+tesseract is a clear error with an install hint — OCR is never silently skipped.
+The sidecar contains the same JSON as the `--json` output.
+
+## Multiple outputs and stitching
+
+`--output` is repeatable and accepts comma-separated names; it is valid with
+`screen` only, because niri's screenshot IPC targets the active output.
+
+```sh
+better-shot screen --output=DP-1,HDMI-A-1 --path=/tmp/shot-{output}.png
+better-shot screen --output=DP-1 --output=HDMI-A-1 \
+  --stitch=horizontal --stitch-path=/tmp/all.png
+```
+
+- Captures are taken sequentially. better-shot focuses each output through niri
+  `FocusMonitor`, captures it, then restores the output that was focused before
+  the command. If restoration fails, a warning is printed and the last captured
+  output stays focused.
+- With more than one output, `--path` must contain `{output}`; it is replaced
+  with a filesystem-safe form of the output name. Without `--path`, generated
+  names include `better-shot-<epoch>-<output>.<ext>`.
+- `--stitch` (default `horizontal`) or `--stitch=vertical` composes captures in
+  physical pixels, left-to-right/top-to-bottom, top/left aligned. The canvas is
+  opaque black where a capture does not cover it; images are not scaled.
+  `--stitch-path` selects the output (default
+  `Screenshots/better-shot-<epoch>-stitched.<ext>`).
+- `--copy` and `--annotate` (satty) need `--stitch` when capturing several
+  outputs, otherwise it would be ambiguous which image to use.
+- Each saved file gets its own metadata sidecar and history entry; the stitched
+  image is recorded with source `stitch`.
+- `--dry-run` prints the planned `FocusMonitor`/`ScreenshotScreen` actions and
+  paths without contacting niri.
+
+### Cursor note
+
+`--pointer` (default) and its aliases `--cursor`/`--no-cursor` set niri's
+`show_pointer` flag on the screenshot action. better-shot never composites a
+cursor itself. niri includes the pointer only when it is over the captured
+output at capture time, so a multi-output run can contain the pointer on at most
+one output. There is no IPC request that reports the cursor position or forces
+it into every capture; better-shot does not claim otherwise.
 
 ## Metadata
 
-`--metadata` writes a JSON sidecar next to the image, appending `.json`
+`--metadata` writes a JSON sidecar next to each image, appending `.json`
 (`shot.png` → `shot.png.json`). It records:
 
 - capture mode, window id, output name and `max_bpc`
@@ -259,7 +436,12 @@ annotations are baked in first, then satty opens the result.
 - detected HDR config, `niri_tone_maps_capture`, requested `--hdr` mode and the
   reference luminance used
 - output path, format, dimensions and source colour type
-- applied annotation specs and whether the image was copied
+- applied annotation specs (inline and from `--annotations` files) and whether
+  the image was copied
+- stitched images use mode `stitch` and the resulting dimensions
+
+OCR has its own `<image>.ocr.json` sidecar; it is not mixed into capture
+metadata. Capture history stores the metadata and OCR-relevant paths separately.
 
 ## Usage
 
@@ -272,6 +454,18 @@ better-shot window --id 42 --no-pointer --annotate
 better-shot screen --format webp --copy --metadata
 better-shot screen --path /tmp/shot.jpg --quality 92 --hdr=sdr
 better-shot screen --path /tmp/shot.png --dry-run
+better-shot screen --output=DP-1,HDMI-A-1 --path=/tmp/shot-{output}.png --stitch
+better-shot screen --annotations redact.json --ocr --ocr-sidecar
+
+better-shot annotate /tmp/shot.png --op blur:100,100,400,200,12
+better-shot annotate /tmp/shot.png --undo
+better-shot annotate /tmp/shot.png --preview --op crop:0,0,800,600
+better-shot annotate --list-ops
+better-shot history list --limit 10
+better-shot history prune --keep 50 --missing
+better-shot pin /tmp/shot.png --no-open
+better-shot pin list
+better-shot ocr /tmp/shot.png --json --sidecar
 
 better-shot record --output=DP-1 --duration=10
 better-shot record --region=100,200,1280,720 --fps=30 --codec=hevc --json
@@ -321,6 +515,24 @@ recorder command instead of starting it.
 - JPEG has no alpha channel; transparency is dropped. WebP is lossless and may
   produce larger files than PNG for some content.
 - `satty` support for JPEG/WebP depends on the satty build's decoders.
+- Pins are file-backed stable copies opened in an external viewer, not
+  compositor layer surfaces. They are not guaranteed to stay on top and do not
+  restore themselves after the viewer exits. A true pin needs a niri IPC
+  extension or a layer-shell client, neither of which is faked here.
+- Multi-output capture is sequential and changes focus through `FocusMonitor`;
+  it restores the previous output on success. It is not an atomic snapshot
+  across outputs, and the pointer can only appear on the output it occupies.
+- Stitching places captures at physical pixel size with top/left alignment and
+  black padding. There is no scaling, grid layout, or overlap control.
+- The annotation log keeps the pre-edit baseline for exact undo. After redacting,
+  run `better-shot annotate PATH --clear-log` if that unredacted copy must not
+  remain on disk. The saved image itself always contains the redaction.
+- OCR depends on tesseract, its installed languages and its default page
+  segmentation. better-shot exposes text only, not word/line bounding boxes.
+- `--annotations` JSON is strict about fields to catch typos. Reordering ops
+  changes the result when `crop` or `zoom` depend on earlier coordinates.
+- History is bounded to 200 entries and stores paths only; pruning `--missing`
+  does not delete images.
 
 ## Test
 
@@ -331,8 +543,14 @@ cargo clippy --all-targets
 ```
 
 Tests are display-free, GPU-free and compositor-free. Screenshot tests use
-synthetic images for HDR tone mapping, annotation geometry/pixels, format
-encoding, path generation, metadata and CLI parsing. Recording tests put fake
-`wf-recorder`/recorder scripts on a temporary `PATH`, and drive state-file
-start/stop, duration stops, early exits, JSON reports, backend selection and
-argument mapping without touching the real session.
+synthetic images for HDR tone mapping, every annotation operation (blur,
+pixelate, redaction, crop, zoom, spotlight, line, ellipse, highlight), format
+encoding, path generation, metadata, multi-output stitching and CLI parsing.
+Annotation-log tests cover baseline creation, deterministic replay, undo/redo,
+redo-tail truncation, previews, clearing and malformed logs. History tests cover
+bounding, list/show/prune/clear, dry runs and corrupt files. Pin tests use a fake
+viewer and verify rollback when it is missing. OCR tests use a fake tesseract to
+check JSON, sidecars, missing-tesseract degradation and non-zero exits.
+Recording tests put fake `wf-recorder`/recorder scripts on a temporary `PATH`,
+and drive state-file start/stop, duration stops, early exits, JSON reports,
+backend selection and argument mapping without touching the real session.
