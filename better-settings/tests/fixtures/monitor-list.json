@@ -1,0 +1,11 @@
+{
+  "command": "list",
+  "data": {
+    "profiles": [
+      "desk",
+      "mobile"
+    ],
+    "version": 2
+  },
+  "ok": true
+}

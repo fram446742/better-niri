@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub mod catalog;
 pub mod cli;
 pub mod diff;
+pub mod integrations;
 pub mod model;
 pub mod nodes;
 

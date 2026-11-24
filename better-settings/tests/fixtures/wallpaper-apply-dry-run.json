@@ -1,0 +1,9 @@
+{
+  "dry_run": true,
+  "backend": "auto",
+  "mode": "apply",
+  "images": {
+    "eDP-1": "/home/user/Pictures/night.png"
+  },
+  "template": "swaybg -i {image}"
+}

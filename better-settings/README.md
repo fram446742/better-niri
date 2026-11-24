@@ -62,7 +62,10 @@ found in the file, and shows read-only summaries for binds, window/layer rules,
 startup commands, environment variables and column widths. Values present in
 the config are loaded; changing a row and pressing **Save** patches only those
 lines. **Reload** re-reads the file, rebuilds the output sections, and reports
-structural/round-trip validation errors.
+structural/round-trip validation errors. Below the niri sections, the same
+window lists the other apps (displays, sessions, wallpaper, audio, side panels,
+automation) with explicit preview/apply buttons; see [Other apps
+(integrations)](#other-apps-integrations).
 
 Config path: `$BETTER_SETTINGS_CONFIG`, then `$NIRI_CONFIG`, then
 `$XDG_CONFIG_HOME/niri/config.kdl`, then `~/.config/niri/config.kdl`.
@@ -169,6 +172,59 @@ entries are set one by one.
 (for example `variable-refresh-rate on-demand=true`) is stored with `flag` and
 `raw` both true and its property text as `value`, so import preserves it.
 
+## Other apps (integrations)
+
+`better-settings` is also the unified frontend for the companion apps, but it
+never owns their data. It reads each app's JSON output or config file, shows it
+in the GTK window, and shells out to the app's own CLI for changes. No
+companion settings are copied into niri's config.
+
+| App | Read | Safe actions |
+| --- | --- | --- |
+| `better-monitor` | `list`/`show` profiles and output names | dry-run preview, apply, restore, confirm/cancel a pending apply |
+| `better-session` | `list`/`show` contexts (workspaces, windows, outputs) | `explain` preview, restore/activate |
+| `better-wallpaper` | `status` (active scene, scenes, backend) and `scene list` | use a scene, dry-run and real apply |
+| `better-audio` | `status`, `sinks`, `rules` | set the default sink, dry-run and real apply/restore |
+| `better-sidepanels` | `config.json` (`--config`, `$XDG_CONFIG_HOME`) | `--validate`, open in `$VISUAL`/`$EDITOR` (never rewritten) |
+| `better-companion` | `companionctl describe`/`status`/`list` | dry-run an action with `--dry-run`; a real call requires `--apply` |
+| all | tool discovery | lists which CLIs are installed; missing tools render a note instead of failing |
+
+```sh
+better-settingsctl integrations                 # installed CLIs and versions
+better-settingsctl displays list
+better-settingsctl displays preview desk        # always a dry run
+better-settingsctl displays apply desk          # preview only
+better-settingsctl displays apply desk --apply  # explicit mutation
+better-settingsctl displays restore --apply
+better-settingsctl displays confirm --apply
+better-settingsctl sessions list
+better-settingsctl sessions explain work
+better-settingsctl sessions activate work --apply
+better-settingsctl wallpaper status
+better-settingsctl wallpaper use night --apply
+better-settingsctl wallpaper apply --apply
+better-settingsctl audio status
+better-settingsctl audio default alsa_output.speakers --apply
+better-settingsctl audio apply --apply
+better-settingsctl sidepanels status
+better-settingsctl sidepanels validate --config ~/.config/better-sidepanels/config.json
+better-settingsctl sidepanels open
+better-settingsctl companion describe
+better-settingsctl companion run parking park              # dry run
+better-settingsctl companion run parking park --apply      # real call
+```
+
+Mutating commands print the tool's own preview and refuse to act without
+`--apply`. The GTK window has the same split: read-only sections plus explicit
+buttons (`Preview apply` / `Apply`, `Explain` / `Activate`, `Validate` / `Open
+config`, `Dry-run action` / `Call action`). `Reload` re-reads everything.
+
+Tool paths can be redirected for wrappers or tests:
+`BETTER_SETTINGS_BETTER_MONITOR`, `BETTER_SETTINGS_BETTER_SESSION`,
+`BETTER_SETTINGS_BETTER_WALLPAPER`, `BETTER_SETTINGS_BETTER_AUDIO`,
+`BETTER_SETTINGS_BETTER_SIDEPANELS` and `BETTER_SETTINGS_COMPANIONCTL`. The
+sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`.
+
 ## Supported syntax
 
 - Blocks and nested blocks: `input { keyboard { … } }`.
@@ -198,8 +254,14 @@ entries are set one by one.
 ## Test
 
 ```sh
-cargo test                     # model/CLI; GTK is only linked in the GUI binary
+cargo test                     # model, CLI and integration fixtures; the GTK
+                               # window test skips itself without a display
 cargo test --no-default-features
 cargo fmt --check
 cargo clippy --all-targets
 ```
+
+Integration tests use JSON fixtures captured from the real CLIs
+(`tests/fixtures/`) and an in-memory `ScriptedRunner`, so they need neither the
+apps installed nor a compositor. `cargo test` also builds the GTK binary and
+runs a widget-construction smoke test when `gtk::init()` succeeds.

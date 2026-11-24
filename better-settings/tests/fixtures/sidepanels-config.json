@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "outputs": {
+    "DP-1": {
+      "width": 300
+    }
+  },
+  "panels": [
+    {
+      "side": "left",
+      "width": 260,
+      "margin": 8,
+      "padding": 12,
+      "row_height": 34,
+      "title": "BETTER",
+      "rows": [
+        {
+          "label": "Workspaces"
+        },
+        {
+          "separator": true
+        }
+      ]
+    }
+  ]
+}

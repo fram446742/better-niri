@@ -1,0 +1,9 @@
+{
+  "backend": "native",
+  "dry_run": false,
+  "executed": [
+    "move firefox -> alsa_output.speakers"
+  ],
+  "unresolved": [],
+  "remembered": 1
+}

@@ -94,7 +94,7 @@ operate the desktop without the shell.
 | better-monitor | Output profiles, safe apply | **delivered**: schema v2 with matching, rules, watch, validation, rollback and JSON output; confirmation timer and GUI editor still open (58 tests) |
 | better-audio | PipeWire routing | **delivered**: native PipeWire backend (registry, port-link moves, metadata default sink, volume/mute) with pactl/wpctl fallbacks and restore (31 tests) |
 | better-wallpaper | Scenes, per-workspace wallpapers | **delivered**: native layer-shell background backend with cover-scaled shm images, reload and command fallback (30 tests); transitions open |
-| better-settings | Unified GTK4 settings frontend | **delivered**: full niri catalog coverage with byte-preserving KDL edits, dry-run diffs, import/export and a sectioned GTK UI (58 tests); other apps' tabs open |
+| better-settings | Unified GTK4 settings frontend | **delivered**: full niri catalog coverage with byte-preserving KDL edits, dry-run diffs, import/export and a sectioned GTK UI; companion app sections for displays, sessions, wallpaper, audio, side panels and automation from their own CLIs/JSON |
 | better-portal | XDG portal backend + external layer-shell picker daemon | **delivered**: Screenshot/PickColor native, ScreenCast proxy, picker, install/uninstall, portal descriptor, D-Bus/systemd units and smoke script (41 tests) |
 | better-noctalia-plugins | Shell integration | not started (Phase 6; requires a current Noctalia plugin API audit) |
 
