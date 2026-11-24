@@ -60,3 +60,79 @@ pub fn capture_framebuffer_region(
         }
     })?
 }
+
+/// Vulkan counterpart of [`capture_framebuffer_region`]: blits `dst` from the
+/// frame's bound target into a renderer-owned `VulkanTexture`, leaving it
+/// shader-readable for later draws in the same frame.
+#[cfg(feature = "vulkan")]
+pub fn capture_framebuffer_region_vulkan(
+    frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+    dst: Rectangle<i32, Physical>,
+    into: &smithay::backend::renderer::vulkan::VulkanTexture,
+) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+    use smithay::backend::renderer::Texture as _;
+    use smithay::utils::Size;
+    let size = into.size();
+    frame.blit_framebuffer_to_texture(
+        into,
+        dst,
+        Rectangle::from_size(Size::from((size.w, size.h))),
+        smithay::backend::renderer::TextureFilter::Linear,
+    )
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame, Offscreen, Renderer};
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Rectangle, Size, Transform};
+
+    use super::capture_framebuffer_region_vulkan;
+
+    #[test]
+    fn captures_a_framebuffer_region_into_a_vulkan_texture() {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            let size = Size::<i32, smithay::utils::Buffer>::from((8, 8));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((8, 8));
+            let full = Rectangle::from_size(output_size);
+
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, size)
+                .expect("target");
+            let mut capture = renderer
+                .create_buffer(Fourcc::Argb8888, size)
+                .expect("capture");
+            let mut fb = renderer.bind(&mut target).expect("bind target");
+            let mut frame = renderer
+                .render(&mut fb, output_size, Transform::Normal)
+                .expect("begin frame");
+            frame
+                .clear(Color32F::new(0.0, 1.0, 0.0, 1.0), &[full])
+                .expect("clear");
+            capture_framebuffer_region_vulkan(&mut frame, full, &capture).expect("capture region");
+            frame.finish().expect("finish");
+
+            let mut capture_fb = renderer.bind(&mut capture).expect("bind capture");
+            let mapping = renderer
+                .copy_framebuffer(&capture_fb, Rectangle::from_size(size), Fourcc::Argb8888)
+                .expect("copy capture");
+            let pixels = renderer.map_texture(&mapping).expect("map");
+            // Argb8888 little-endian: B, G, R, A -> green.
+            assert_eq!(&pixels[0..4], &[0, 255, 0, 255], "unexpected pixel");
+            eprintln!("Vulkan framebuffer region capture OK on {}", device.name());
+            return;
+        }
+    }
+}
