@@ -11,7 +11,7 @@ use smithay::backend::renderer::gles::{
 use smithay::backend::renderer::utils::CommitCounter;
 #[cfg(feature = "vulkan")]
 use smithay::backend::renderer::vulkan::{
-    CustomPass, CustomUniform, CustomUniformValue, VulkanError, VulkanFrame, VulkanTexture,
+    CustomUniform, CustomUniformValue, VulkanError, VulkanFrame, VulkanTexture,
 };
 use smithay::backend::renderer::{Frame as _, FrameContext, Offscreen, Texture as _};
 use smithay::gpu_span_location;
@@ -22,6 +22,8 @@ use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 use crate::render_helpers::background_effect::{AlphaMask, RenderParams};
 use crate::render_helpers::blend::FrameBlendState;
 use crate::render_helpers::blur::{Blur, BlurOptions};
+#[cfg(feature = "vulkan")]
+use crate::render_helpers::blur_vulkan::VulkanBlur;
 use crate::render_helpers::capture;
 use crate::render_helpers::liquid_glass::LiquidGlassOptions;
 use crate::render_helpers::renderer::AsGlesFrame as _;
@@ -74,8 +76,8 @@ struct VulkanInner {
     framebuffer: Option<VulkanTexture>,
     /// The texture sampled by the composite (`framebuffer` itself, or the blur output).
     intermediate: Option<VulkanTexture>,
-    /// Blur ladder: `textures[0]` is the full-size output, each following one is half-sized.
-    blur_textures: Vec<VulkanTexture>,
+    /// Cached Dual-Kawase blur ladder for `framebuffer`.
+    blur: VulkanBlur,
     /// Reusable storage for subregion-filtered damage rects.
     subregion_damage: Vec<Rectangle<i32, Physical>>,
 }
@@ -525,118 +527,6 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
     }
 }
 
-/// Runs the Vulkan Dual-Kawase blur ladder for one framebuffer capture.
-///
-/// Mirrors the GLES `Blur::render` pass ordering: a downsample chain from the
-/// captured framebuffer through progressively halved textures, then an upsample
-/// chain back to `textures[0]`. Returns `None` when the blur programs are not
-/// available (the caller then composites the unblurred capture).
-#[cfg(feature = "vulkan")]
-fn vulkan_blur(
-    frame: &mut VulkanFrame<'_, '_>,
-    source: &VulkanTexture,
-    options: BlurOptions,
-    textures: &mut Vec<VulkanTexture>,
-) -> Result<Option<VulkanTexture>, VulkanError> {
-    let _span = tracy_client::span!("FramebufferEffectElement::vulkan_blur");
-
-    // Clone the programs out first: `get_vulkan_frame` borrows the frame and the passes below
-    // need it mutably.
-    let (down, up) = {
-        let Some(shaders) = get_vulkan_frame(frame) else {
-            return Ok(None);
-        };
-        match (shaders.blur_down.clone(), shaders.blur_up.clone()) {
-            (Some(down), Some(up)) => (down, up),
-            _ => return Ok(None),
-        }
-    };
-
-    let passes = options.passes.clamp(1, 31) as usize;
-    let size = source.size();
-
-    let recreate = textures.len() != passes + 1
-        || textures
-            .first()
-            .is_none_or(|texture| texture.size() != size)
-        || !textures
-            .iter_mut()
-            .all(|texture| texture.is_unique_reference());
-    if recreate {
-        textures.clear();
-        let mut w = size.w;
-        let mut h = size.h;
-        let mut guard = frame.renderer();
-        let renderer = guard.as_mut();
-        for _ in 0..=passes {
-            let texture_size = smithay::utils::Size::new(w, h);
-            w = std::cmp::max(1, w / 2);
-            h = std::cmp::max(1, h / 2);
-            textures.push(renderer.create_buffer(Fourcc::Abgr8888, texture_size)?);
-        }
-    }
-
-    let offset = options.offset as f32;
-    let mut uniform_sets: Vec<Vec<CustomUniform<'_>>> = Vec::with_capacity(passes * 2);
-    let mut texture_sets: Vec<Vec<(&str, &VulkanTexture)>> = Vec::with_capacity(passes * 2);
-
-    // Downsample: source -> textures[1] -> ... -> textures[passes].
-    for i in 0..passes {
-        let src = if i == 0 { source } else { &textures[i] };
-        let dst = &textures[i + 1];
-        let dst_size = dst.size();
-        uniform_sets.push(vec![
-            CustomUniform {
-                name: "half_pixel",
-                value: CustomUniformValue::Vec2([0.5 / dst_size.w as f32, 0.5 / dst_size.h as f32]),
-            },
-            CustomUniform {
-                name: "offset",
-                value: CustomUniformValue::Float(offset),
-            },
-        ]);
-        texture_sets.push(vec![("tex", src)]);
-    }
-
-    // Upsample: textures[passes] -> ... -> textures[0].
-    for i in 0..passes {
-        let src = &textures[passes - i];
-        let src_size = src.size();
-        uniform_sets.push(vec![
-            CustomUniform {
-                name: "half_pixel",
-                value: CustomUniformValue::Vec2([0.5 / src_size.w as f32, 0.5 / src_size.h as f32]),
-            },
-            CustomUniform {
-                name: "offset",
-                value: CustomUniformValue::Float(offset),
-            },
-        ]);
-        texture_sets.push(vec![("tex", src)]);
-    }
-
-    let mut pass_list = Vec::with_capacity(passes * 2);
-    for i in 0..passes {
-        pass_list.push(CustomPass {
-            dst: &textures[i + 1],
-            program: &down,
-            uniforms: &uniform_sets[i],
-            textures: &texture_sets[i],
-        });
-    }
-    for i in 0..passes {
-        pass_list.push(CustomPass {
-            dst: &textures[passes - i - 1],
-            program: &up,
-            uniforms: &uniform_sets[passes + i],
-            textures: &texture_sets[passes + i],
-        });
-    }
-
-    frame.render_custom_passes(&pass_list)?;
-    Ok(Some(textures[0].clone()))
-}
-
 impl FramebufferEffectElement {
     /// Vulkan capture: blit the covered framebuffer region into a renderer-owned texture, run
     /// the blur ladder over it, and keep the result for [`Self::draw_vulkan`].
@@ -703,9 +593,9 @@ impl FramebufferEffectElement {
 
         let blurred = {
             let mut inner = inner_cell.borrow_mut();
-            let mut textures = std::mem::take(&mut inner.blur_textures);
-            let result = vulkan_blur(frame, &framebuffer, options, &mut textures);
-            inner.blur_textures = textures;
+            let mut blur = std::mem::take(&mut inner.blur);
+            let result = blur.render_in_frame(frame, &framebuffer, options);
+            inner.blur = blur;
             result?
         };
 
