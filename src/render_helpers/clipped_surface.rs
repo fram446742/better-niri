@@ -19,7 +19,7 @@ use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 #[derive(Debug)]
 pub struct ClippedSurfaceRenderElement<R: NiriRenderer> {
     inner: WaylandSurfaceRenderElement<R>,
-    program: GlesTexProgram,
+    program: crate::render_helpers::shaders::NiriTexProgram,
     corner_radius: CornerRadius,
     geometry: Rectangle<f64, Logical>,
     scale: f32,
@@ -38,7 +38,7 @@ impl<R: NiriRenderer> ClippedSurfaceRenderElement<R> {
         elem: WaylandSurfaceRenderElement<R>,
         scale: Scale<f64>,
         geometry: Rectangle<f64, Logical>,
-        program: GlesTexProgram,
+        program: crate::render_helpers::shaders::NiriTexProgram,
         corner_radius: CornerRadius,
         content: ContentColor,
     ) -> Self {
@@ -104,10 +104,20 @@ impl<R: NiriRenderer> ClippedSurfaceRenderElement<R> {
         ]
     }
 
-    pub fn shader(renderer: &mut R) -> Option<&GlesTexProgram> {
-        Shaders::get(renderer.as_gles_renderer()?)
-            .clipped_surface
-            .as_ref()
+    pub fn shader(renderer: &mut R) -> Option<crate::render_helpers::shaders::NiriTexProgram> {
+        if let Some(gles) = renderer.as_gles_renderer() {
+            return Shaders::get(gles)
+                .clipped_surface
+                .clone()
+                .map(crate::render_helpers::shaders::NiriTexProgram::Gles);
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(vulkan) = renderer.as_vulkan_renderer() {
+            return crate::render_helpers::shaders::get_vulkan_renderer(vulkan)
+                .and_then(|shaders| shaders.clipped_surface.clone())
+                .map(crate::render_helpers::shaders::NiriTexProgram::Vulkan);
+        }
+        None
     }
 
     pub fn will_clip(
@@ -245,10 +255,13 @@ impl RenderElement<GlesRenderer> for ClippedSurfaceRenderElement<GlesRenderer> {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
+        let crate::render_helpers::shaders::NiriTexProgram::Gles(program) = &self.program else {
+            return Ok(());
+        };
         let mut uniforms = self.compute_uniforms();
         uniforms.extend(FrameBlendState::uniforms_for_content(frame, self.content));
         let saved = frame.take_tex_program_override();
-        frame.override_default_tex_program(self.program.clone(), uniforms);
+        frame.override_default_tex_program(program.clone(), uniforms);
         let res = RenderElement::<GlesRenderer>::draw(
             &self.inner,
             frame,
@@ -281,17 +294,51 @@ impl<'render> RenderElement<TtyRenderer<'render>>
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
+        #[cfg(feature = "vulkan")]
+        if let (
+            crate::render_helpers::shaders::NiriTexProgram::Vulkan(program),
+            TtyFrame::Vulkan(multi),
+        ) = (&self.program, &mut *frame)
+        {
+            use smithay::backend::renderer::vulkan::{CustomUniformValue, OwnedCustomUniform};
+
+            let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
+                multi.as_mut();
+            let mut uniforms: Vec<OwnedCustomUniform> = self
+                .compute_uniforms()
+                .iter()
+                .filter_map(super::shader_element::uniform_to_custom_owned)
+                .collect();
+            for (name, value) in [
+                ("niri_hdr_pq", 0.0),
+                ("niri_ref_lum_scale", 1.0),
+                ("niri_linear", 0.0),
+                ("niri_linear_scale", 0.0),
+                ("niri_linear_to_ref", 0.0),
+                ("niri_hdr_to_sdr", 0.0),
+            ] {
+                uniforms.push(OwnedCustomUniform {
+                    name: name.to_owned(),
+                    value: CustomUniformValue::Float(value),
+                });
+            }
+            let saved = vk_frame.take_tex_program_override();
+            vk_frame.set_tex_program_override(Some((program.clone(), uniforms)));
+            let res =
+                RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache);
+            if let TtyFrame::Vulkan(multi) = frame {
+                let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
+                    multi.as_mut();
+                vk_frame.set_tex_program_override(saved);
+            }
+            return res;
+        }
+
+        let crate::render_helpers::shaders::NiriTexProgram::Gles(program) = &self.program else {
+            return Ok(());
+        };
         let Some(gles_frame) = frame.as_gles_frame() else {
-            // The corner clip is a GLSL program; draw the surface unclipped on Vulkan.
-            return RenderElement::draw(
-                &self.inner,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            );
+            return Ok(());
         };
         let mut uniforms = self.compute_uniforms();
         uniforms.extend(FrameBlendState::uniforms_for_content(
@@ -299,7 +346,7 @@ impl<'render> RenderElement<TtyRenderer<'render>>
             self.content,
         ));
         let saved = gles_frame.take_tex_program_override();
-        gles_frame.override_default_tex_program(self.program.clone(), uniforms);
+        gles_frame.override_default_tex_program(program.clone(), uniforms);
         let res = RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache);
         if let Some(frame) = frame.as_gles_frame() {
             frame.set_tex_program_override(saved);

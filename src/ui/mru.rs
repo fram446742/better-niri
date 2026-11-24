@@ -375,7 +375,7 @@ impl Thumbnail {
         };
 
         let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
-        let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer).cloned();
+        let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer);
         let geo = Rectangle::from_size(self.size.to_f64());
         // FIXME: deduplicate code with Tile::render_inner()
         let clip = move |elem| match elem {

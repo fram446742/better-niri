@@ -336,10 +336,12 @@ compositor IPC fallback.
   fallback reason as JSON. Core output rendering (windows, layers, UI textures)
   is renderer-agnostic. Border and shadow GLSL programs are compiled to SPIR-V
   at renderer init (`VulkanShaders`, custom pixel pipeline) and draw on both
-  backends; a test compiles them on a real `VulkanRenderer`. The remaining
-  GLSL-only visuals (window/global/scoped shaders, decoration light, blur/xray,
-  liquid glass, carousel panels, rounded-corner clipping, magnified screenshot
-  capture, screen transitions) keep their GLES path and skip on Vulkan;
+  backends, as do rounded-corner clipping (default texture program override)
+  and configured decoration shaders (content-addressed at init); a test
+  compiles all of them on a real `VulkanRenderer`. The remaining GLSL-only
+  visuals (window/global/scoped shaders, decoration light, blur/xray, liquid
+  glass, carousel panels, magnified screenshot capture, screen transitions)
+  keep their GLES path and skip on Vulkan;
   animated resize stretches also stay GLES-only, with the window drawing
   normally on Vulkan during a resize.
 - `agent` (off by default): the automation seat.

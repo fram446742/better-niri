@@ -709,6 +709,17 @@ impl ShaderRenderElement {
     }
 }
 
+/// Converts a GLES uniform into an owned custom shader uniform.
+#[cfg(feature = "vulkan")]
+pub(super) fn uniform_to_custom_owned(
+    uniform: &Uniform<'_>,
+) -> Option<smithay::backend::renderer::vulkan::OwnedCustomUniform> {
+    uniform_to_custom(uniform).map(|u| smithay::backend::renderer::vulkan::OwnedCustomUniform {
+        name: u.name.to_owned(),
+        value: u.value,
+    })
+}
+
 /// Converts a GLES uniform value into a custom shader uniform, skipping unsupported types.
 #[cfg(feature = "vulkan")]
 fn uniform_to_custom<'a>(
