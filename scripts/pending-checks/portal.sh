@@ -2,6 +2,7 @@
 # Exercise better-portal from a user session bus. Build it first:
 #   cargo build --manifest-path better-portal/Cargo.toml
 set -u
+TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 LOG=${PENDING_LOG:-/tmp/pending-portal.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"

@@ -6,7 +6,8 @@ set -u
 LOG=${PENDING_LOG:-/tmp/pending-hdr.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
-CLIP=${HDR_CLIP:-/tmp/hdr10-test.mp4}
+CLIP=${HDR_CLIP:-/home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4}
+TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 DURATION=${HDR_SECONDS:-20}
 command -v mpv >/dev/null || { echo "mpv missing"; exit 1; }
 if [ ! -s "$CLIP" ]; then
@@ -27,10 +28,11 @@ if command -v ffprobe >/dev/null; then
   INFO=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,pix_fmt,color_transfer,color_primaries -of default=nw=1:nk=1 "$CLIP" 2>/dev/null | tr '\n' ' ')
   echo "clip: $INFO (HDR10 needs smpte2084 + bt2020)"
 fi
-if ! grep -qE 'hdr([[:space:]]|$)' "$HOME/.config/niri/config.kdl" 2>/dev/null; then
+CONFIG=${NIRI_TEST_CONFIG:-$TEST_DIR/config.kdl}
+if ! grep -qE 'hdr([[:space:]]|$)' "$CONFIG" 2>/dev/null; then
   cat <<'MSG'
-WARNING: no `hdr` entry in ~/.config/niri/config.kdl, so niri does not
-advertise colour management and mpv will stay SDR. Add, then restart niri:
+WARNING: no `hdr` entry in the active config, so niri does not
+advertise colour management and mpv will stay SDR. Add it to the test copy, then restart niri:
   output "DP-1" {
       hdr mode="on" {
           reference-luminance 203

@@ -3,6 +3,13 @@
 Run these **inside** a niri session on tty3 with `NIRI_RENDERER=vulkan`
 (switch with Ctrl+Alt+F3, log in, start niri, open a terminal).
 
+## Isolated config
+
+`isolated-session.sh [DIR]` clones `~/.config/niri` into `/tmp/niri-test-session`
+(override with `NIRI_TEST_DIR`) and validates it. Run the test session with
+`niri -c "$NIRI_TEST_DIR"`; the other scripts expect that directory in their
+banner. `HDR_OUTPUT=DP-1` adds an `hdr mode="on"` block to the copy.
+
 ## drive.sh — windows, clipping, workspaces, overview, screenshots
 
 ```sh
@@ -23,7 +30,8 @@ Needs: an HDR-capable output (your DP-1 EDID advertises PQ/BT2020), `mpv` and
 ffmpeg when `$HDR_CLIP` does not exist, then plays it with HDR passthrough.
 
 ```sh
-HDR_CLIP=/tmp/hdr10-test.mp4 ./scripts/pending-checks/hdr.sh
+# defaults to /home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4
+HDR_CLIP=/path/to/hdr10.mp4 ./scripts/pending-checks/hdr.sh
 ```
 
 Check the HDR badge in mpv and that highlights are not clipped. **HDR output on

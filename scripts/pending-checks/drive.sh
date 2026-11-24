@@ -3,6 +3,7 @@
 # and exercise the Vulkan visuals that still have pending parity work.
 # Usage: ./scripts/pending-checks/drive.sh [/path/to/niri]
 set -u
+TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 LOG=${PENDING_LOG:-/tmp/pending-drive.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
@@ -10,7 +11,7 @@ NIRI=${1:-niri}
 say() { printf '\n== %s ==\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-say "session"
+say "session (expect isolated config $TEST_DIR/config.kdl)"
 $NIRI msg version || exit 1
 $NIRI msg outputs | head -20
 $NIRI msg workspaces | head -20

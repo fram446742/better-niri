@@ -372,9 +372,20 @@ fn system_config_path() -> PathBuf {
     PathBuf::from("/etc/niri/config.kdl")
 }
 
+/// Resolves an explicit `--config` / `NIRI_CONFIG` path. A directory means
+/// `<dir>/config.kdl`, so a copied config tree (with its `include`s) can be
+/// used as-is.
+fn resolve_explicit_config(path: PathBuf) -> PathBuf {
+    if path.is_dir() {
+        path.join("config.kdl")
+    } else {
+        path
+    }
+}
+
 fn config_path(cli_path: Option<PathBuf>) -> ConfigPath {
     if let Some(explicit) = cli_path.or_else(env_config_path) {
-        return ConfigPath::Explicit(explicit);
+        return ConfigPath::Explicit(resolve_explicit_config(explicit));
     }
 
     let system_path = system_config_path();
@@ -443,5 +454,25 @@ impl Drop for ShutdownTracy {
         unsafe {
             tracy_client::sys::___tracy_shutdown_profiler();
         }
+    }
+}
+
+#[cfg(test)]
+mod config_path_tests {
+    use super::resolve_explicit_config;
+
+    #[test]
+    fn explicit_directory_resolves_to_config_kdl() {
+        let dir = std::env::temp_dir().join(format!("niri-cli-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(resolve_explicit_config(dir.clone()), dir.join("config.kdl"));
+        // A file path (or a not-yet-created file) is used verbatim.
+        let file = dir.join("other.kdl");
+        assert_eq!(resolve_explicit_config(file.clone()), file);
+        assert_eq!(
+            resolve_explicit_config(dir.join("missing.kdl")),
+            dir.join("missing.kdl")
+        );
     }
 }

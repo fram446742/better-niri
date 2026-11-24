@@ -14,7 +14,9 @@ use crate::utils::version;
 #[command(subcommand_value_name = "SUBCOMMAND")]
 #[command(subcommand_help_heading = "Subcommands")]
 pub struct Cli {
-    /// Path to config file (default: `$XDG_CONFIG_HOME/niri/config.kdl`).
+    /// Path to a config file or config directory (default: `$XDG_CONFIG_HOME/niri/config.kdl`).
+    ///
+    /// A directory means `<dir>/config.kdl`; `include`d files resolve relative to it.
     ///
     /// This can also be set with the `NIRI_CONFIG` environment variable. If both are set, the
     /// command line argument takes precedence.
