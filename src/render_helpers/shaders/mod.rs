@@ -798,6 +798,13 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 /// GLES path.
 #[cfg(feature = "vulkan")]
 pub struct VulkanShaders {
+    /// Blend-space texture program (`texture_hdr.frag` + `hdr.frag`): the Vulkan counterpart of
+    /// the GLES default-texture override installed on HDR outputs. Encodes SDR content into
+    /// PQ/BT.2020 (or applies the extended-linear mapping) and passes blend-space content
+    /// through numerically when its `niri_blend` uniforms are zeroed.
+    pub texture_hdr: Option<VulkanPixelProgram>,
+    /// HDR PQ -> electrical sRGB program for drawing HDR content into SDR capture buffers.
+    pub texture_hdr_to_sdr: Option<VulkanPixelProgram>,
     pub border: Option<VulkanPixelProgram>,
     pub shadow: Option<VulkanPixelProgram>,
     pub clipped_surface: Option<VulkanPixelProgram>,
@@ -832,6 +839,35 @@ pub struct VulkanShaders {
 impl VulkanShaders {
     fn compile(renderer: &mut VulkanRenderer) -> Self {
         let _span = tracy_client::span!("VulkanShaders::compile");
+
+        // The blend-space texture program used for every default texture draw on HDR outputs.
+        // Same GLSL as the GLES override; `compile_vulkan_program` appends `hdr.frag` (which
+        // defines `niri_blend`) and declares the six blend uniforms. `alpha`/`tint` are the
+        // built-in default-texture inputs that the Vulkan texture draw path supplies.
+        let texture_hdr = compile_vulkan_program(
+            renderer,
+            include_str!("texture_hdr.frag"),
+            &[
+                UniformName::new("alpha", UniformType::_1f),
+                UniformName::new("tint", UniformType::_1f),
+            ],
+            &["tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan HDR texture shader: {err:?}"))
+        .ok();
+
+        let texture_hdr_to_sdr = compile_vulkan_program_without_blend(
+            renderer,
+            include_str!("texture_hdr_to_sdr.frag"),
+            &[
+                UniformName::new("alpha", UniformType::_1f),
+                UniformName::new("tint", UniformType::_1f),
+                UniformName::new("niri_ref_lum_scale", UniformType::_1f),
+            ],
+            &["tex"],
+        )
+        .map_err(|err| warn!("error compiling Vulkan HDR-to-SDR texture shader: {err:?}"))
+        .ok();
 
         let mut border_src = String::from(
             "#define WAX_STRENGTH rainbow_ripple.y\n\
@@ -1006,6 +1042,8 @@ impl VulkanShaders {
             global_passes: RefCell::new(Vec::new()),
             global_buffers: RefCell::new(Vec::new()),
             scoped: RefCell::new(HashMap::new()),
+            texture_hdr,
+            texture_hdr_to_sdr,
             // 1×1 transparent black; sampled (clamped) it returns black for every uv.
             black_texture: renderer
                 .import_memory(&[0u8, 0, 0, 0], Fourcc::Abgr8888, Size::from((1, 1)), false)
@@ -1216,6 +1254,11 @@ pub fn init_vulkan(renderer: &mut VulkanRenderer, config: &niri_config::Config) 
     }
 
     renderer.user_data().insert_if_missing(|| shaders);
+    // The per-frame HDR blend state read by the TTY frame/renderer wrappers and by every
+    // shader element's Vulkan draw path.
+    renderer
+        .user_data()
+        .insert_if_missing(super::blend::VulkanFrameBlendState::default);
 }
 
 #[cfg(feature = "vulkan")]
@@ -1434,7 +1477,7 @@ pub(super) fn compile_vulkan_program(
     uniforms: &[UniformName<'_>],
     texture_uniforms: &[&str],
 ) -> anyhow::Result<VulkanPixelProgram> {
-    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, false)
+    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, false, true)
 }
 
 /// Like [`compile_vulkan_program`], but remaps the fragment's `v_coords` from the drawn
@@ -1446,7 +1489,20 @@ fn compile_vulkan_program_remap_uv(
     uniforms: &[UniformName<'_>],
     texture_uniforms: &[&str],
 ) -> anyhow::Result<VulkanPixelProgram> {
-    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, true)
+    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, true, true)
+}
+
+/// Compiles a program that does its own blend-space transform and must not receive the shared
+/// `hdr.frag` stage (e.g. `texture_hdr_to_sdr.frag`, whose `niri_pq_eotf` would collide with the
+/// one `hdr.frag` defines).
+#[cfg(feature = "vulkan")]
+fn compile_vulkan_program_without_blend(
+    renderer: &mut VulkanRenderer,
+    src: &str,
+    uniforms: &[UniformName<'_>],
+    texture_uniforms: &[&str],
+) -> anyhow::Result<VulkanPixelProgram> {
+    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, false, false)
 }
 
 #[cfg(feature = "vulkan")]
@@ -1456,14 +1512,17 @@ fn compile_vulkan_program_impl(
     uniforms: &[UniformName<'_>],
     texture_uniforms: &[&str],
     remap_uv: bool,
+    append_hdr_blend: bool,
 ) -> anyhow::Result<VulkanPixelProgram> {
     let mut uniforms = uniforms.to_vec();
-    uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
-    uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
-    uniforms.push(UniformName::new("niri_linear", UniformType::_1f));
-    uniforms.push(UniformName::new("niri_linear_scale", UniformType::_1f));
-    uniforms.push(UniformName::new("niri_linear_to_ref", UniformType::_1f));
-    uniforms.push(UniformName::new("niri_hdr_to_sdr", UniformType::_1f));
+    if append_hdr_blend {
+        uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
+        uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
+        uniforms.push(UniformName::new("niri_linear", UniformType::_1f));
+        uniforms.push(UniformName::new("niri_linear_scale", UniformType::_1f));
+        uniforms.push(UniformName::new("niri_linear_to_ref", UniformType::_1f));
+        uniforms.push(UniformName::new("niri_hdr_to_sdr", UniformType::_1f));
+    }
 
     let mut decls: Vec<CustomUniformDecl> =
         uniforms.iter().filter_map(uniform_name_to_decl).collect();
@@ -1481,7 +1540,9 @@ fn compile_vulkan_program_impl(
     }
 
     let mut full = src.to_string();
-    full.push_str(include_str!("hdr.frag"));
+    if append_hdr_blend {
+        full.push_str(include_str!("hdr.frag"));
+    }
     let vulkan_src = vulkanize_fragment(&full, &decls, texture_uniforms, remap_uv);
     renderer
         .compile_custom_pixel_shader(&vulkan_src, &decls, texture_uniforms)
@@ -1711,6 +1772,16 @@ mod tests {
             };
             init_vulkan(&mut renderer, &niri_config::Config::default());
             let shaders = renderer.user_data().get::<VulkanShaders>().unwrap();
+            assert!(
+                shaders.texture_hdr.is_some(),
+                "HDR texture shader failed to compile on {}",
+                device.name()
+            );
+            assert!(
+                shaders.texture_hdr_to_sdr.is_some(),
+                "HDR-to-SDR texture shader failed to compile on {}",
+                device.name()
+            );
             assert!(
                 shaders.border.is_some(),
                 "border shader failed to compile on {}",

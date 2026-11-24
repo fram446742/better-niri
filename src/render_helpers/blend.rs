@@ -14,6 +14,10 @@ use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+#[cfg(feature = "vulkan")]
+use smithay::backend::renderer::vulkan::{
+    CustomUniformValue, OwnedCustomUniform, VulkanFrame, VulkanRenderer,
+};
 use smithay::backend::renderer::{Color32F, ImportAll, Renderer};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Transform};
@@ -198,8 +202,11 @@ impl FrameBlendState {
 /// solid colors are encoded on the CPU, and niri's own shader programs read the frame blend
 /// state for their `niri_blend` stage. Call with `None` after rendering the output so
 /// screencasts, screenshots and other outputs stay SDR.
+///
+/// This is the GLES half; the Vulkan renderer has the symmetric [`set_frame_blend_vulkan`]
+/// (its frames install the blend-space texture program in `TtyRenderer::render`, and solid
+/// colors are encoded by the `TtyFrame` wrapper).
 pub fn set_frame_blend(renderer: Option<&mut GlesRenderer>, reference_luminance: Option<f64>) {
-    // The blend-space override is GLES-only; the Vulkan renderer handles HDR itself.
     let Some(renderer) = renderer else {
         return;
     };
@@ -243,6 +250,268 @@ pub fn set_sdr_capture_blend(renderer: &mut GlesRenderer, reference_luminance: f
     FrameBlendState::set_sdr_capture(renderer, reference_luminance);
     renderer.set_default_tex_program_override(None);
     renderer.set_solid_color_transform(None);
+}
+
+/// Vulkan counterpart of [`FrameBlendState`]: the blend space of the frames rendered from now
+/// on, stored in the [`VulkanRenderer`]'s user data (see
+/// [`super::shaders::VulkanShaders`], which lives in the same map).
+///
+/// Unlike GLES there is no renderer-level default texture program override; instead
+/// [`apply_vulkan_frame_blend`] installs the HDR texture program on each frame as it is created
+/// (see `TtyRenderer::render`). Solid colors are encoded by the TTY frame wrapper, and niri's
+/// own Vulkan programs read these values for their `niri_blend` stage.
+///
+/// Deliberately still SDR: the blur passes are pure filters over already-encoded data and
+/// never run `niri_blend`; the capture/readback and global-pass feedback paths produce SDR
+/// intermediates; and the cursor plane is disabled on HDR outputs, so the cursor is drawn into
+/// the primary plane and encoded by the frame-wide texture override.
+#[cfg(feature = "vulkan")]
+#[derive(Debug, Default)]
+pub struct VulkanFrameBlendState {
+    hdr_pq: Cell<bool>,
+    ref_lum_scale: Cell<f32>,
+}
+
+#[cfg(feature = "vulkan")]
+impl VulkanFrameBlendState {
+    pub fn init(renderer: &mut VulkanRenderer) {
+        renderer.user_data().insert_if_missing(Self::default);
+    }
+
+    fn get(renderer: &VulkanRenderer) -> Option<&Self> {
+        renderer.user_data().get()
+    }
+
+    /// Marks the frames rendered from now on as HDR with the given SDR reference luminance,
+    /// or as SDR (`None`).
+    pub fn set(renderer: &mut VulkanRenderer, reference_luminance: Option<f64>) {
+        if Self::get(renderer).is_none() {
+            Self::init(renderer);
+        }
+        let state = Self::get(renderer).expect("just initialized");
+        match reference_luminance {
+            Some(lum) => {
+                state.hdr_pq.set(true);
+                state.ref_lum_scale.set((lum / 10000.) as f32);
+            }
+            None => state.hdr_pq.set(false),
+        }
+    }
+
+    pub fn set_sdr_capture(renderer: &mut VulkanRenderer, reference_luminance: f64) {
+        if Self::get(renderer).is_none() {
+            Self::init(renderer);
+        }
+        let state = Self::get(renderer).expect("just initialized");
+        state.hdr_pq.set(false);
+        state
+            .ref_lum_scale
+            .set((reference_luminance / 10000.) as f32);
+    }
+
+    /// The `(hdr_pq, ref_lum_scale)` values for frames rendered by this renderer.
+    pub fn values(renderer: &VulkanRenderer) -> (bool, f32) {
+        Self::get(renderer).map_or((false, 0.), |state| {
+            (state.hdr_pq.get(), state.ref_lum_scale.get())
+        })
+    }
+
+    fn values_from_frame(frame: &VulkanFrame<'_, '_>) -> (bool, f32) {
+        frame.user_data().get().map_or((false, 0.), |state: &Self| {
+            (state.hdr_pq.get(), state.ref_lum_scale.get())
+        })
+    }
+
+    pub fn is_hdr_frame(frame: &VulkanFrame<'_, '_>) -> bool {
+        Self::values_from_frame(frame).0
+    }
+
+    pub fn ref_lum_scale(frame: &VulkanFrame<'_, '_>) -> f32 {
+        Self::values_from_frame(frame).1
+    }
+}
+
+/// Configures the Vulkan renderer for rendering frames in the given blend space. Symmetric with
+/// [`set_frame_blend`]; the override is applied to the frames created afterwards by
+/// `TtyRenderer::render`, and cleared by passing `None` after the output is rendered.
+#[cfg(feature = "vulkan")]
+pub fn set_frame_blend_vulkan(
+    renderer: Option<&mut VulkanRenderer>,
+    reference_luminance: Option<f64>,
+) {
+    let Some(renderer) = renderer else {
+        return;
+    };
+    VulkanFrameBlendState::set(renderer, reference_luminance);
+}
+
+/// Configures the Vulkan renderer for rendering into an SDR capture buffer, preserving the
+/// reference luminance needed to convert HDR content back to SDR. Symmetric with
+/// [`set_sdr_capture_blend`].
+#[cfg(feature = "vulkan")]
+pub fn set_sdr_capture_blend_vulkan(renderer: &mut VulkanRenderer, reference_luminance: f64) {
+    VulkanFrameBlendState::set_sdr_capture(renderer, reference_luminance);
+}
+
+/// The `niri_blend` custom-uniform values for content already rendered in the frame blend space.
+#[cfg(feature = "vulkan")]
+pub fn vulkan_uniforms_for_blend_space(frame: &VulkanFrame<'_, '_>) -> Vec<OwnedCustomUniform> {
+    let (_, scale) = VulkanFrameBlendState::values_from_frame(frame);
+    vulkan_blend_uniforms(0.0, scale, 0.0, 0.0, 0.0, 0.0)
+}
+
+/// The `niri_blend` custom-uniform values for a draw of SDR content in this frame.
+#[cfg(feature = "vulkan")]
+pub fn vulkan_uniforms(frame: &VulkanFrame<'_, '_>) -> Vec<OwnedCustomUniform> {
+    vulkan_uniforms_for_content(frame, ContentColor::Sdr)
+}
+
+/// The Vulkan counterpart of [`FrameBlendState::uniforms_for_content`].
+#[cfg(feature = "vulkan")]
+pub fn vulkan_uniforms_for_content(
+    frame: &VulkanFrame<'_, '_>,
+    content: ContentColor,
+) -> Vec<OwnedCustomUniform> {
+    vulkan_blend_uniform_values_for_content(frame, content)
+        .into_iter()
+        .map(|(name, value)| OwnedCustomUniform {
+            name: name.to_owned(),
+            value: CustomUniformValue::Float(value),
+        })
+        .collect()
+}
+
+/// The `niri_blend` values for a draw of the given content, as `(name, value)` pairs with
+/// static names (usable where the caller needs `CustomUniform<'static>`).
+#[cfg(feature = "vulkan")]
+pub fn vulkan_blend_uniform_values(frame: &VulkanFrame<'_, '_>) -> [(&'static str, f32); 6] {
+    vulkan_blend_uniform_values_for_content(frame, ContentColor::Sdr)
+}
+
+/// The `niri_blend` values for a draw of the given content, as `(name, value)` pairs.
+#[cfg(feature = "vulkan")]
+pub fn vulkan_blend_uniform_values_for_content(
+    frame: &VulkanFrame<'_, '_>,
+    content: ContentColor,
+) -> [(&'static str, f32); 6] {
+    let (hdr_pq, scale) = VulkanFrameBlendState::values_from_frame(frame);
+    let sdr_to_hdr = hdr_pq && content != ContentColor::HdrPq;
+    let hdr_to_sdr = !hdr_pq && content == ContentColor::HdrPq;
+    let (linear, linear_scale, linear_to_ref) = match content {
+        ContentColor::Linear {
+            bt2020,
+            max_lum,
+            ref_lum,
+        } => (
+            if bt2020 { 2.0f32 } else { 1.0 },
+            max_lum as f32 / 10000.,
+            max_lum as f32 / ref_lum as f32,
+        ),
+        _ => (0.0, 0.0, 0.0),
+    };
+    [
+        ("niri_hdr_pq", if sdr_to_hdr { 1.0 } else { 0.0 }),
+        ("niri_ref_lum_scale", scale),
+        ("niri_linear", linear),
+        ("niri_linear_scale", linear_scale),
+        ("niri_linear_to_ref", linear_to_ref),
+        ("niri_hdr_to_sdr", if hdr_to_sdr { 1.0 } else { 0.0 }),
+    ]
+}
+
+#[cfg(feature = "vulkan")]
+fn vulkan_blend_uniforms(
+    hdr_pq: f32,
+    ref_lum_scale: f32,
+    linear: f32,
+    linear_scale: f32,
+    linear_to_ref: f32,
+    hdr_to_sdr: f32,
+) -> Vec<OwnedCustomUniform> {
+    [
+        ("niri_hdr_pq", hdr_pq),
+        ("niri_ref_lum_scale", ref_lum_scale),
+        ("niri_linear", linear),
+        ("niri_linear_scale", linear_scale),
+        ("niri_linear_to_ref", linear_to_ref),
+        ("niri_hdr_to_sdr", hdr_to_sdr),
+    ]
+    .into_iter()
+    .map(|(name, value)| OwnedCustomUniform {
+        name: name.to_owned(),
+        value: CustomUniformValue::Float(value),
+    })
+    .collect()
+}
+
+/// Installs the frame-wide default texture program override for the current Vulkan blend state.
+///
+/// Called on every frame created by `TtyRenderer::render`. On HDR frames, all default texture
+/// draws (Wayland surfaces not wrapped by [`BlendSurfaceRenderElement`], cursors, snapshot
+/// textures) are encoded into the output blend space, exactly like the GLES renderer-level
+/// `set_default_tex_program_override`.
+#[cfg(feature = "vulkan")]
+pub fn apply_vulkan_frame_blend(frame: &mut VulkanFrame<'_, '_>) {
+    let (hdr_pq, scale) = VulkanFrameBlendState::values_from_frame(frame);
+    if !hdr_pq {
+        return;
+    }
+    let Some(program) = super::shaders::get_vulkan_frame(frame).and_then(|s| s.texture_hdr.clone())
+    else {
+        warn!("HDR texture shader missing; SDR content will render raw on Vulkan");
+        return;
+    };
+    let uniforms = vulkan_blend_uniforms(1.0, scale, 0.0, 0.0, 0.0, 0.0);
+    frame.set_tex_program_override(Some((program, uniforms)));
+}
+
+/// The texture program override for a draw of the given content on Vulkan, or `None` when the
+/// frame default (the HDR encode, or the built-in shader on SDR frames) already applies.
+#[cfg(feature = "vulkan")]
+pub fn vulkan_content_override(
+    frame: &VulkanFrame<'_, '_>,
+    content: ContentColor,
+) -> Option<(
+    smithay::backend::renderer::vulkan::VulkanPixelProgram,
+    Vec<OwnedCustomUniform>,
+)> {
+    let shaders = super::shaders::get_vulkan_frame(frame)?;
+    match content {
+        ContentColor::Sdr => None,
+        ContentColor::HdrPq => {
+            if VulkanFrameBlendState::is_hdr_frame(frame) {
+                // Numeric passthrough: the blend program with every transform disabled.
+                let program = shaders.texture_hdr.clone()?;
+                Some((program, vulkan_uniforms_for_blend_space(frame)))
+            } else {
+                let program = shaders.texture_hdr_to_sdr.clone()?;
+                let scale = VulkanFrameBlendState::ref_lum_scale(frame);
+                Some((
+                    program,
+                    vec![OwnedCustomUniform {
+                        name: "niri_ref_lum_scale".to_owned(),
+                        value: CustomUniformValue::Float(scale),
+                    }],
+                ))
+            }
+        }
+        ContentColor::Linear { .. } => {
+            let program = shaders.texture_hdr.clone()?;
+            Some((program, vulkan_uniforms_for_content(frame, content)))
+        }
+    }
+}
+
+/// Encodes a solid color for the current Vulkan blend space (CPU counterpart of the shaders'
+/// `niri_blend`), matching the GLES renderer-level solid color transform.
+#[cfg(feature = "vulkan")]
+pub fn vulkan_encode_solid(frame: &VulkanFrame<'_, '_>, color: Color32F) -> Color32F {
+    let (hdr_pq, scale) = VulkanFrameBlendState::values_from_frame(frame);
+    if hdr_pq {
+        srgb_to_pq(color, scale)
+    } else {
+        color
+    }
 }
 
 /// CPU counterpart of the shaders' `niri_blend`: encodes an electrical sRGB premultiplied
@@ -460,8 +729,38 @@ impl<'render> RenderElement<TtyRenderer<'render>>
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
+        #[cfg(feature = "vulkan")]
+        if let TtyFrame::Vulkan(multi) = frame {
+            if self.content == ContentColor::Sdr {
+                // The frame default installed by `TtyRenderer::render` already encodes SDR
+                // content into the blend space (or is absent on SDR frames).
+                return RenderElement::draw(
+                    &self.inner,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                );
+            }
+            // Blend-space / extended-linear content: swap the frame program around this draw,
+            // exactly like the GLES path does with the default tex program override.
+            let vk_frame: &mut VulkanFrame<'_, '_> = multi.as_mut();
+            let saved = vk_frame.take_tex_program_override();
+            let installed = vulkan_content_override(vk_frame, self.content);
+            if let TtyFrame::Vulkan(multi) = frame {
+                multi.as_mut().set_tex_program_override(installed);
+            }
+            let res =
+                RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache);
+            if let TtyFrame::Vulkan(multi) = frame {
+                multi.as_mut().set_tex_program_override(saved);
+            }
+            return res;
+        }
+
         let Some(gles_frame) = frame.as_gles_frame() else {
-            // The blend program is GLSL; draw the surface unmodified on Vulkan.
             return RenderElement::draw(
                 &self.inner,
                 frame,
@@ -587,5 +886,228 @@ mod tests {
         // the white point rescaled by alpha.
         let half = srgb_to_pq(Color32F::new(0.5, 0.5, 0.5, 0.5), scale);
         assert!((half.r() - white.r() * 0.5).abs() < 0.0005);
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::renderer::{
+        Bind, Color32F, ExportMem, Frame as _, ImportMem, Offscreen, Renderer, Texture,
+    };
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+    use smithay::utils::{Rectangle, Size, Transform};
+
+    use super::*;
+    use crate::render_helpers::shaders::init_vulkan;
+
+    /// Runs `f` on the first usable Vulkan device; skips silently when there is none.
+    fn with_vulkan_device<T>(f: impl FnOnce(&mut VulkanRenderer, &str) -> T) -> Option<T> {
+        let instance = Instance::new(Version::VERSION_1_3, None).ok()?;
+        let devices = PhysicalDevice::enumerate(&instance).ok()?;
+        for device in devices {
+            let Ok(mut renderer) = VulkanRenderer::new(&device) else {
+                continue;
+            };
+            init_vulkan(&mut renderer, &niri_config::Config::default());
+            return Some(f(&mut renderer, device.name()));
+        }
+        None
+    }
+
+    /// Draws an opaque mid-grey SDR texture into an offscreen framebuffer in the given blend
+    /// space and returns the first framebuffer pixel (Argb8888 little-endian: B, G, R, A).
+    fn draw_mid_grey(renderer: &mut VulkanRenderer, reference_luminance: Option<f64>) -> [u8; 4] {
+        let tex_size = Size::<i32, smithay::utils::Buffer>::from((1, 1));
+        let data = [128u8, 128, 128, 255];
+        let source = renderer
+            .import_memory(&data, Fourcc::Abgr8888, tex_size, false)
+            .expect("import the mid-grey texture");
+
+        let buffer_size = Size::<i32, smithay::utils::Buffer>::from((4, 4));
+        let output_size = Size::<i32, smithay::utils::Physical>::from((4, 4));
+        let mut target = renderer
+            .create_buffer(Fourcc::Argb8888, buffer_size)
+            .expect("offscreen target");
+        let mut framebuffer = renderer.bind(&mut target).expect("bind target");
+
+        set_frame_blend_vulkan(Some(renderer), reference_luminance);
+
+        // This mirrors `TtyRenderer::render`: the frame starts with the blend-space texture
+        // program override on HDR frames and none on SDR frames.
+        let mut frame = renderer
+            .render(&mut framebuffer, output_size, Transform::Normal)
+            .expect("begin frame");
+        if VulkanFrameBlendState::is_hdr_frame(&frame) {
+            apply_vulkan_frame_blend(&mut frame);
+            // The override must be installed and be a real program.
+            let installed = frame.take_tex_program_override();
+            assert!(installed.is_some(), "HDR frame has no texture override");
+            frame.set_tex_program_override(installed);
+        } else {
+            assert!(
+                frame.take_tex_program_override().is_none(),
+                "SDR frame must not install a texture override"
+            );
+        }
+
+        let dst = Rectangle::from_size(output_size);
+        frame
+            .render_texture_from_to(
+                &source,
+                Rectangle::from_size(tex_size.to_f64()),
+                dst,
+                &[dst],
+                &[],
+                Transform::Normal,
+                1.0,
+            )
+            .expect("draw mid-grey through the default texture path");
+        frame.finish().expect("finish frame");
+
+        let mapping = renderer
+            .copy_framebuffer(
+                &framebuffer,
+                Rectangle::from_size(buffer_size),
+                Fourcc::Argb8888,
+            )
+            .expect("copy framebuffer");
+        let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+        [pixels[0], pixels[1], pixels[2], pixels[3]]
+    }
+
+    /// The real renderer proves the SDR -> PQ encode: the same SDR mid-grey texture drawn
+    /// through the HDR frame override lands at the PQ value that the GLES CPU helper
+    /// (`srgb_to_pq`) computes, while an SDR frame leaves it unchanged.
+    #[test]
+    fn vulkan_hdr_texture_override_encodes_sdr_content() {
+        let Some((hdr, sdr)) = with_vulkan_device(|renderer, name| {
+            let hdr = draw_mid_grey(renderer, Some(203.));
+            let sdr = draw_mid_grey(renderer, None);
+            eprintln!("{name}: HDR frame pixel {hdr:?}, SDR frame pixel {sdr:?}");
+            (hdr, sdr)
+        }) else {
+            return;
+        };
+
+        // The expected encoded value comes from the same CPU helper GLES uses for solid colors.
+        let expected = (srgb_to_pq(Color32F::new(0.5, 0.5, 0.5, 1.0), (203. / 10000.) as f32).r()
+            * 255.)
+            .round() as i32;
+        // Opaque mid-grey SDR output is unchanged.
+        assert!(
+            (sdr[0] as i32 - 128).abs() <= 2,
+            "SDR frame changed the texture: {sdr:?}"
+        );
+        assert!(
+            (hdr[0] as i32 - expected).abs() <= 4,
+            "HDR frame pixel {} is not the expected PQ value {expected}",
+            hdr[0]
+        );
+        // PQ-encoded reference grey is darker than its electrical sRGB value.
+        assert!(hdr[0] < sdr[0], "HDR encode did not change the pixel");
+        // Grey stays neutral through the BT.709 -> BT.2020 matrix.
+        assert!((hdr[0] as i32 - hdr[1] as i32).abs() <= 1);
+        assert!((hdr[1] as i32 - hdr[2] as i32).abs() <= 1);
+        assert_eq!(hdr[3], 255, "alpha was not preserved");
+    }
+
+    /// The override and the blend state are frame/call scoped: restoring SDR must clear both,
+    /// so screenshots and screencasts rendered afterwards stay SDR.
+    #[test]
+    fn vulkan_sdr_frames_clear_the_hdr_override() {
+        let Some(()) = with_vulkan_device(|renderer, _name| {
+            let hdr = draw_mid_grey(renderer, Some(203.));
+            assert_ne!(hdr[0], 128, "HDR frame did not encode");
+
+            // `set_frame_blend_vulkan(None)` is what the TTY backend calls after rendering the
+            // output; the next frame must be SDR with no override.
+            set_frame_blend_vulkan(Some(renderer), None);
+            assert!(!VulkanFrameBlendState::values(renderer).0);
+            let sdr = draw_mid_grey(renderer, None);
+            assert!(
+                (sdr[0] as i32 - 128).abs() <= 2,
+                "capture is not SDR: {sdr:?}"
+            );
+
+            // The capture blend keeps the reference luminance but stays SDR (= HDR content is
+            // converted back, SDR content passes through).
+            set_sdr_capture_blend_vulkan(renderer, 203.);
+            let (hdr_pq, scale) = VulkanFrameBlendState::values(renderer);
+            assert!(!hdr_pq);
+            assert!(
+                (scale - 0.0203).abs() < 1e-6,
+                "ref lum scale not kept: {scale}"
+            );
+            let capture = draw_mid_grey(renderer, None);
+            assert!((capture[0] as i32 - 128).abs() <= 2, "capture is not SDR");
+        }) else {
+            return;
+        };
+    }
+
+    /// HDR PQ content drawn into an SDR frame (capture) goes through the HDR-to-SDR texture
+    /// program, so a screenshot of an HDR client is SDR-correct rather than raw PQ.
+    #[test]
+    fn vulkan_hdr_content_converts_back_on_sdr_capture() {
+        let Some(pixel) = with_vulkan_device(|renderer, name| {
+            // PQ-encoded reference mid-grey (what the HDR frame produced above).
+            let tex_size = Size::<i32, smithay::utils::Buffer>::from((1, 1));
+            let data = [109u8, 109, 109, 255];
+            let source = renderer
+                .import_memory(&data, Fourcc::Abgr8888, tex_size, false)
+                .expect("import the PQ texture");
+
+            let buffer_size = Size::<i32, smithay::utils::Buffer>::from((4, 4));
+            let output_size = Size::<i32, smithay::utils::Physical>::from((4, 4));
+            let mut target = renderer
+                .create_buffer(Fourcc::Argb8888, buffer_size)
+                .expect("offscreen target");
+            let mut framebuffer = renderer.bind(&mut target).expect("bind target");
+
+            set_frame_blend_vulkan(Some(renderer), None);
+            let mut frame = renderer
+                .render(&mut framebuffer, output_size, Transform::Normal)
+                .expect("begin frame");
+            // What `BlendSurfaceRenderElement` installs for HDR PQ content on an SDR frame.
+            let installed = vulkan_content_override(&frame, ContentColor::HdrPq);
+            assert!(installed.is_some(), "HDR-to-SDR program missing");
+            frame.set_tex_program_override(installed);
+
+            let dst = Rectangle::from_size(output_size);
+            frame
+                .render_texture_from_to(
+                    &source,
+                    Rectangle::from_size(tex_size.to_f64()),
+                    dst,
+                    &[dst],
+                    &[],
+                    Transform::Normal,
+                    1.0,
+                )
+                .expect("draw PQ content into the SDR capture");
+            frame.finish().expect("finish frame");
+
+            let mapping = renderer
+                .copy_framebuffer(
+                    &framebuffer,
+                    Rectangle::from_size(buffer_size),
+                    Fourcc::Argb8888,
+                )
+                .expect("copy framebuffer");
+            let pixels = renderer.map_texture(&mapping).expect("map framebuffer");
+            let pixel = [pixels[0], pixels[1], pixels[2], pixels[3]];
+            eprintln!("{name}: HDR->SDR capture pixel {pixel:?}");
+            pixel
+        }) else {
+            return;
+        };
+
+        assert!(
+            (pixel[0] as i32 - 128).abs() <= 4,
+            "PQ content was not converted back to SDR: {pixel:?}"
+        );
     }
 }

@@ -298,7 +298,7 @@ impl<'render> RenderElement<TtyRenderer<'render>>
             TtyFrame::Vulkan(multi),
         ) = (&self.program, &mut *frame)
         {
-            use smithay::backend::renderer::vulkan::{CustomUniformValue, OwnedCustomUniform};
+            use smithay::backend::renderer::vulkan::OwnedCustomUniform;
 
             let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
                 multi.as_mut();
@@ -307,19 +307,10 @@ impl<'render> RenderElement<TtyRenderer<'render>>
                 .iter()
                 .filter_map(super::shader_element::uniform_to_custom_owned)
                 .collect();
-            for (name, value) in [
-                ("niri_hdr_pq", 0.0),
-                ("niri_ref_lum_scale", 1.0),
-                ("niri_linear", 0.0),
-                ("niri_linear_scale", 0.0),
-                ("niri_linear_to_ref", 0.0),
-                ("niri_hdr_to_sdr", 0.0),
-            ] {
-                uniforms.push(OwnedCustomUniform {
-                    name: name.to_owned(),
-                    value: CustomUniformValue::Float(value),
-                });
-            }
+            uniforms.extend(super::blend::vulkan_uniforms_for_content(
+                vk_frame,
+                self.content,
+            ));
             let saved = vk_frame.take_tex_program_override();
             vk_frame.set_tex_program_override(Some((program.clone(), uniforms)));
             let res =
