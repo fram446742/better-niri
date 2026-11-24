@@ -101,10 +101,10 @@ pub fn snapshot(outputs: &BTreeMap<String, Output>) -> Profile {
             entry.scale = Some(logical.scale);
             entry.transform = Some(logical.transform);
             entry.position = Some((logical.x, logical.y));
-            if let Some(index) = output.current_mode {
-                if let Some(mode) = output.modes.get(index) {
-                    entry.mode = Some((mode.width, mode.height, mode.refresh_rate));
-                }
+            if let Some(index) = output.current_mode
+                && let Some(mode) = output.modes.get(index)
+            {
+                entry.mode = Some((mode.width, mode.height, mode.refresh_rate));
             }
             entry.vrr = Some(output.vrr_enabled);
         } else {

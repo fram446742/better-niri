@@ -256,8 +256,8 @@ pub fn watch(
         };
         match event {
             Event::WorkspacesChanged { workspaces } => {
-                if let Some(ws) = workspaces.iter().find(|ws| ws.is_focused) {
-                    if watcher
+                if let Some(ws) = workspaces.iter().find(|ws| ws.is_focused)
+                    && watcher
                         .apply(
                             scene,
                             ws.name.as_deref(),
@@ -265,9 +265,8 @@ pub fn watch(
                         )
                         .map_err(|err| format!("event stream: {err}"))?
                         .is_some()
-                    {
-                        applied += 1;
-                    }
+                {
+                    applied += 1;
                 }
             }
             Event::WorkspaceActivated { id, focused } => {
@@ -278,8 +277,8 @@ pub fn watch(
                     Ok(Response::Workspaces(workspaces)) => workspaces,
                     _ => continue,
                 };
-                if let Some(ws) = workspaces.iter().find(|ws| ws.id == id) {
-                    if watcher
+                if let Some(ws) = workspaces.iter().find(|ws| ws.id == id)
+                    && watcher
                         .apply(
                             scene,
                             ws.name.as_deref(),
@@ -287,9 +286,8 @@ pub fn watch(
                         )
                         .map_err(|err| format!("event stream: {err}"))?
                         .is_some()
-                    {
-                        applied += 1;
-                    }
+                {
+                    applied += 1;
                 }
             }
             _ => {}
@@ -304,11 +302,29 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
 
     use serde_json::json;
 
     use super::*;
+
+    /// Waits until the file content matches `predicate` (commands run in
+    /// detached processes, so completion is not synchronous).
+    fn wait_for(path: &Path, predicate: impl Fn(&str) -> bool, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && predicate(&text)
+            {
+                return;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for {what}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -424,6 +440,7 @@ mod tests {
         let mut watcher = Watcher::new(&template, false);
         watcher.apply(&scene, Some("main"), "eDP-1").unwrap();
         watcher.apply(&scene, Some("web"), "HDMI-1").unwrap();
+        wait_for(&log, |text| text.lines().count() == 2, "both images");
         watcher.finish();
         let contents = std::fs::read_to_string(&log).unwrap();
         assert_eq!(contents, "/a.png\n/b.png\n");
@@ -453,6 +470,7 @@ mod tests {
         // image is current for the output.
         assert_eq!(watcher.applied["eDP-1"], "/b.png");
         assert_eq!(watcher.children.len(), 1);
+        wait_for(&log, |text| text.lines().count() == 2, "replaced images");
         watcher.finish();
         let lines = std::fs::read_to_string(&log).unwrap();
         assert_eq!(lines.lines().count(), 2);

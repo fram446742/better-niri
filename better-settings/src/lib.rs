@@ -201,7 +201,7 @@ fn strip_comments(line: &str, in_block_comment: &mut bool) -> String {
             continue;
         }
         if bytes[index..].starts_with(b"//") {
-            out.extend(std::iter::repeat(' ').take(line.len() - index));
+            out.extend(std::iter::repeat_n(' ', line.len() - index));
             break;
         }
         let ch = line[index..].chars().next().unwrap();
@@ -381,20 +381,19 @@ pub fn scan(text: &str) -> Result<Scan, PatchError> {
             });
             continue;
         }
-        if let Some(slot) = key_indents.last_mut() {
-            if slot.is_none() {
-                *slot = Some(indent);
-            }
+        if let Some(slot) = key_indents.last_mut()
+            && slot.is_none()
+        {
+            *slot = Some(indent);
         }
         if let Some(block) = scan
             .blocks
             .iter_mut()
             .rev()
             .find(|block| block.path == stack)
+            && block.key_indent.is_none()
         {
-            if block.key_indent.is_none() {
-                block.key_indent = Some(indent);
-            }
+            block.key_indent = Some(indent);
         }
         let mut path = stack.clone();
         path.push(Segment::new(key));
@@ -926,9 +925,10 @@ prefer-no-csd
             value_of(CONFIG, "output \"HDMI-A-1\".scale").as_deref(),
             Some("1")
         );
-        assert!(scan
-            .block(&parse_path("output \"eDP-1\"").unwrap())
-            .is_some());
+        assert!(
+            scan.block(&parse_path("output \"eDP-1\"").unwrap())
+                .is_some()
+        );
         // Bare flags are reported as `true` while the line is present.
         assert_eq!(
             value_of(CONFIG, "input.touchpad.tap").as_deref(),

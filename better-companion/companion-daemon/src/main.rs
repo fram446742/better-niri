@@ -51,15 +51,13 @@ fn main() -> ExitCode {
 
 fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()> {
     let (registry, parking) = build_registry_with_parking(socket)?;
-    if track {
-        if let Some(niri_socket) = companion_niri::socket_from_env() {
-            let parking = parking.clone();
-            let swallow = companion_niri::Swallow::from_state_dir(
-                parking.clone(),
-                companion_niri::Compositor::from_env(),
-            )?;
-            std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking, swallow));
-        }
+    if track && let Some(niri_socket) = companion_niri::socket_from_env() {
+        let parking = parking.clone();
+        let swallow = companion_niri::Swallow::from_state_dir(
+            parking.clone(),
+            companion_niri::Compositor::from_env(),
+        )?;
+        std::thread::spawn(move || companion_niri::run_tracker(niri_socket, parking, swallow));
     }
     let registry = std::sync::Arc::new(registry);
     let listener = bind(socket)?;

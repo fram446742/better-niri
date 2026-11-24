@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use companion_core::{ActionInfo, Context};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct System {
     socket: PathBuf,

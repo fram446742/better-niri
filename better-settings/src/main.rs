@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use better_settings::{
-    config_path, current, normalize, patch_many, save, Edit, Kind, SettingSpec, CATALOG,
+    CATALOG, Edit, Kind, SettingSpec, config_path, current, normalize, patch_many, save,
 };
 use gtk::prelude::*;
 use gtk4 as gtk;

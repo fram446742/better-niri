@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use better_session::{execute, plan, query, snapshot, state_path, Session, Store};
+use better_session::{Session, Store, execute, plan, query, snapshot, state_path};
 
 fn usage() -> &'static str {
     "better-session [--socket PATH] <command>\n\n\

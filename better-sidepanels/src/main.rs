@@ -9,26 +9,23 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use better_sidepanels::{config_path, Panel, PanelConfig, Side};
-use calloop::timer::{TimeoutAction, Timer};
+use better_sidepanels::{Panel, PanelConfig, Side, config_path};
 use calloop::EventLoop;
+use calloop::timer::{TimeoutAction, Timer};
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
+use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
-use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
-use smithay_client_toolkit::{
-    delegate_registry,
-    registry_handlers,
-};
+use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
@@ -403,10 +400,10 @@ impl SeatHandler for Sidepanels {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Pointer {
-            if let Some(pointer) = self.pointer.take() {
-                pointer.release();
-            }
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
         }
     }
 
@@ -439,10 +436,10 @@ impl PointerHandler for Sidepanels {
                     }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                    if let Some(row) = self.panel.hit(event.position.0, event.position.1) {
-                        if let Err(err) = self.panel.activate(row) {
-                            eprintln!("better-sidepanels: {err}");
-                        }
+                    if let Some(row) = self.panel.hit(event.position.0, event.position.1)
+                        && let Err(err) = self.panel.activate(row)
+                    {
+                        eprintln!("better-sidepanels: {err}");
                     }
                 }
                 _ => {}

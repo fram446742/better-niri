@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use companion_core::{load_json, save_json, ActionInfo, Context};
+use companion_core::{ActionInfo, Context, load_json, save_json};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {

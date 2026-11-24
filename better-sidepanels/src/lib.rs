@@ -513,18 +513,18 @@ impl Panel {
         ctx.show_text(&label)
             .map_err(|err| format!("cairo: {err}"))?;
 
-        if row.module.is_some() {
-            if let Some(output) = self.outputs.get(index).filter(|out| !out.is_empty()) {
-                ctx.set_source_rgba_tuple(colors.dim.cairo());
-                ctx.set_font_size(12.);
-                let text = truncate(ctx, output, 90.)?;
-                let extents = ctx
-                    .text_extents(&text)
-                    .map_err(|err| format!("cairo: {err}"))?;
-                ctx.move_to(x + w - 12. - extents.width(), baseline);
-                ctx.show_text(&text)
-                    .map_err(|err| format!("cairo: {err}"))?;
-            }
+        if row.module.is_some()
+            && let Some(output) = self.outputs.get(index).filter(|out| !out.is_empty())
+        {
+            ctx.set_source_rgba_tuple(colors.dim.cairo());
+            ctx.set_font_size(12.);
+            let text = truncate(ctx, output, 90.)?;
+            let extents = ctx
+                .text_extents(&text)
+                .map_err(|err| format!("cairo: {err}"))?;
+            ctx.move_to(x + w - 12. - extents.width(), baseline);
+            ctx.show_text(&text)
+                .map_err(|err| format!("cairo: {err}"))?;
         }
         Ok(())
     }

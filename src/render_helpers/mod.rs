@@ -66,6 +66,8 @@ pub mod surface;
 #[cfg(feature = "cursor")]
 pub mod svg;
 pub mod texture;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
 pub mod xray;
 
 /// A rendering context.

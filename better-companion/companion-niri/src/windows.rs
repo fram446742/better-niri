@@ -5,7 +5,7 @@
 
 use companion_core::{ActionInfo, Context};
 use niri_ipc::{Action, Request, Response, Window};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::Compositor;
 
@@ -26,28 +26,26 @@ impl Windows {
     }
 
     fn matches(window: &Window, params: &Value) -> bool {
-        if let Some(app_id) = params.get("app_id").and_then(Value::as_str) {
-            if !window
+        if let Some(app_id) = params.get("app_id").and_then(Value::as_str)
+            && !window
                 .app_id
                 .as_deref()
                 .is_some_and(|value| value.to_lowercase().contains(&app_id.to_lowercase()))
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(title) = params.get("title").and_then(Value::as_str) {
-            if !window
+        if let Some(title) = params.get("title").and_then(Value::as_str)
+            && !window
                 .title
                 .as_deref()
                 .is_some_and(|value| value.to_lowercase().contains(&title.to_lowercase()))
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(workspace) = params.get("workspace").and_then(Value::as_u64) {
-            if window.workspace_id != Some(workspace) {
-                return false;
-            }
+        if let Some(workspace) = params.get("workspace").and_then(Value::as_u64)
+            && window.workspace_id != Some(workspace)
+        {
+            return false;
         }
         true
     }

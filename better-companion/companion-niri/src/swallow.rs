@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use companion_core::{load_json, save_json, ActionInfo, Context};
+use companion_core::{ActionInfo, Context, load_json, save_json};
 use companion_parking::Parking;
 use niri_ipc::{Action, Request, Response, Window};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::Compositor;
 
@@ -347,11 +347,13 @@ mod tests {
             .unwrap();
         let status = swallow.call("status", &Value::Null).unwrap();
         assert_eq!(status["enabled"], true);
-        assert!(status["terminals"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "myterm"));
+        assert!(
+            status["terminals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "myterm")
+        );
 
         let reloaded = Swallow::load(
             dir.join("swallow.json"),

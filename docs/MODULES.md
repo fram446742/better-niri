@@ -67,11 +67,19 @@ Proposed modules:
 Nothing here requires downloading code at runtime. A "minimal" build is
 `--no-default-features` plus the core, not a plugin marketplace.
 
-### Tier 3 — Companion services (separate repositories, IPC)
+### Tier 3 — Companion services (currently excluded in-repo workspaces, IPC)
 
 Policy, automation, UI and long-running workflows. They must work without the
 compositor exposing internals, survive a compositor restart, and fail without
 crashing the session.
+
+Delivery note: per the current instruction not to create new repositories, the
+Tier 3 services ship as **separate Cargo workspaces excluded from niri's
+workspace** inside this repository (`better-companion/`, `better-portal/`,
+`better-monitor/`, `better-session/`, `better-shot/`, `better-wallpaper/`,
+`better-settings/`, `better-audio/`, `better-sidepanels/`). Each has its own
+`Cargo.toml`, `[workspace]`, tests and README, so it can be split into its own
+repository later with history intact.
 
 - **better-nsticky** — sticky/staged windows, persistent state, scratchpads,
   selectors. Owns the sticky/staged *workflow*; the compositor owns the sticky
@@ -318,4 +326,12 @@ compositor IPC fallback.
   buffers, per-host panel caches and click hits, panel rendering and
   prepasses, and the panel element variants. Only thin layout plumbing and
   no-op stubs remain.
+- `vulkan` (default on): compiles better-smithay's Vulkan backend/renderer,
+  probes physical devices at startup (`Instance` → `PhysicalDevice` set →
+  `VulkanRenderer::new` per device), applies `NIRI_RENDERER` (`auto`/`gles`/
+  `vulkan`) and falls back to EGL/GLES with a logged reason. `niri
+  --check-vulkan` prints preference, active path, render-tree capability,
+  per-device support and the fallback reason as JSON. The output render tree
+  remains `GlesRenderer` until the renderer-generic refactor; the feature makes
+  that switch a focused change and gives users a real readiness report today.
 - `agent` (off by default): the automation seat.

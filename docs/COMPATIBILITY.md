@@ -86,7 +86,7 @@ clean checkouts and CI.
 | GLES + HDR | Planned | GPU/driver matrix; colour and transparency tests. |
 | Vulkan + SDR | Planned, optional | Format import, sync, scanout, capture. |
 | Vulkan + HDR | Planned, optional | Tone mapping, scanout formats, Nvidia fences. |
-| Vulkan requested but unsupported | Must fall back to GLES with a clear log/config error | Test with a Vulkan-less build/GPU. |
+| Vulkan requested but unsupported | Must fall back to GLES with a clear log/config error | Implemented: `NIRI_RENDERER=vulkan` logs the reason; `niri --check-vulkan` prints the plan. Test with a Vulkan-less build/GPU. |
 | Software EGL (llvmpipe) | Upstream rejects; planned support | VM test. |
 | Multi-GPU (render on dGPU, scan out on iGPU) | Partial upstream | Hybrid laptop test; format list `Abgr2101010` already accounts for Nvidia copy quirks. |
 

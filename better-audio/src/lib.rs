@@ -199,15 +199,14 @@ pub fn plan(
     }
     plan.unresolved = unresolved.into_iter().collect();
 
-    if let Some(wanted) = store.default_sink.as_deref() {
-        if let Some(sink) = resolve_sink(sinks, wanted) {
-            if current_default != Some(sink.name.as_str()) {
-                plan.default = Some((
-                    current_default.unwrap_or_default().to_owned(),
-                    sink.name.clone(),
-                ));
-            }
-        }
+    if let Some(wanted) = store.default_sink.as_deref()
+        && let Some(sink) = resolve_sink(sinks, wanted)
+        && current_default != Some(sink.name.as_str())
+    {
+        plan.default = Some((
+            current_default.unwrap_or_default().to_owned(),
+            sink.name.clone(),
+        ));
     }
     plan
 }

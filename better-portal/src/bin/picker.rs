@@ -15,16 +15,14 @@ use smithay_client_toolkit::seat::keyboard::{
 };
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
+use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
-use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
-use smithay_client_toolkit::{
-    delegate_registry, registry_handlers,
-};
+use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
@@ -217,7 +215,7 @@ impl Picker {
             }
         };
 
-        for pixel in canvas.chunks_exact_mut(4) {
+        for pixel in canvas.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[0, 0, 0, 0x66]);
         }
 
@@ -421,15 +419,17 @@ impl SeatHandler for Picker {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Keyboard && self.keyboard.is_none() {
-            if let Ok(keyboard) = self.seat_state.get_keyboard(qh, &seat, None) {
-                self.keyboard = Some(keyboard);
-            }
+        if capability == Capability::Keyboard
+            && self.keyboard.is_none()
+            && let Ok(keyboard) = self.seat_state.get_keyboard(qh, &seat, None)
+        {
+            self.keyboard = Some(keyboard);
         }
-        if capability == Capability::Pointer && self.pointer.is_none() {
-            if let Ok(pointer) = self.seat_state.get_pointer(qh, &seat) {
-                self.pointer = Some(pointer);
-            }
+        if capability == Capability::Pointer
+            && self.pointer.is_none()
+            && let Ok(pointer) = self.seat_state.get_pointer(qh, &seat)
+        {
+            self.pointer = Some(pointer);
         }
     }
 
@@ -440,15 +440,15 @@ impl SeatHandler for Picker {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Keyboard {
-            if let Some(keyboard) = self.keyboard.take() {
-                keyboard.release();
-            }
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
         }
-        if capability == Capability::Pointer {
-            if let Some(pointer) = self.pointer.take() {
-                pointer.release();
-            }
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
         }
     }
 

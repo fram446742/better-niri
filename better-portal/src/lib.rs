@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value as JsonValue;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
-use zbus::{fdo, interface, ObjectServer, Proxy};
+use zbus::{ObjectServer, Proxy, fdo, interface};
 
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.better";
 pub const OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -180,12 +180,12 @@ pub fn picker_program() -> Option<std::path::PathBuf> {
     if let Some(path) = std::env::var_os("BETTER_PORTAL_PICKER") {
         return Some(std::path::PathBuf::from(path));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("better-portal-picker");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("better-portal-picker");
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     let path = std::env::var_os("PATH")?;
@@ -218,7 +218,7 @@ fn run_picker_mode(program: &std::path::Path, mode: PickerMode) -> Result<Picker
         match command.output() {
             Ok(output) => break output,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(PickerOutcome::Unavailable)
+                return Ok(PickerOutcome::Unavailable);
             }
             Err(err) if err.raw_os_error() == Some(26) && attempts < 3 => {
                 attempts += 1;
