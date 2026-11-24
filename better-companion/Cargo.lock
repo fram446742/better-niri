@@ -45,8 +45,10 @@ dependencies = [
  "companion-automation",
  "companion-core",
  "companion-hooks",
+ "companion-idle",
  "companion-niri",
  "companion-parking",
+ "companion-rotate",
  "companion-rules",
  "companion-system",
  "serde_json",
@@ -57,6 +59,17 @@ name = "companion-hooks"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "companion-idle"
+version = "0.1.0"
+dependencies = [
+ "companion-core",
+ "companion-niri",
+ "niri-ipc",
  "serde",
  "serde_json",
 ]
@@ -78,6 +91,17 @@ name = "companion-parking"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "companion-rotate"
+version = "0.1.0"
+dependencies = [
+ "companion-core",
+ "companion-niri",
+ "niri-ipc",
  "serde",
  "serde_json",
 ]
