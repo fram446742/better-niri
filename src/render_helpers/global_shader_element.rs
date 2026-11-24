@@ -434,7 +434,7 @@ impl GlobalShaderElement {
             .clone()
             .unwrap_or_else(|| source_tex.clone());
 
-        let uniforms = self.vulkan_uniforms(dst.size);
+        let uniforms = self.vulkan_uniforms(frame, dst.size);
         let n = programs.len();
         {
             let mut display = self.vulkan.display.borrow_mut();
@@ -528,6 +528,7 @@ impl GlobalShaderElement {
     /// Builds the uniform set expected by the compiled global pass programs.
     fn vulkan_uniforms(
         &self,
+        frame: &VulkanFrame<'_, '_>,
         dst_size: smithay::utils::Size<i32, Physical>,
     ) -> Vec<CustomUniform<'static>> {
         let mut uniforms = vec![
@@ -556,20 +557,16 @@ impl GlobalShaderElement {
                 value: CustomUniformValue::Float(self.scale),
             },
         ];
-        // SDR blend-space defaults; Vulkan HDR output is not wired yet.
-        for (name, value) in [
-            ("niri_hdr_pq", 0.0),
-            ("niri_ref_lum_scale", 1.0),
-            ("niri_linear", 0.0),
-            ("niri_linear_scale", 0.0),
-            ("niri_linear_to_ref", 0.0),
-            ("niri_hdr_to_sdr", 0.0),
-        ] {
-            uniforms.push(CustomUniform {
-                name,
-                value: CustomUniformValue::Float(value),
-            });
-        }
+        // The frame blend state feeds the pass's `niri_blend` stage (custom passes may call it;
+        // the shipped passes write their shader output straight through).
+        uniforms.extend(
+            crate::render_helpers::blend::vulkan_blend_uniform_values(frame)
+                .into_iter()
+                .map(|(name, value)| CustomUniform {
+                    name,
+                    value: CustomUniformValue::Float(value),
+                }),
+        );
         uniforms
     }
 }

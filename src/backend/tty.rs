@@ -88,6 +88,8 @@ use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::blend::{self, DEFAULT_REFERENCE_LUMINANCE, set_frame_blend};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
+#[cfg(feature = "vulkan")]
+use crate::render_helpers::renderer::AsVulkanRenderer;
 use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget, resources, shaders};
 use crate::utils::{PanelOrientation, get_monotonic_time, is_laptop_panel, logical_output};
 
@@ -2697,6 +2699,8 @@ impl Tty {
 
         // Hand them over to the DRM.
         set_frame_blend(renderer.as_gles_renderer(), blend);
+        #[cfg(feature = "vulkan")]
+        blend::set_frame_blend_vulkan(renderer.as_vulkan_renderer(), blend);
         let drm_compositor = &mut surface.compositor;
         let render_frame_result = drm_compositor.render_frame::<_, _>(
             &mut renderer,
@@ -2706,6 +2710,8 @@ impl Tty {
             presentation_mode,
         );
         set_frame_blend(renderer.as_gles_renderer(), None);
+        #[cfg(feature = "vulkan")]
+        blend::set_frame_blend_vulkan(renderer.as_vulkan_renderer(), None);
         match render_frame_result {
             Ok(res) => {
                 // Global post-process shader ping-pong: the element wrote each pass's captured

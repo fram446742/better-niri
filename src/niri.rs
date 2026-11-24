@@ -11074,9 +11074,17 @@ impl Niri {
         let size = transform.transform_size(size);
 
         let scale = Scale::from(output.current_scale().fractional_scale());
-        // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+        // Capture stays SDR on both backends; the Vulkan call also keeps the reference
+        // luminance used to convert HDR content back to SDR.
         if let Some(gles) = renderer.as_gles_renderer() {
             set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(vulkan) = renderer.as_vulkan_renderer() {
+            crate::render_helpers::blend::set_sdr_capture_blend_vulkan(
+                vulkan,
+                self.output_capture_reference_luminance(output),
+            );
         }
         let ctx = RenderCtx {
             renderer: &mut *renderer,
@@ -11207,9 +11215,17 @@ impl Niri {
         }
         let pointer_count = elements.len();
 
-        // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+        // Capture stays SDR on both backends; the Vulkan call also keeps the reference
+        // luminance used to convert HDR content back to SDR.
         if let Some(gles) = renderer.as_gles_renderer() {
             set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+        }
+        #[cfg(feature = "vulkan")]
+        if let Some(vulkan) = renderer.as_vulkan_renderer() {
+            crate::render_helpers::blend::set_sdr_capture_blend_vulkan(
+                vulkan,
+                self.output_capture_reference_luminance(output),
+            );
         }
         let ctx = RenderCtx {
             renderer: &mut *renderer,
@@ -11556,9 +11572,17 @@ impl Niri {
             )
             .context("error rendering")?;
 
-            // The blend-space override is GLES-only; the Vulkan renderer handles SDR itself.
+            // Capture stays SDR on both backends; the Vulkan call also keeps the reference
+            // luminance used to convert HDR content back to SDR.
             if let Some(gles) = renderer.as_gles_renderer() {
                 set_sdr_capture_blend(gles, self.output_capture_reference_luminance(output));
+            }
+            #[cfg(feature = "vulkan")]
+            if let Some(vulkan) = renderer.as_vulkan_renderer() {
+                crate::render_helpers::blend::set_sdr_capture_blend_vulkan(
+                    vulkan,
+                    self.output_capture_reference_luminance(output),
+                );
             }
             let buffer = TextureBuffer::from_tty_texture(
                 texture,

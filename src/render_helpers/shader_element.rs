@@ -727,11 +727,13 @@ impl ShaderRenderElement {
             return Ok(());
         };
 
+        let blend_uniforms = super::blend::vulkan_uniforms(frame);
         let mut uniforms: Vec<CustomUniform<'_>> = self
             .additional_uniforms
             .iter()
             .filter_map(uniform_to_custom)
             .collect();
+        uniforms.extend(blend_uniforms.iter().map(|uniform| uniform.borrow()));
         uniforms.push(CustomUniform {
             name: "niri_size",
             value: CustomUniformValue::Vec2([dst.size.w as f32, dst.size.h as f32]),
@@ -740,20 +742,6 @@ impl ShaderRenderElement {
             name: "niri_scale",
             value: CustomUniformValue::Float(self.scale),
         });
-        // SDR blend-space defaults; Vulkan HDR output is not wired yet.
-        for (name, value) in [
-            ("niri_hdr_pq", 0.0),
-            ("niri_ref_lum_scale", 1.0),
-            ("niri_linear", 0.0),
-            ("niri_linear_scale", 0.0),
-            ("niri_linear_to_ref", 0.0),
-            ("niri_hdr_to_sdr", 0.0),
-        ] {
-            uniforms.push(CustomUniform {
-                name,
-                value: CustomUniformValue::Float(value),
-            });
-        }
 
         frame.render_custom(&program, dst, damage, &uniforms, &textures, self.alpha)
     }

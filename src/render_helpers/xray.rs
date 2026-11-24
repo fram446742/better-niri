@@ -629,20 +629,9 @@ impl XrayElement {
                 value: CustomUniformValue::Float(value),
             });
         }
-        // SDR blend-space defaults; Vulkan HDR output is not wired yet.
-        for (name, value) in [
-            ("niri_hdr_pq", 0.0),
-            ("niri_ref_lum_scale", 1.0),
-            ("niri_linear", 0.0),
-            ("niri_linear_scale", 0.0),
-            ("niri_linear_to_ref", 0.0),
-            ("niri_hdr_to_sdr", 0.0),
-        ] {
-            owned.push(OwnedCustomUniform {
-                name: name.to_owned(),
-                value: CustomUniformValue::Float(value),
-            });
-        }
+        // The shared backdrop buffer holds SDR content, encoded like any other frame draw.
+        let blend_uniforms = super::blend::vulkan_uniforms(frame);
+        owned.extend(blend_uniforms);
         let uniforms: Vec<CustomUniform<'_>> = owned.iter().map(|u| u.borrow()).collect();
 
         // The mask branch is disabled without a mask, but the sampler is still declared; sample
