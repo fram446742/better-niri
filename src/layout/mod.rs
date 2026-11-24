@@ -46,7 +46,6 @@ use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::{self, Output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
@@ -7796,13 +7795,17 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn store_unmap_snapshot(
+    pub fn store_unmap_snapshot<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         window: &W::Id,
-    ) {
+    ) where
+        LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+        TileRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let _span = tracy_client::span!("Layout::store_unmap_snapshot");
 
         let zoom = self.overview_zoom();
@@ -7908,12 +7911,14 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_window<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         window: &W::Id,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+    {
         let _span = tracy_client::span!("Layout::start_close_animation_for_window");
 
         let zoom = self.overview_zoom();

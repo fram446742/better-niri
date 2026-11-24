@@ -7,7 +7,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::{CenterFocusedColumn, PresetSize, Struts};
 use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
 use ordered_float::NotNan;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::element::RenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::axis::AxisMap;
@@ -2031,12 +2031,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         true
     }
 
-    pub fn start_close_animation_for_window(
+    pub fn start_close_animation_for_window<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         window: &W::Id,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let (tile, mut tile_pos) = self
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| tile.window().id() == window)
@@ -2092,14 +2094,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker, true);
     }
 
-    pub fn start_close_animation_for_window_at(
+    pub fn start_close_animation_for_window_at<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         window: &W::Id,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let Some(snapshot) = self
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| tile.window().id() == window)
@@ -2113,15 +2117,17 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         );
     }
 
-    fn start_close_animation_for_tile(
+    fn start_close_animation_for_tile<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         snapshot: TileRenderSnapshot,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
         compensate_view_movements: bool,
-    ) {
+    ) where
+        PrimaryGpuTextureRenderElement: RenderElement<R>,
+    {
         let anim = Animation::new(
             self.clock.clone(),
             0.,
@@ -3999,9 +4005,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 self.view_size,
             ));
             for closing in self.closing_windows.iter().rev() {
-                if let Some(gles) = ctx.as_gles()
-                    && let Some(elem) = closing.render(gles, view_rect, scale)
-                {
+                if let Some(elem) = closing.render(ctx.r(), view_rect, scale) {
                     push(elem.into());
                 }
             }

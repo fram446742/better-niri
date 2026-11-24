@@ -945,11 +945,19 @@ impl XdgShellHandler for State {
 
         let transaction = Transaction::new();
         let blocker = transaction.blocker();
-        self.backend.with_primary_renderer(|renderer| {
+        let started = self.backend.with_primary_renderer(|renderer| {
             self.niri
                 .layout
-                .start_close_animation_for_window(renderer, &window, blocker);
+                .start_close_animation_for_window(renderer, &window, blocker.clone());
         });
+        if started.is_none() {
+            // Vulkan-only TTY session: no GLES primary renderer.
+            self.backend.with_primary_tty_renderer(|renderer| {
+                self.niri
+                    .layout
+                    .start_close_animation_for_window(renderer, &window, blocker);
+            });
+        }
 
         let active_window = self.niri.layout.focus().map(|m| &m.window);
         let was_active = active_window == Some(&window);
