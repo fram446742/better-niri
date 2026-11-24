@@ -4,12 +4,13 @@ How Better Niri is packaged, which system versions it needs, and what is known
 to work with it. The packaging tree is deliberately additive: it does not
 change niri's source, workspace manifests or `Cargo.lock`.
 
-- `packaging/arch/` — Arch/CachyOS source packages (`niri-better` and the
-  `better-desktop` meta package).
-- `packaging/aur/` — AUR recipes: `niri-better` (pinned source) and
-  `niri-better-git` (tracks `integration/elite-base`). The existing root
-  `packaging/aur/PKGBUILD` is the older `niri-elite-git` recipe targeting the
-  `main` branch; it is left untouched.
+- `packaging/arch/` — Arch/CachyOS split source package base (`niri-better`)
+  plus one package per companion and the `better-desktop` meta package.
+- `packaging/aur/` — AUR split recipes: `niri-better` (pinned source) and
+  `niri-better-git` (tracks `integration/elite-base`); both produce the same
+  `niri-better`, `better-*` and `better-desktop` package names. The existing
+  root `packaging/aur/PKGBUILD` is the older `niri-elite-git` recipe targeting
+  the `main` branch; it is left untouched.
 - `packaging/profiles/` — minimal, desktop and full installation profiles.
 - `packaging/scripts/` — profile builds, manifest report and the packaging
   verifier.
@@ -18,17 +19,20 @@ change niri's source, workspace manifests or `Cargo.lock`.
 
 | Distribution / channel | Status | Artifacts | Notes |
 | --- | --- | --- | --- |
-| Arch Linux | source package provided | `packaging/arch/PKGBUILD` | Builds the compositor with default features and all companion apps. Not in an official repository. |
+| Arch Linux | source package provided | `packaging/arch/PKGBUILD` | Split build: `niri-better`, one package per companion and `better-desktop`. Not in an official repository. |
 | CachyOS | source package provided | same as Arch | CachyOS is Arch-compatible; `makepkg` works as-is. Use the tuned toolchain your system provides. |
-| AUR | recipes provided, not published | `packaging/aur/niri-better`, `packaging/aur/niri-better-git` | Publish only by copying `PKGBUILD` + `.SRCINFO` into the AUR repository. |
+| AUR | recipes provided, not published | `packaging/aur/niri-better`, `packaging/aur/niri-better-git` | Both are split recipes. Publish by copying the `PKGBUILD`, `.SRCINFO` and local recipe files into the AUR repository. |
 | Fedora | unmaintained in this tree | `niri.spec.rpkg` | The upstream spec exists but is not validated against this branch's extra crates and portal files. |
 | NixOS | compositor only | `flake.nix` | The flake builds niri, not the excluded companion workspaces. |
 | Debian/Ubuntu | metadata only | `Cargo.toml` `[package.metadata.deb]` | No Debian source package is maintained here. |
 | Other distributions | build from source | `packaging/profiles/` | Use the profile scripts or reproduce their `cargo` commands. |
 
-Conflicts: `niri-better`, `niri-better-git` and `niri-elite-git` all install
-`/usr/bin/niri`, `/usr/bin/niri-session` and the same session files. They
-conflict with `niri`, `niri-git`, `niri-elite` and each other.
+Conflicts: the `niri-better` package from every recipe installs
+`/usr/bin/niri`, `/usr/bin/niri-session` and the same session files. It
+conflicts with `niri`, `niri-git`, `niri-elite`, `niri-elite-git` and replaces
+`niri`. Companion packages keep the same names in the pinned and `-git` recipes
+(`better-portal`, `better-shot`, ...), so switching between them upgrades the
+package instead of installing a duplicate.
 
 ### Required build versions
 
@@ -93,44 +97,83 @@ The companion directories are separate Cargo workspaces. `better-portal`,
 `better-companion` and the other apps each keep their own `Cargo.lock`, so a
 root `cargo build` does not build them.
 
-## Arch and CachyOS
+## Split packages
 
-Build and install the pinned package:
+Every recipe is a **split package base**. One source checkout and a single
+`build()` produce all packages below; `package_<name>()` only stages files, so
+installing a subset never rebuilds niri or another Rust crate.
+
+| Package | Binaries | Contents | depends / optdepends |
+| --- | --- | --- | --- |
+| `niri-better` | `niri`, `niri-session` | compositor, session/desktop files, `niri.portal`, `niri-portals.conf`, systemd units, completions, config, docs | niri's GL/Wayland/PipeWire/Vulkan libraries; optional portals, terminal/launcher, GPU drivers |
+| `better-portal` | `better-portal`, `better-portal-picker` | `better.portal`, systemd user unit, D-Bus activation file, example `portals.conf` | `dbus`, `systemd`; optional `xdg-desktop-portal{,-gtk}` |
+| `better-companion` | `better-companion`, `companionctl` | automation/parking daemon and control CLI | `gcc-libs`, `glibc`; optional `systemd`, `libpulse`, `libnotify` |
+| `better-monitor` | `better-monitor` | output profile save/apply/rollback | `gcc-libs`, `glibc` |
+| `better-session` | `better-session` | named workspace/window/output contexts | `gcc-libs`, `glibc` |
+| `better-shot` | `better-shot` | screenshot capture, built-in annotations | `gcc-libs`, `glibc`; optional `satty`, `wl-clipboard` |
+| `better-wallpaper` | `better-wallpaper` | per-workspace wallpaper scenes | `gcc-libs`, `glibc`, `wayland`; optional `swaybg`, `swww` |
+| `better-settings` | `better-settings`, `better-settingsctl` | GTK4 settings UI, CLI and desktop entry | `gtk4`, `gcc-libs`, `glibc` |
+| `better-audio` | `better-audio` | rule-based PipeWire routing and default sink | `libpipewire`, `gcc-libs`, `glibc`; optional `pipewire`, `wireplumber`, `libpulse`, `pulseaudio` |
+| `better-sidepanels` | `better-sidepanels` | layer-shell panels with exclusive zones | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
+| `better-desktop` | — | meta package, post-install notes | depends on every package above |
+
+`better-monitor`, `better-session` and `better-sidepanels` need no niri package
+beyond the IPC socket; `better-companion`, `better-shot`, `better-settings` and
+`better-audio` are equally independent. Only `niri-better` provides/conflicts
+with `niri`, `niri-git`, `niri-elite` and `niri-elite-git`.
+
+### Install examples
+
+Build the whole split once, then install only what you need:
 
 ```sh
 cd packaging/arch
-makepkg -si
+makepkg -s                                  # build every split in one pass
+
+sudo pacman -U niri-better-*.pkg.tar.zst    # compositor only
+sudo pacman -U niri-better-*.pkg.tar.zst \
+  better-portal-*.pkg.tar.zst \
+  better-settings-*.pkg.tar.zst             # compositor + portal + settings
+makepkg -si                                 # install the whole split, meta included
 ```
 
-The package name is `niri-better`; it provides `niri`, `niri-elite`,
-`wayland-compositor` and `xdg-desktop-portal-impl`. It installs:
-
-- `/usr/bin/niri`, `/usr/bin/niri-session`
-- `/usr/share/wayland-sessions/niri.desktop`
-- `/usr/share/xdg-desktop-portal/portals/{niri,better}.portal`
-- `/usr/share/xdg-desktop-portal/niri-portals.conf`
-- `/usr/lib/systemd/user/{niri.service,niri-shutdown.target,better-portal.service}`
-- `/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.better.service`
-- `better-portal`, `better-portal-picker`, `better-companion`, `companionctl`,
-  `better-shot`, `better-monitor`, `better-session`, `better-wallpaper`,
-  `better-settings`, `better-settingsctl`, `better-audio` and
-  `better-sidepanels` in `/usr/bin`
-- shell completions, the default config, licenses and per-app READMEs under
-  `/usr/share/doc/niri-better`
-
-There are no man pages in the tree yet; the package installs them automatically
-if `resources/man/*.1` appears later.
-
-The `better-desktop` meta package depends on `niri-better` and documents the
-post-install session and portal setup:
+Or let `makepkg` install selected packages directly:
 
 ```sh
-cd packaging/arch/better-desktop
-makepkg -si
+makepkg -si --pkg niri-better
+makepkg -si --pkg better-portal better-settings
 ```
 
-Its `.install` script only prints instructions; it never starts or enables a
+`makepkg -si --pkg` still builds all splits, but only the named packages are
+installed; install sibling packages from the same build too when they have
+local dependencies. `better-desktop` depends on every split, so install the
+whole set (plain `makepkg -si`) rather than the meta package alone. When
+`niri-better` replaces `niri`/`niri-git`, remove the other package first or let
+your helper resolve the conflict. Companion packages have no such conflict.
+
+Each package owns its own `/usr/share/doc/<package>/` README, license and
+component files. `better-portal` owns `better.portal`, its systemd/D-Bus files
+and `/usr/share/doc/better-portal/portals.conf.better.example`;
+`niri-better` owns `niri.portal` and `niri-portals.conf`. The `better-desktop`
+`.install` script only prints instructions; it never starts or enables a
 service.
+
+### Interaction with the profiles
+
+The installation profiles describe *developer source builds*, not the Arch
+subpackages. Both use the same boundaries:
+
+| Profile | Roughly equivalent Arch package set |
+| --- | --- |
+| `minimal` | build niri with no optional features; install `niri-better` for the default-feature compositor binary |
+| `desktop` | `niri-better` + `better-portal`, `better-shot`, `better-settings`, `better-monitor`, `better-session`, `better-wallpaper`, `better-audio`, `better-sidepanels` |
+| `full` | `better-desktop` (every split, including `better-companion`) |
+
+The packages always build the compositor with its default Cargo features; use
+`packaging/scripts/build-profile.sh` when you need a different feature set.
+
+There are no man pages in the tree yet; `niri-better` installs them
+automatically if `resources/man/*.1` appears later.
 
 ## Portal setup
 
@@ -144,10 +187,13 @@ The fork can use two Screenshot/ScreenCast backends:
    `better.portal`, D-Bus activation file and optional systemd user unit. It
    delegates capture to niri's IPC and adds the external layer-shell picker.
 
-Both descriptors are installed together. The broker decides through
-`portals.conf`; installing a global file that forces `better` for every desktop
-would be wrong, so the package ships better-portal's preference file as
-`/usr/share/doc/niri-better/portals.conf.better.example`.
+`niri-better` and `better-portal` install their descriptors side by side. The
+broker decides through `portals.conf`; installing a global file that forces
+`better` for every desktop would be wrong, so `better-portal` ships its
+preference file as
+`/usr/share/doc/better-portal/portals.conf.better.example`. Install
+`better-portal` to use the standalone backend; the built-in backend alone only
+needs `niri-better`.
 
 To select the standalone backend for the current user:
 
@@ -217,7 +263,7 @@ that the combination was hardware-tested in this tree.
 | fuzzel | `fuzzel` | niri default config | `Mod+D` launcher. |
 | mako / dunst | `mako`, `dunst` | desktop session | Notification daemon; either works. |
 | waybar | `waybar` | niri default config | Optional bar. |
-| better-sidepanels | bundled | companion apps | Layer-shell bar/panels with exclusive zones. |
+| better-sidepanels | `better-sidepanels` | companion apps | Layer-shell bar/panels with exclusive zones. |
 | swaybg | `swaybg` | better-wallpaper | Default `BETTER_WALLPAPER_COMMAND`. |
 | swww | `swww` | better-wallpaper | Supported through a custom command template. |
 | swaylock | `swaylock` | niri default config | `Super+Alt+L`. |
@@ -238,9 +284,12 @@ that the combination was hardware-tested in this tree.
 
 ## AUR
 
-Two recipes live under `packaging/aur/`:
+Two split recipes live under `packaging/aur/`. Both produce the same package
+names: `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
+`better-session`, `better-shot`, `better-wallpaper`, `better-settings`,
+`better-audio`, `better-sidepanels` and the `better-desktop` meta package.
 
-| Package | Source | Version |
+| Package base | Source | Version |
 | --- | --- | --- |
 | `niri-better` | pinned commit `35c0e54b` | fixed `26.4.0.elite` |
 | `niri-better-git` | `integration/elite-base` | `pkgver()` from git |
@@ -256,32 +305,43 @@ makepkg -s
 into `$srcdir/cargo-home`; `build()` uses `--frozen`, so a missing dependency
 fails instead of silently updating a lockfile. `LIBCLANG_PATH=/usr/lib` is set
 for bindgen. The source commit is exported as `NIRI_BUILD_COMMIT` so
-`niri --version` identifies the packaged revision.
+`niri --version` identifies the packaged revision. All split packages share that
+one build.
 
-Regenerate `.SRCINFO` after changing either recipe:
+Each recipe directory also carries the local recipe files that are not in the
+source checkout: `better-settings.desktop`, `better-desktop.README.md` and
+`better-desktop.install`. Keep them next to `PKGBUILD` when publishing.
+
+Regenerate `.SRCINFO` after changing any recipe:
 
 ```sh
 packaging/scripts/update-srcinfo.sh
 ```
 
-Publishing is manual and out of scope for this tree: copy `PKGBUILD` and
-`.SRCINFO` into the AUR repository and push from there. Never force-push an AUR
-history.
+Publishing is manual and out of scope for this tree: copy `PKGBUILD`,
+`.SRCINFO` and the three local recipe files into the AUR repository and push
+from there. Never force-push an AUR history.
 
 ## Verification
 
 ```sh
-packaging/scripts/verify.sh                 # syntax, profiles, metadata, .SRCINFO, cargo checks
+packaging/scripts/verify.sh                 # syntax, profiles, staging, metadata, .SRCINFO, cargo checks
 packaging/scripts/verify.sh --skip-cargo    # fast structural check
 bash -n packaging/scripts/*.sh packaging/arch/PKGBUILD \
-  packaging/arch/better-desktop/PKGBUILD packaging/aur/niri-better*/PKGBUILD
+  packaging/aur/niri-better/PKGBUILD packaging/aur/niri-better-git/PKGBUILD
 ```
 
 The verifier lints with `shellcheck` when it is installed (otherwise `bash -n`
-only), validates profiles against `cargo metadata`, checks that every binary a
-PKGBUILD installs exists as a Cargo `[[bin]]` target, checks the portal/session
-artifacts, and runs `cargo check` for all three profiles. `--skip-cargo` is
-useful in a minimal environment.
+only), validates profiles against `cargo metadata`, asserts that every recipe
+declares the same 11 split packages, and runs each `package_<name>()` against a
+fake build tree to compare its staged files with an exact manifest. It then
+checks binary ownership (each Cargo binary and `niri-session` is claimed by
+exactly one package, with no duplicates or orphans), expands every recipe with
+`makepkg --printsrcinfo` to validate `depends`/`optdepends` names and
+cross-recipe agreement, and verifies `better-desktop` depends on every split.
+`.SRCINFO` files must be current (regenerate with `update-srcinfo.sh`). Finally
+it runs `cargo check` for all three profiles; `--skip-cargo` is useful in a
+minimal environment.
 
 ## Generated from the manifests
 
@@ -300,18 +360,21 @@ dependency change.
 
 ### Components and binaries
 
-| Component | Manifest | Binaries |
-| --- | --- | --- |
-| `niri` | `Cargo.toml` | niri |
-| `portal` | `better-portal/Cargo.toml` | better-portal, better-portal-picker |
-| `companion` | `better-companion/Cargo.toml` | better-companion, companionctl |
-| `monitor` | `better-monitor/Cargo.toml` | better-monitor |
-| `session` | `better-session/Cargo.toml` | better-session |
-| `shot` | `better-shot/Cargo.toml` | better-shot |
-| `wallpaper` | `better-wallpaper/Cargo.toml` | better-wallpaper |
-| `settings` | `better-settings/Cargo.toml` | better-settings, better-settingsctl |
-| `audio` | `better-audio/Cargo.toml` | better-audio |
-| `sidepanels` | `better-sidepanels/Cargo.toml` | better-sidepanels |
+| Component | Manifest | Binaries | Package |
+| --- | --- | --- | --- |
+| `niri` | `Cargo.toml` | niri | `niri-better` |
+| `portal` | `better-portal/Cargo.toml` | better-portal, better-portal-picker | `better-portal` |
+| `companion` | `better-companion/Cargo.toml` | better-companion, companionctl | `better-companion` |
+| `monitor` | `better-monitor/Cargo.toml` | better-monitor | `better-monitor` |
+| `session` | `better-session/Cargo.toml` | better-session | `better-session` |
+| `shot` | `better-shot/Cargo.toml` | better-shot | `better-shot` |
+| `wallpaper` | `better-wallpaper/Cargo.toml` | better-wallpaper | `better-wallpaper` |
+| `settings` | `better-settings/Cargo.toml` | better-settings, better-settingsctl | `better-settings` |
+| `audio` | `better-audio/Cargo.toml` | better-audio | `better-audio` |
+| `sidepanels` | `better-sidepanels/Cargo.toml` | better-sidepanels | `better-sidepanels` |
+
+`niri-session` is a shell script shipped by `niri-better`; it is not a Cargo
+target. `better-desktop` ships no binaries.
 
 ### niri Cargo features
 
@@ -332,13 +395,10 @@ dependency change.
 
 ## Known packaging blockers
 
-- There are no man pages in the tree, so the packages install none. The
-  PKGBUILDs pick up `resources/man/*.1` automatically when they appear.
-- The companion apps are bundled in `niri-better` rather than split into
-  per-app packages. A future split would keep the same binaries and only
-  change the package boundaries.
-- `better-settings` has no `.desktop` file, so it is launched from the CLI or a
-  user-created launcher.
+- There are no man pages in the tree, so the packages install none.
+  `niri-better` picks up `resources/man/*.1` automatically when they appear.
+- `better-settings` has a desktop entry installed by its package
+  (`/usr/share/applications/better-settings.desktop`); it opens the GTK4 UI.
 - `better-companion`, `better-wallpaper watch`, `better-audio watch` and
   `better-sidepanels` have no upstream systemd units; the meta package
   documentation shows `spawn-at-startup` lines and leaves enablement to the

@@ -15,7 +15,6 @@ root=$(repo_root)
 
 recipes=(
     packaging/arch
-    packaging/arch/better-desktop
     packaging/aur/niri-better
     packaging/aur/niri-better-git
 )
@@ -23,6 +22,12 @@ recipes=(
 for recipe in "${recipes[@]}"; do
     dir=$root/$recipe
     [ -f "$dir/PKGBUILD" ] || die "missing $dir/PKGBUILD"
+    # Local recipe files (desktop entry, meta README/install) must travel with
+    # the PKGBUILD. Fail early instead of emitting a .SRCINFO whose sources are
+    # missing.
+    for local_file in better-settings.desktop better-desktop.README.md better-desktop.install; do
+        [ -f "$dir/$local_file" ] || die "missing $dir/$local_file"
+    done
     printf '==> %s/.SRCINFO\n' "$recipe"
     (
         cd "$dir"
