@@ -38,6 +38,55 @@ niri_render_elements! {
     }
 }
 
+// The macro above covers the GLES and TTY renderers. The Vulkan variant is needed when the
+// decoration-light emission prepass renders the ring into a raw `VulkanRenderer` offscreen.
+#[cfg(feature = "vulkan")]
+impl
+    smithay::backend::renderer::element::RenderElement<
+        smithay::backend::renderer::vulkan::VulkanRenderer,
+    > for FocusRingRenderElement
+{
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        src: smithay::utils::Rectangle<f64, smithay::utils::Buffer>,
+        dst: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        opaque_regions: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        use smithay::backend::renderer::element::RenderElement;
+        use smithay::backend::renderer::vulkan::VulkanRenderer;
+        match self {
+            Self::SolidColor(elem) => RenderElement::<VulkanRenderer>::draw(
+                elem,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+            Self::Gradient(elem) => RenderElement::<VulkanRenderer>::draw(
+                elem,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+        }
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut smithay::backend::renderer::vulkan::VulkanRenderer,
+    ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+        None
+    }
+}
+
 impl FocusRing {
     pub fn new(config: niri_config::FocusRing) -> Self {
         Self {
@@ -345,21 +394,12 @@ impl FocusRing {
             self.light.borrow_mut().clear();
             return None;
         };
-        // The decoration-light *program* compiles on Vulkan, but its producer
-        // (`DecorationLight::render`) blurs its emission with the raw-GLES dual-Kawase `Blur`,
-        // which has no Vulkan counterpart yet. The emission `OffscreenBuffer` itself is now
-        // backend-agnostic, but the result is still a GLES texture, so there is nothing valid to
-        // feed the Vulkan composite.
-        let Some(renderer) = renderer.as_gles_renderer() else {
-            self.light.borrow_mut().clear();
-            return None;
-        };
-        let shaders = Shaders::get(renderer);
-        if !shaders
-            .decorations
-            .borrow()
-            .contains_key(&self.custom_key.unwrap())
-            || shaders.program(ProgramType::DecorationLight).is_none()
+        // Both backends can produce the decoration light: the emission prepass is a generic
+        // `OffscreenBuffer` render and `DecorationLight::render` blurs it with the GLES or the
+        // Vulkan Dual-Kawase implementation depending on the renderer.
+        let key = self.custom_key.unwrap();
+        if !Shaders::has_decoration(renderer, key)
+            || !Shaders::has_program(renderer, ProgramType::DecorationLight)
         {
             self.light.borrow_mut().clear();
             return None;
@@ -376,14 +416,26 @@ impl FocusRing {
                     .into()
             })
             .collect();
-        match self.light.borrow_mut().render(
-            renderer,
-            sources,
-            config,
-            self.config.width,
-            location,
-            alpha,
-        ) {
+        // Dispatch to the concrete backend: the emission prepass is rendered into a raw
+        // renderer-owned offscreen, so it needs `GlesRenderer` or `VulkanRenderer` rather than
+        // the type-erased `TtyRenderer`.
+        let mut light = self.light.borrow_mut();
+        #[cfg(feature = "vulkan")]
+        let result = match renderer.as_vulkan_renderer() {
+            Some(vk) => light.render(vk, sources, config, self.config.width, location, alpha),
+            None => match renderer.as_gles_renderer() {
+                Some(gles) => {
+                    light.render(gles, sources, config, self.config.width, location, alpha)
+                }
+                None => Err(anyhow::anyhow!("no supported renderer backend")),
+            },
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let result = match renderer.as_gles_renderer() {
+            Some(gles) => light.render(gles, sources, config, self.config.width, location, alpha),
+            None => Err(anyhow::anyhow!("no supported renderer backend")),
+        };
+        match result {
             Ok(element) => Some(element),
             Err(err) => {
                 warn!("error rendering decoration light: {err:?}");

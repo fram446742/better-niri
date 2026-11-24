@@ -203,10 +203,16 @@ impl BackgroundEffect {
             _ => None,
         };
 
-        // Xray samples a shared scene-wide backdrop built from GLES offscreen buffers
-        // (`Xray`/`EffectBuffer`), which the Vulkan backend has no producer for yet. When only
-        // the Vulkan renderer is available, fall back to the per-window framebuffer effect,
-        // which captures the composited scene below the window on either backend.
+        // Xray samples a shared scene-wide backdrop produced by `Xray`/`EffectBuffer`. That
+        // producer is still GLES-only: `EffectBuffer` owns raw `GlesTexture`s and renders them
+        // through `GlesRenderer`, `Xray::render` looks up a `GlesTexProgram`, `XrayElement::draw`
+        // is a GLES texture draw with a GLES `surface_tex` alpha mask, and the prepass is filled
+        // with a `RenderCtx<GlesRenderer>` in `Niri::fill_xray_elements`. Making them
+        // backend-agnostic is a cross-cutting rewrite (buffer texture, program, blend-space and
+        // alpha-mask types), so Vulkan keeps the per-window fallback below instead: the
+        // framebuffer effect captures the composited scene below the window on either backend.
+        // It is visually equivalent for one window, just re-blurred per window rather than
+        // shared.
         if self.options.xray && ctx.renderer.as_gles_renderer().is_some() {
             let Some(gles) = ctx.as_gles() else {
                 return;

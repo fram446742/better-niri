@@ -343,6 +343,44 @@ impl RenderElement<GlesRenderer> for BorderRenderElement {
     }
 }
 
+#[cfg(feature = "vulkan")]
+impl BorderRenderElement {
+    /// Draws the border through the Vulkan program.
+    ///
+    /// Used when a border (e.g. the decoration-light emission) is rendered into a raw
+    /// `VulkanRenderer` offscreen, before any `TtyRenderer` frame exists.
+    pub(super) fn draw_vulkan(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        self.inner.draw_vulkan(frame, dst, damage)
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl RenderElement<smithay::backend::renderer::vulkan::VulkanRenderer> for BorderRenderElement {
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        self.draw_vulkan(frame, dst, damage)
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut smithay::backend::renderer::vulkan::VulkanRenderer,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
 impl<'render> RenderElement<TtyRenderer<'render>> for BorderRenderElement {
     fn draw(
         &self,

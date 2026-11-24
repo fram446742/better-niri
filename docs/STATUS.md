@@ -186,14 +186,15 @@ picked up without re-auditing.
    path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
    and desktop content look rougher/differently antialiased than the SDR
    session, because the SDR-to-HDR blend is not applied there yet. Still open:
-   HDR compositing, decoration light, xray backdrops, magnified screenshot
-   capture and screen transitions. Textured `ShaderRenderElement`s now draw on
+   HDR compositing, xray backdrops, magnified screenshot capture and screen
+   transitions. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
    bake now runs on the active renderer and carousel panels draw on Vulkan; the
-   decoration-light producer remains GLES-only because its dual-Kawase blur has
-   no Vulkan counterpart. The per-window background effect does draw on
+   decoration-light producer also runs on Vulkan: its emission prepass uses the
+   backend-agnostic `OffscreenBuffer` and its dual-Kawase blur is the extracted
+   `VulkanBlur` (`blur_vulkan.rs`), the same ladder the per-window effect uses. The per-window background effect does draw on
    Vulkan: `blur_down`/`blur_up` and the background composite
    (`clipped_surface.frag` + `postprocess.frag`, including the liquid-glass
    uniforms) are compiled for Vulkan and run through `render_custom_passes`
@@ -257,9 +258,8 @@ picked up without re-auditing.
    per-window background effect (blur plus the background composite, including
    liquid glass) now draws on Vulkan too; textured `ShaderRenderElement`s
    resolve `VulkanTexture` samplers. The visuals whose producers remain
-   GLES-only are skipped on Vulkan: decoration light, xray backdrops, carousel
-   panel contents, the magnified screenshot UI capture, screen transitions and
-   animated resize. Resize animations render the window normally on Vulkan
+   GLES-only are skipped on Vulkan: xray backdrops, the magnified screenshot UI
+   capture, screen transitions and animated resize. Resize animations render the window normally on Vulkan
    instead of the GLES stretch. The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,

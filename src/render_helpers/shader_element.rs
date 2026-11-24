@@ -33,6 +33,18 @@ pub fn gles_texture_map(textures: HashMap<String, GlesTexture>) -> HashMap<Strin
         .collect()
 }
 
+/// Converts a map of Vulkan textures into the backend-agnostic map used by
+/// [`ShaderRenderElement`].
+#[cfg(feature = "vulkan")]
+pub fn vulkan_texture_map(
+    textures: HashMap<String, smithay::backend::renderer::vulkan::VulkanTexture>,
+) -> HashMap<String, TtyOffscreen> {
+    textures
+        .into_iter()
+        .map(|(name, texture)| (name, TtyOffscreen::Vulkan(texture)))
+        .collect()
+}
+
 /// Renders a shader with optional texture input, on the primary GPU.
 #[derive(Debug, Clone)]
 pub struct ShaderRenderElement {
