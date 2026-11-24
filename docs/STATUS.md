@@ -186,8 +186,8 @@ picked up without re-auditing.
    path. Symptom observed on a Vulkan session with `hdr mode="on"`: SDR text
    and desktop content look rougher/differently antialiased than the SDR
    session, because the SDR-to-HDR blend is not applied there yet. Still open:
-   HDR compositing, xray backdrops, magnified screenshot capture and screen
-   transitions. Textured `ShaderRenderElement`s now draw on
+   HDR mixed compositing, xray backdrops, the screencopy/screencast paths and
+   transition capture on rotated outputs. Textured `ShaderRenderElement`s now draw on
    Vulkan: the panel and decoration-light programs are compiled to SPIR-V and
    their sampler maps resolve `TtyOffscreen::Vulkan` textures. `OffscreenBuffer`
    is backend-agnostic (it stores a `TtyOffscreen`), so the carousel panel-source
@@ -248,10 +248,15 @@ picked up without re-auditing.
    idempotent raise/restore). `better-portal/` is installable on its own:
    `better.portal`, `portals.conf` snippet, D-Bus/systemd units, install and
    uninstall scripts, and a private-bus smoke test.
-   Remaining in the `better-*` family: nsticky absorption in
-   `better-companion` (`stage`/`scratchpad` plus compatibility aliases),
-   `better-idle` and `better-rotate` modules, HDR-aware capture and annotation
-   in `better-shot`, session contexts (outputs/hooks) in `better-session`,
+   The nsticky workflow is absorbed: `stage.*` (on the shared parking state),
+   `scratchpad.*` named slots with persistence/reconcile, native
+   `windows.toggle-sticky`/`set-sticky`/`list-sticky` and the `nsticky.*`
+   compatibility namespace with a migration table. `better-shot/` now handles
+   HDR capture (`--hdr=keep|sdr|tonemap`, PQ tone mapping for 16-bit sources),
+   built-in `rect`/`text`/`arrow` annotations, PNG/JPEG/WebP output and JSON
+   metadata sidecars.
+   Remaining in the `better-*` family: `better-idle` and `better-rotate`
+   modules, session contexts (outputs/hooks) in `better-session`,
    full config coverage in `better-settings`, richer modules in
    `better-sidepanels`, native PipeWire backends in `better-audio`/
    `better-wallpaper`, cross-app adapters wired to events, Phase 8 packaging
@@ -277,9 +282,11 @@ picked up without re-auditing.
    portal's full-desktop/area capture and pick-colour magnifier capture through
    the generic offscreen and read back generically, so a Vulkan-only session
    can open the UI and save PNGs. The visuals whose producers remain GLES-only
-   are skipped on Vulkan: xray backdrops (`EffectBuffer`/`AlphaMask`/`Xray`),
-   closing/unmap animations (tile snapshots typed to `GlesRenderer`) and the
-   screencopy/screencast paths. Vulkan transition captures are stored unrotated
+   are skipped on Vulkan: xray backdrops (`EffectBuffer`/`AlphaMask`/`Xray`)
+   and the screencopy/screencast paths. Closing and unmap animations now draw
+   on Vulkan from pre-baked backend-agnostic tile snapshots; the custom close
+   shader itself stays GLES-only and Vulkan uses the texture/scale/alpha
+   fallback. Vulkan transition captures are stored unrotated
    (rotated outputs rely on the output frame). The probe has been validated on real hardware
    (RADV, two usable devices) and the feature matrix builds
    (`--no-default-features`, `--no-default-features --features vulkan`,
