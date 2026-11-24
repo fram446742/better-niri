@@ -77,7 +77,7 @@ pkgname = better-companion
 	pkgdesc = Automation and parking daemon for Better Niri
 	depends = gcc-libs
 	depends = glibc
-	optdepends = systemd: loginctl, busctl and systemctl for idle and lock actions
+	optdepends = systemd: loginctl, busctl and systemctl for idle and lock actions, plus the optional user unit
 	optdepends = libpulse: pactl probe for idle detection
 	optdepends = libnotify: notify-send in user hooks
 

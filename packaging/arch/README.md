@@ -7,7 +7,7 @@ component. A single source checkout and a single `build()` serve all of them:
 | --- | --- |
 | `niri-better` | compositor, `niri-session`, session files, `niri.portal`, completions, docs |
 | `better-portal` | `better-portal`, picker, `better.portal`, systemd/D-Bus units, example portals.conf |
-| `better-companion` | `better-companion`, `companionctl` |
+| `better-companion` | `better-companion`, `companionctl`, optional systemd user unit |
 | `better-monitor` | `better-monitor` |
 | `better-session` | `better-session` |
 | `better-shot` | `better-shot` |

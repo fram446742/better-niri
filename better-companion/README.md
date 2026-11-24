@@ -120,6 +120,24 @@ companionctl config reload
 companionctl subscribe park restore
 ```
 
+### systemd user unit
+
+The split packages install an optional unit at
+`/usr/lib/systemd/user/better-companion.service`. It is ordered after
+`graphical-session.target` so niri has already imported `NIRI_SOCKET` and the
+Wayland environment; it has no sandboxing because niri IPC and user hooks need
+the session environment.
+
+```sh
+systemctl --user enable --now better-companion.service
+systemctl --user status better-companion.service
+```
+
+The unit runs `better-companion` with the default socket and restarts on
+failure. To use a non-default socket or configuration, override the unit with
+`systemctl --user edit better-companion.service` rather than editing the
+packaged file.
+
 `--id N` echoes a request id on the response; `--dry-run` adds
 `"dry_run": true` to `call`/`explain` params. `automation.run` and `rules.run`
 honour it by returning their expanded steps without dispatching or recording a
