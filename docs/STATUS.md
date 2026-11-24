@@ -329,9 +329,12 @@ picked up without re-auditing.
    something is missing. The companion daemon ships a systemd user unit, and
    `scripts/check-workspaces.sh` plus a `better-workspaces` CI job run fmt/check/
    test for every workspace, and every companion binary answers `--version`.
-   The optional graphical monitor arrangement editor and audio mixer are in the
-   final polish pass. Still open: nsticky delegating sticky to the compositor
-   when the capability is present, and the live Noctalia/hardware checks. On the compositor side all planned core
+   The optional GUI pieces are in too: better-monitor `position`/`arrange`
+   (validated, dry-run, rollback), better-audio `volume`/`mute` for sinks and
+   sources, a GTK display arrangement editor (drag, snap, overlap validation,
+   preview/apply) and an audio mixer with sliders and mute toggles. Still open:
+   nsticky delegating sticky to the compositor when the capability is present,
+   and the live Noctalia/hardware checks. On the compositor side all planned core
    protocol ports (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are now wired;
    DPMS VRAM/GTT cleanup stays deferred until a leak is reproduced.
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
