@@ -1,0 +1,13 @@
+[Unit]
+Description=better-portal (standalone xdg-desktop-portal backend)
+Documentation=file:///usr/share/doc/better-portal/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/better-portal
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
