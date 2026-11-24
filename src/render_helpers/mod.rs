@@ -98,14 +98,16 @@ impl<'a, R> RenderCtx<'a, R> {
 }
 
 impl<'a, R: AsGlesRenderer> RenderCtx<'a, R> {
-    pub fn as_gles<'b>(&'b mut self) -> RenderCtx<'b, GlesRenderer> {
-        RenderCtx {
-            renderer: self.renderer.as_gles_renderer(),
+    /// Reborrows the context for GLES-only code. Returns `None` on renderers
+    /// without GLES (Vulkan), so elite GLSL-only paths degrade gracefully.
+    pub fn as_gles<'b>(&'b mut self) -> Option<RenderCtx<'b, GlesRenderer>> {
+        Some(RenderCtx {
+            renderer: self.renderer.as_gles_renderer()?,
             target: self.target,
             intent: self.intent,
             xray: self.xray,
             shader_time: self.shader_time,
-        }
+        })
     }
 }
 
@@ -196,7 +198,7 @@ impl ToRenderElement for BakedBuffer<TextureBuffer<GlesTexture>> {
             self.dst.map(|dst| dst.to_f64()),
             kind,
         );
-        PrimaryGpuTextureRenderElement(elem)
+        PrimaryGpuTextureRenderElement(elem.map_texture(crate::backend::tty::TtyOffscreen::Gles))
     }
 }
 

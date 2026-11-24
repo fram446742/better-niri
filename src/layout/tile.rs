@@ -1283,21 +1283,24 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         // Pushed before the window so that the framebuffer blur samples the window itself.
-        self.window.render_block_out_blur(
-            ctx.as_gles(),
-            area,
-            self.scale,
-            radius,
-            xray_pos,
-            &mut |elem| push(elem.into()),
-        );
+        if let Some(mut gles) = ctx.as_gles() {
+            self.window.render_block_out_blur(
+                gles.r(),
+                area,
+                self.scale,
+                radius,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
+        }
 
         // If we're resizing, try to render a shader, or a fallback.
         let mut pushed_resize = false;
         if let Some(resize) = &self.resize_animation {
-            if ResizeRenderElement::has_shader(ctx.renderer) {
-                let mut ctx = ctx.as_gles();
-
+            #[allow(clippy::collapsible_if)]
+            if ResizeRenderElement::has_shader(ctx.renderer)
+                && let Some(mut ctx) = ctx.as_gles()
+            {
                 if let Some(texture_from) = resize.snapshot.texture(ctx.r(), scale) {
                     let mut window_elements = Vec::new();
                     self.window.render_normal(
@@ -1392,9 +1395,8 @@ impl<W: LayoutElement> Tile<W> {
                         self.options.shaders_in_capture,
                     )
                 }) {
-                    let have_program = Shaders::get(ctx.renderer)
-                        .program(ProgramType::Scoped(resolved.key, 0))
-                        .is_some();
+                    let have_program =
+                        Shaders::has_program(ctx.renderer, ProgramType::Scoped(resolved.key, 0));
                     if have_program {
                         let area = Rectangle::new(window_render_loc, window_size);
                         let size_phys = (
@@ -1566,16 +1568,18 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         let surface_anim_scale = animated_window_size / window_size;
-        self.window.render_background_effect(
-            ctx.as_gles(),
-            area,
-            self.scale,
-            clip_to_geometry,
-            surface_anim_scale,
-            radius,
-            xray_pos,
-            &mut |elem| push(elem.into()),
-        );
+        if let Some(mut gles_ctx) = ctx.as_gles() {
+            self.window.render_background_effect(
+                gles_ctx.r(),
+                area,
+                self.scale,
+                clip_to_geometry,
+                surface_anim_scale,
+                radius,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
+        }
     }
 
     pub fn render<R: NiriRenderer>(
@@ -1651,8 +1655,9 @@ impl<W: LayoutElement> Tile<W> {
         let mut pushed = false;
         self.window().set_offscreen_data(None);
 
-        if let Some(open) = &self.open_animation {
-            let mut ctx = ctx.as_gles();
+        if let Some(open) = &self.open_animation
+            && let Some(mut ctx) = ctx.as_gles()
+        {
             let mut elements = Vec::new();
             self.render_inner(
                 ctx.r(),
@@ -1678,8 +1683,10 @@ impl<W: LayoutElement> Tile<W> {
                     warn!("error rendering window opening animation: {err:?}");
                 }
             }
-        } else if alpha_animations && let Some(alpha) = &self.alpha_animation {
-            let mut ctx = ctx.as_gles();
+        } else if alpha_animations
+            && let Some(alpha) = &self.alpha_animation
+            && let Some(mut ctx) = ctx.as_gles()
+        {
             let mut elements = Vec::new();
             self.render_inner(
                 ctx.r(),

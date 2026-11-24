@@ -9,12 +9,12 @@ use ordered_float::NotNan;
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::FontDescription;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::output::Output;
 use smithay::reexports::gbm::Format as Fourcc;
 use smithay::utils::{Point, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::backend::tty::TtyOffscreen;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
@@ -26,7 +26,7 @@ const BORDER: i32 = 4;
 
 pub struct ConfigErrorNotification {
     state: State,
-    buffers: RefCell<HashMap<NotNan<f64>, Option<TextureBuffer<GlesTexture>>>>,
+    buffers: RefCell<HashMap<NotNan<f64>, Option<TextureBuffer<TtyOffscreen>>>>,
 
     // If set, this is a "Created config at {path}" notification. If unset, this is a config error
     // notification.
@@ -146,7 +146,7 @@ impl ConfigErrorNotification {
         let mut buffers = self.buffers.borrow_mut();
         let buffer = buffers
             .entry(NotNan::new(scale).unwrap())
-            .or_insert_with(move || render(renderer.as_gles_renderer(), scale, path).ok());
+            .or_insert_with(move || render(renderer, scale, path).ok());
         let buffer = buffer.clone()?;
 
         let size = buffer.logical_size();
@@ -174,11 +174,11 @@ impl ConfigErrorNotification {
     }
 }
 
-fn render(
-    renderer: &mut GlesRenderer,
+fn render<R: NiriRenderer>(
+    renderer: &mut R,
     scale: f64,
     created_path: Option<&Path>,
-) -> anyhow::Result<TextureBuffer<GlesTexture>> {
+) -> anyhow::Result<TextureBuffer<TtyOffscreen>> {
     let _span = tracy_client::span!("config_error_notification::render");
 
     let padding: i32 = to_physical_precise_round(scale, PADDING);
@@ -244,7 +244,7 @@ fn render(
         Vec::new(),
     )?;
 
-    Ok(buffer)
+    Ok(buffer.map_texture(R::wrap_texture))
 }
 
 pub fn error_text(markup: bool) -> String {

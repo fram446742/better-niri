@@ -35,13 +35,15 @@ use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLDevice, EGLDisplay};
 use smithay::backend::input::InputTime;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+#[cfg(not(feature = "vulkan"))]
+use smithay::backend::renderer::RendererSuper;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::multigpu::GpuManager;
 use smithay::backend::renderer::multigpu::gbm::GbmGlesBackend;
-use smithay::backend::renderer::multigpu::{GpuManager, MultiFrame, MultiRenderer};
-use smithay::backend::renderer::{
-    DebugFlags, ImportDma, ImportEgl, PresentationMode, RendererSuper,
-};
+#[cfg(not(feature = "vulkan"))]
+use smithay::backend::renderer::multigpu::{MultiFrame, MultiRenderer};
+use smithay::backend::renderer::{DebugFlags, ImportDma, ImportEgl, PresentationMode};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
@@ -118,7 +120,7 @@ pub struct Tty {
     session: LibSeatSession,
     udev_dispatcher: Dispatcher<'static, UdevBackend, State>,
     libinput: Libinput,
-    gpu_manager: GpuManager<GbmGlesBackend<GlesRenderer, DeviceFd>>,
+    gpu_manager: TtyGpuManager,
     // DRM node corresponding to the primary GPU. May or may not be the same as
     // primary_render_node.
     primary_node: DrmNode,
@@ -148,6 +150,12 @@ struct VirtualOutputs {
     outputs: HashMap<String, (Output, OutputId)>,
 }
 
+#[cfg(feature = "vulkan")]
+pub use crate::backend::tty_renderer::{TtyFrame, TtyGpuManager, TtyOffscreen, TtyRenderer};
+#[cfg(feature = "vulkan")]
+pub type TtyRendererError<'render> = crate::backend::tty_renderer::TtyRendererError;
+
+#[cfg(not(feature = "vulkan"))]
 pub type TtyRenderer<'render> = MultiRenderer<
     'render,
     'render,
@@ -155,6 +163,7 @@ pub type TtyRenderer<'render> = MultiRenderer<
     GbmGlesBackend<GlesRenderer, DeviceFd>,
 >;
 
+#[cfg(not(feature = "vulkan"))]
 pub type TtyFrame<'render, 'frame, 'buffer> = MultiFrame<
     'render,
     'render,
@@ -164,7 +173,117 @@ pub type TtyFrame<'render, 'frame, 'buffer> = MultiFrame<
     GbmGlesBackend<GlesRenderer, DeviceFd>,
 >;
 
+#[cfg(not(feature = "vulkan"))]
 pub type TtyRendererError<'render> = <TtyRenderer<'render> as RendererSuper>::Error;
+
+/// Offscreen texture of the TTY renderer when the Vulkan feature is off.
+#[cfg(not(feature = "vulkan"))]
+#[derive(Debug, Clone)]
+pub enum TtyOffscreen {
+    Gles(smithay::backend::renderer::gles::GlesTexture),
+    Multi(smithay::backend::renderer::multigpu::MultiTexture),
+}
+
+#[cfg(not(feature = "vulkan"))]
+impl TtyOffscreen {
+    pub fn is_unique_reference(&mut self) -> bool {
+        match self {
+            TtyOffscreen::Gles(texture) => texture.is_unique_reference(),
+            TtyOffscreen::Multi(_) => false,
+        }
+    }
+
+    pub fn into_gles(self) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+        match self {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            TtyOffscreen::Multi(_) => None,
+        }
+    }
+}
+
+#[cfg(not(feature = "vulkan"))]
+impl smithay::backend::renderer::Texture for TtyOffscreen {
+    fn width(&self) -> u32 {
+        use smithay::backend::renderer::Texture as _;
+        match self {
+            TtyOffscreen::Gles(texture) => texture.width(),
+            TtyOffscreen::Multi(texture) => texture.width(),
+        }
+    }
+
+    fn height(&self) -> u32 {
+        use smithay::backend::renderer::Texture as _;
+        match self {
+            TtyOffscreen::Gles(texture) => texture.height(),
+            TtyOffscreen::Multi(texture) => texture.height(),
+        }
+    }
+
+    fn size(&self) -> smithay::utils::Size<i32, smithay::utils::Buffer> {
+        use smithay::backend::renderer::Texture as _;
+        match self {
+            TtyOffscreen::Gles(texture) => texture.size(),
+            TtyOffscreen::Multi(texture) => texture.size(),
+        }
+    }
+
+    fn format(&self) -> Option<smithay::backend::allocator::Fourcc> {
+        use smithay::backend::renderer::Texture as _;
+        match self {
+            TtyOffscreen::Gles(texture) => texture.format(),
+            TtyOffscreen::Multi(texture) => texture.format(),
+        }
+    }
+}
+
+#[cfg(not(feature = "vulkan"))]
+#[derive(Debug)]
+pub struct TtyGpuManager(
+    smithay::backend::renderer::multigpu::GpuManager<GbmGlesBackend<GlesRenderer, DeviceFd>>,
+);
+
+#[cfg(not(feature = "vulkan"))]
+impl TtyGpuManager {
+    pub fn single_renderer(
+        &mut self,
+        node: &smithay::backend::drm::DrmNode,
+    ) -> anyhow::Result<TtyRenderer<'_>> {
+        Ok(self.0.single_renderer(node)?)
+    }
+
+    pub fn renderer(
+        &mut self,
+        render_device: &smithay::backend::drm::DrmNode,
+        target_device: &smithay::backend::drm::DrmNode,
+        copy_format: smithay::backend::allocator::Fourcc,
+    ) -> anyhow::Result<TtyRenderer<'_>> {
+        Ok(self.0.renderer(render_device, target_device, copy_format)?)
+    }
+
+    pub fn add_node(
+        &mut self,
+        node: smithay::backend::drm::DrmNode,
+        gbm: smithay::backend::allocator::gbm::GbmDevice<DeviceFd>,
+    ) -> anyhow::Result<()> {
+        self.0.as_mut().add_node(node, gbm).map_err(Into::into)
+    }
+
+    pub fn remove_node(&mut self, node: &smithay::backend::drm::DrmNode) {
+        self.0.as_mut().remove_node(node)
+    }
+
+    pub fn refresh_devices(&mut self) {
+        let _ = self.0.devices();
+    }
+
+    pub fn early_import(
+        &mut self,
+        target: smithay::backend::drm::DrmNode,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> anyhow::Result<()> {
+        self.0.early_import(target, surface).map_err(Into::into)
+    }
+}
 
 type GbmDrmCompositor = DrmCompositor<
     GbmAllocator<DeviceFd>,
@@ -574,8 +693,33 @@ impl Tty {
             })
             .unwrap();
 
-        let api = GbmGlesBackend::with_context_priority(ContextPriority::High);
-        let gpu_manager = GpuManager::new(api).context("error creating the GPU manager")?;
+        #[cfg(feature = "vulkan")]
+        let use_vulkan = {
+            let plan = crate::render_helpers::vulkan::startup_plan();
+            use crate::render_helpers::vulkan::Path;
+            if plan.path == Path::Vulkan {
+                info!("using the Vulkan renderer");
+                true
+            } else {
+                false
+            }
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let use_vulkan = false;
+
+        #[cfg(feature = "vulkan")]
+        let gpu_manager = if use_vulkan {
+            let api = smithay::backend::renderer::multigpu::vulkan::VulkanBackend::default();
+            TtyGpuManager::Vulkan(GpuManager::new(api).context("error creating the GPU manager")?)
+        } else {
+            let api = GbmGlesBackend::with_context_priority(ContextPriority::High);
+            TtyGpuManager::Gles(GpuManager::new(api).context("error creating the GPU manager")?)
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let gpu_manager = TtyGpuManager(
+            GpuManager::new(GbmGlesBackend::with_context_priority(ContextPriority::High))
+                .context("error creating the GPU manager")?,
+        );
 
         let (primary_node, primary_render_node) = primary_node_from_config(&config.borrow())
             .ok_or(())
@@ -912,7 +1056,6 @@ impl Tty {
                 .flatten()
                 .unwrap_or(self.primary_render_node);
             self.gpu_manager
-                .as_mut()
                 .add_node(render_node, gbm.clone())
                 .context("error adding render node to GPU manager")?;
 
@@ -921,7 +1064,6 @@ impl Tty {
             // (single_renderer, dmabuf feedback, etc.).
             if render_node != self.primary_render_node {
                 self.gpu_manager
-                    .as_mut()
                     .add_node(self.primary_render_node, gbm.clone())
                     .context("error adding primary render node to GPU manager")?;
             }
@@ -956,35 +1098,38 @@ impl Tty {
                 debug!("bound legacy EGL to wl_display");
             }
 
-            let gles_renderer = renderer.as_gles_renderer();
-            resources::init(gles_renderer);
-            shaders::init(gles_renderer);
-            blend::FrameBlendState::init(gles_renderer);
+            if let Some(gles_renderer) = renderer.as_gles_renderer() {
+                resources::init(gles_renderer);
+                shaders::init(gles_renderer);
+                blend::FrameBlendState::init(gles_renderer);
 
-            let config = self.config.borrow();
-            shaders::set_decoration_programs(gles_renderer, &config);
-            if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
-                shaders::set_custom_resize_program(gles_renderer, Some(src));
-            }
-            if let Some(src) = config.animations.window_close.custom_shader.as_deref() {
-                shaders::set_custom_close_program(gles_renderer, Some(src));
-            }
-            if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
-                shaders::set_custom_open_program(gles_renderer, Some(src));
-            }
-            #[cfg(feature = "effects")]
-            {
-                let passes = global_shader_pass_sources(&config.global_shader);
-                shaders::set_custom_global_passes(gles_renderer, &passes);
-            }
-            #[cfg(feature = "effects")]
-            {
-                let chains = crate::niri::scoped_shader_chains(&config);
-                shaders::set_scoped_programs(gles_renderer, &chains);
-            }
-            drop(config);
+                let config = self.config.borrow();
+                shaders::set_decoration_programs(gles_renderer, &config);
+                if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
+                    shaders::set_custom_resize_program(gles_renderer, Some(src));
+                }
+                if let Some(src) = config.animations.window_close.custom_shader.as_deref() {
+                    shaders::set_custom_close_program(gles_renderer, Some(src));
+                }
+                if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
+                    shaders::set_custom_open_program(gles_renderer, Some(src));
+                }
+                #[cfg(feature = "effects")]
+                {
+                    let passes = global_shader_pass_sources(&config.global_shader);
+                    shaders::set_custom_global_passes(gles_renderer, &passes);
+                }
+                #[cfg(feature = "effects")]
+                {
+                    let chains = crate::niri::scoped_shader_chains(&config);
+                    shaders::set_scoped_programs(gles_renderer, &chains);
+                }
+                drop(config);
 
-            niri.update_shaders();
+                niri.update_shaders();
+            } else {
+                debug!("Vulkan renderer: GLES-only shader and effect pipelines are disabled");
+            }
 
             // Create the dmabuf global.
             let primary_formats = renderer.dmabuf_formats();
@@ -1345,9 +1490,9 @@ impl Tty {
             }
 
             if was_last {
-                self.gpu_manager.as_mut().remove_node(&render_node);
+                self.gpu_manager.remove_node(&render_node);
                 // Trigger re-enumeration in order to remove the device from gpu_manager.
-                let _ = self.gpu_manager.devices();
+                self.gpu_manager.refresh_devices();
             }
         }
 
@@ -1576,9 +1721,14 @@ impl Tty {
         }
 
         let render_node = device.render_node.unwrap_or(self.primary_render_node);
-        let renderer = self.gpu_manager.single_renderer(&render_node)?;
-        let egl_context = renderer.as_ref().egl_context();
-        let render_formats = egl_context.dmabuf_render_formats();
+        let mut renderer = self.gpu_manager.single_renderer(&render_node)?;
+        let gles_formats = renderer
+            .as_gles_renderer()
+            .map(|gles| gles.egl_context().dmabuf_render_formats().clone());
+        let render_formats = gles_formats.unwrap_or_else(|| {
+            use smithay::backend::renderer::ImportDma;
+            renderer.dmabuf_formats()
+        });
 
         // Filter out the CCS modifiers as they have increased bandwidth, causing some monitor
         // configurations to stop working.
@@ -2295,7 +2445,7 @@ impl Tty {
             .gpu_manager
             .single_renderer(&self.primary_render_node)
             .ok()?;
-        Some(f(renderer.as_gles_renderer()))
+        Some(f(renderer.as_gles_renderer()?))
     }
 
     pub fn primary_render_node(&mut self) -> Option<DrmNode> {

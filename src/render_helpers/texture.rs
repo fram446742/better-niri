@@ -2,7 +2,9 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
-use smithay::backend::renderer::{ContextId, Frame as _, ImportMem, Renderer, Texture};
+use smithay::backend::renderer::{
+    ContextId, ErasedContextId, Frame as _, ImportMem, Renderer, Texture,
+};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
@@ -13,7 +15,7 @@ use super::memory::MemoryBuffer;
 pub struct TextureBuffer<T: Texture> {
     id: Id,
     commit_counter: CommitCounter,
-    renderer_context_id: ContextId<T>,
+    renderer_context_id: ErasedContextId,
     texture: T,
     scale: Scale<f64>,
     transform: Transform,
@@ -22,7 +24,7 @@ pub struct TextureBuffer<T: Texture> {
 
 /// Render element for a [`TextureBuffer`].
 #[derive(Debug, Clone)]
-pub struct TextureRenderElement<T: Texture> {
+pub struct TextureRenderElement<T: Texture + 'static> {
     buffer: TextureBuffer<T>,
     location: Point<f64, Logical>,
     alpha: f32,
@@ -31,7 +33,7 @@ pub struct TextureRenderElement<T: Texture> {
     kind: Kind,
 }
 
-impl<T: Texture> TextureBuffer<T> {
+impl<T: Texture + 'static> TextureBuffer<T> {
     pub fn from_texture<R: Renderer<TextureId = T>>(
         renderer: &R,
         texture: T,
@@ -42,7 +44,7 @@ impl<T: Texture> TextureBuffer<T> {
         TextureBuffer {
             id: Id::new(),
             commit_counter: CommitCounter::default(),
-            renderer_context_id: renderer.context_id(),
+            renderer_context_id: ContextId::erased(&renderer.context_id()),
             texture,
             scale: scale.into(),
             transform,
@@ -90,6 +92,19 @@ impl<T: Texture> TextureBuffer<T> {
         &self.texture
     }
 
+    /// Maps the texture into another texture type, keeping the buffer metadata.
+    pub fn map_texture<U: Texture>(self, f: impl FnOnce(T) -> U) -> TextureBuffer<U> {
+        TextureBuffer {
+            id: self.id,
+            commit_counter: self.commit_counter,
+            renderer_context_id: self.renderer_context_id,
+            texture: f(self.texture),
+            scale: self.scale,
+            transform: self.transform,
+            opaque_regions: self.opaque_regions,
+        }
+    }
+
     pub fn texture_scale(&self) -> Scale<f64> {
         self.scale
     }
@@ -122,7 +137,7 @@ impl TextureBuffer<GlesTexture> {
     }
 }
 
-impl<T: Texture> TextureRenderElement<T> {
+impl<T: Texture + 'static> TextureRenderElement<T> {
     pub fn from_texture_buffer(
         buffer: TextureBuffer<T>,
         location: impl Into<Point<f64, Logical>>,
@@ -144,9 +159,21 @@ impl<T: Texture> TextureRenderElement<T> {
     pub fn buffer(&self) -> &TextureBuffer<T> {
         &self.buffer
     }
+
+    /// Converts the element's texture type, keeping all metadata.
+    pub fn map_texture<U: Texture>(self, f: impl FnOnce(T) -> U) -> TextureRenderElement<U> {
+        TextureRenderElement {
+            buffer: self.buffer.map_texture(f),
+            location: self.location,
+            alpha: self.alpha,
+            src: self.src,
+            size: self.size,
+            kind: self.kind,
+        }
+    }
 }
 
-impl<T: Texture> TextureRenderElement<T> {
+impl<T: Texture + 'static> TextureRenderElement<T> {
     pub fn logical_size(&self) -> Size<f64, Logical> {
         self.size
             .or_else(|| self.src.map(|src| src.size))
@@ -159,7 +186,7 @@ impl<T: Texture> TextureRenderElement<T> {
     }
 }
 
-impl<T: Texture> Element for TextureRenderElement<T> {
+impl<T: Texture + 'static> Element for TextureRenderElement<T> {
     fn id(&self) -> &Id {
         &self.buffer.id
     }
@@ -218,7 +245,7 @@ impl<T: Texture> Element for TextureRenderElement<T> {
     }
 }
 
-impl<R, T> RenderElement<R> for TextureRenderElement<T>
+impl<R, T: Texture + 'static> RenderElement<R> for TextureRenderElement<T>
 where
     R: Renderer<TextureId = T>,
     T: Texture,
@@ -232,7 +259,7 @@ where
         opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
     ) -> Result<(), R::Error> {
-        if frame.context_id() != self.buffer.renderer_context_id {
+        if ContextId::erased(&frame.context_id()) != self.buffer.renderer_context_id {
             warn!("trying to render texture from different renderer");
             return Ok(());
         }

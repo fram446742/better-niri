@@ -177,10 +177,10 @@ impl ExitConfirmDialog {
         let buffer = buffer.as_ref().unwrap_or(&fallback);
 
         let size = buffer.logical_size();
-        let Ok(buffer) = TextureBuffer::from_memory_buffer(renderer.as_gles_renderer(), buffer)
-        else {
+        let Ok(buffer) = TextureBuffer::from_memory_buffer(renderer, buffer) else {
             return;
         };
+        let buffer = buffer.map_texture(R::wrap_texture);
 
         let location = (output_size.to_point() - size.to_point()).downscale(2.);
         let mut location = location.to_physical_precise_round(scale).to_logical(scale);

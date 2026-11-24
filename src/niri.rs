@@ -7404,11 +7404,11 @@ impl Niri {
         }
 
         #[cfg(feature = "xdp-gnome-screencast")]
-        if rendering_output && self.screen_cast_picker.is_visible() {
-            self.refresh_screen_cast_picker_display_previews(
-                ctx.renderer.as_gles_renderer(),
-                output,
-            );
+        if rendering_output
+            && self.screen_cast_picker.is_visible()
+            && let Some(renderer) = ctx.renderer.as_gles_renderer()
+        {
+            self.refresh_screen_cast_picker_display_previews(renderer, output);
         }
 
         // Single-host gating: only the active output's own render ever refreshes panel sources
@@ -7422,7 +7422,9 @@ impl Niri {
         #[cfg(feature = "navigation")]
         if self.layout.active_output() == Some(output) {
             if self.carousel_panels_needed() {
-                self.update_panel_sources(&mut ctx.as_gles(), output, self.panel_frame.get());
+                if let Some(mut gles) = ctx.as_gles() {
+                    self.update_panel_sources(&mut gles, output, self.panel_frame.get());
+                }
                 let ring: Vec<Output> = self
                     .layout
                     .carousel_outputs()
@@ -7440,8 +7442,10 @@ impl Niri {
         // Skip the xray background re-render while the host's live workspace strip is
         // suppressed: xray elements are only consumed by that strip's per-workspace layer-shell
         // rendering in `render_inner`, which doesn't run in that case either.
-        if !self.carousel_host_strip_suppressed(output) {
-            self.fill_xray_elements(ctx.as_gles(), output);
+        if !self.carousel_host_strip_suppressed(output)
+            && let Some(mut gles) = ctx.as_gles()
+        {
+            self.fill_xray_elements(gles.r(), output);
         }
 
         // Reborrow to shorten lifetime to be able to put in xray.
@@ -7527,9 +7531,7 @@ impl Niri {
             let capture_render = ctx.target != RenderTarget::Output;
             let mut global_shader_elem: Option<GlobalShaderElement> =
                 if crate::render_helpers::target_renders_shaders(ctx.target, capture_enabled)
-                    && Shaders::get(ctx.renderer)
-                        .program(ProgramType::GlobalPass(0))
-                        .is_some()
+                    && Shaders::has_program(ctx.renderer, ProgramType::GlobalPass(0))
                 {
                     let start = state.global_shader_start.get().unwrap_or_else(|| {
                         let now = std::time::Instant::now();
@@ -7565,10 +7567,9 @@ impl Niri {
                     // Number of passes in the active chain (registry length). Region mode is
                     // whole-output only; multi-pass chains (N >= 2) always reshade the
                     // full output.
-                    let n_passes = Shaders::get(ctx.renderer)
-                        .custom_global_passes
-                        .borrow()
-                        .len();
+                    let n_passes = ctx.renderer.as_gles_renderer().map_or(0, |renderer| {
+                        Shaders::get(renderer).custom_global_passes.borrow().len()
+                    });
                     let (area, region_norm) = match cursor_radius {
                         Some(r)
                             if caps.uses_cursor
@@ -7734,10 +7735,7 @@ impl Niri {
                 let output_chain = self.output_shader_chain(output);
                 if !output_chain.is_empty() {
                     let key = shaders::scoped_key(&output_chain);
-                    if Shaders::get(ctx.renderer)
-                        .program(ProgramType::Scoped(key, 0))
-                        .is_some()
-                    {
+                    if Shaders::has_program(ctx.renderer, ProgramType::Scoped(key, 0)) {
                         let n_passes = output_chain.len();
                         let offscreens = (0..n_passes.saturating_sub(1))
                             .map(|_| {
@@ -7789,10 +7787,7 @@ impl Niri {
                         continue;
                     }
                     let key = shaders::scoped_key(&chain);
-                    if Shaders::get(ctx.renderer)
-                        .program(ProgramType::Scoped(key, 0))
-                        .is_none()
-                    {
+                    if !Shaders::has_program(ctx.renderer, ProgramType::Scoped(key, 0)) {
                         continue;
                     }
                     let area =
@@ -7911,7 +7906,14 @@ impl Niri {
                 self.screenshot_ui
                     .render_output(output, ctx.target, &mut |elem| ui_elements.push(elem));
 
-                let renderer = ctx.renderer.as_gles_renderer();
+                // The magnified screenshot UI renders through a GLES offscreen;
+                // without GLES, draw the UI elements directly.
+                let Some(renderer) = ctx.renderer.as_gles_renderer() else {
+                    self.screenshot_ui
+                        .render_output(output, ctx.target, &mut |elem| push(elem.into()));
+                    push(backdrop);
+                    return;
+                };
 
                 let res = render_to_texture(
                     renderer,
@@ -7930,15 +7932,17 @@ impl Niri {
                         transform,
                         Vec::new(),
                     );
-                    let tex_elem =
-                        PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                    let tex_elem = PrimaryGpuTextureRenderElement(
+                        TextureRenderElement::from_texture_buffer(
                             tex_buffer,
                             (0., 0.),
                             1.,
                             None,
                             None,
                             Kind::Unspecified,
-                        ));
+                        )
+                        .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+                    );
                     push(OutputRenderElements::Texture(tex_elem));
                 }
             } else {

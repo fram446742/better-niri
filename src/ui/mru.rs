@@ -463,7 +463,10 @@ impl Thumbnail {
         });
 
         let mut title_size = None;
-        let title_texture = self.title_texture(ctx.as_gles().renderer, mapped, scale);
+        let title_texture = match ctx.as_gles() {
+            Some(gles_ctx) => self.title_texture(gles_ctx.renderer, mapped, scale),
+            None => None,
+        };
         let title_texture = title_texture.map(|texture| {
             let mut size = texture.logical_size();
             size.w = f64::min(size.w, preview_geo.size.w);
@@ -499,14 +502,10 @@ impl Thumbnail {
                 Kind::Unspecified,
             );
 
-            let ctx = ctx.as_gles();
-            if let Some(program) = GradientFadeTextureRenderElement::shader(ctx.renderer) {
-                let elem = GradientFadeTextureRenderElement::new(texture, program);
-                push(WindowMruUiRenderElement::GradientFadeElem(elem));
-            } else {
-                let elem = PrimaryGpuTextureRenderElement(texture);
-                push(WindowMruUiRenderElement::TextureElement(elem));
-            }
+            let elem = PrimaryGpuTextureRenderElement(
+                texture.map_texture(crate::backend::tty::TtyOffscreen::Gles),
+            );
+            push(WindowMruUiRenderElement::TextureElement(elem));
         }
 
         let is_urgent = mapped.is_urgent();
@@ -1166,9 +1165,10 @@ impl WindowMruUi {
 
         // During the closing fade, use an offscreen to avoid transparent compositing artifacts.
         let mut pushed_offscreen = false;
-        if *output == inner.output && alpha < 1. {
-            let mut ctx = ctx.as_gles();
-
+        if *output == inner.output
+            && alpha < 1.
+            && let Some(mut ctx) = ctx.as_gles()
+        {
             let mut elems = Vec::new();
             inner.render(niri, ctx.r(), &mut |elem| elems.push(elem));
             elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
@@ -1591,23 +1591,30 @@ impl Inner {
         let output_size = output_size(&self.output);
         let scale = self.output.current_scale().fractional_scale();
 
-        let panel_texture =
-            self.scope_panel
-                .borrow_mut()
-                .get(ctx.as_gles().renderer, scale, self.wmru.scope);
+        let panel_texture = match ctx.as_gles() {
+            Some(gles_ctx) => {
+                self.scope_panel
+                    .borrow_mut()
+                    .get(gles_ctx.renderer, scale, self.wmru.scope)
+            }
+            None => None,
+        };
         if let Some(texture) = panel_texture {
             let padding = round_logical_in_physical(scale, f64::from(PANEL_PADDING));
 
             let size = texture.logical_size();
             let location = Point::new((output_size.w - size.w) / 2., padding * 2.);
-            let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
-                texture.clone(),
-                location,
-                1.,
-                None,
-                None,
-                Kind::Unspecified,
-            ));
+            let elem = PrimaryGpuTextureRenderElement(
+                TextureRenderElement::from_texture_buffer(
+                    texture.clone(),
+                    location,
+                    1.,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                )
+                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+            );
             push(WindowMruUiRenderElement::TextureElement(elem));
         }
 

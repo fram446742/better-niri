@@ -99,10 +99,12 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 807 tests (1 order-dependent EGL golden test ignored) |
+| `cargo test --workspace` | pass, 829 tests (1 order-dependent EGL golden test ignored) |
 | `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
-| `cargo test --workspace --no-default-features` | pass, 807 tests |
+| `cargo test --workspace --no-default-features` | pass, 829 tests |
 | `cargo check -p niri --no-default-features` | pass (true minimal build) |
+| `cargo check -p niri --no-default-features --features vulkan` | pass |
+| `niri --check-vulkan` | pass, probes two RADV devices; `NIRI_RENDERER=vulkan` resolves to `path: vulkan` |
 | `cargo test -p niri --no-default-features` | pass, 403 tests (effects/navigation tests compiled out) |
 | `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
 | `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
@@ -203,15 +205,24 @@ picked up without re-auditing.
    features still open per app.
    `better-portal` extraction from the compositor's existing portal backend is
    still pending.
-7. **Built-in module features** — `vulkan` is wired at the readiness/selection
-   level: the `vulkan` Cargo feature (default on) compiles better-smithay's
-   `renderer_vulkan`, `niri --check-vulkan` probes Vulkan 1.3 devices and
-   reports whether `VulkanRenderer::new` succeeds per device, `NIRI_RENDERER`
-   (`auto`/`gles`/`vulkan`) is resolved into a plan and startup logs the
-   availability/fallback once. The probe has been validated on real hardware
-   (RADV, two usable devices). Remaining Vulkan work: make the render tree
-   generic over the renderer (it is typed over `GlesRenderer` today) so
-   `Path::Vulkan` can drive outputs, effects, screenshots and screencasts.
+7. **Built-in module features** — `vulkan` is wired end to end for the TTY
+   backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
+   `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
+   reports whether `VulkanRenderer::new` succeeds per device; `NIRI_RENDERER`
+   (`auto`/`gles`/`vulkan`) resolves into a plan and startup logs the
+   availability/fallback once. The TTY backend now holds a `TtyGpuManager`
+   enum over `GbmGlesBackend` and `VulkanBackend`, and renders through
+   `TtyRenderer`/`TtyFrame` enums, so `NIRI_RENDERER=vulkan` drives outputs with
+   the Vulkan renderer (windows, layer surfaces, UI textures, screenshots'
+   texture path). GLSL-only visuals keep their GLES path and are skipped on
+   Vulkan with a warning: niri shader programs (borders, shadows, resize,
+   window/global/scoped shaders, decoration light), blur/xray background
+   effects, liquid glass, carousel panels, the magnified screenshot UI capture
+   and screen transitions. The probe has been validated on real hardware
+   (RADV, two usable devices) and the feature matrix builds
+   (`--no-default-features`, `--no-default-features --features vulkan`,
+   default). Runtime TTY validation of the Vulkan output path still needs a
+   manual session start on a spare TTY.
    `kde`, `cursor`, `effects` and `navigation` are done. The vertical main axis is available
    globally, per output and per workspace; axis-aware wheel/gesture input
    (`axis_policy`), spatial-movement and move-grab mapping, touch-overview

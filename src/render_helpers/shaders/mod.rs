@@ -315,8 +315,16 @@ impl Shaders {
             .expect("shaders::init() must be called when creating the renderer")
     }
 
-    pub fn get(renderer: &mut impl NiriRenderer) -> &Self {
-        let renderer = renderer.as_gles_renderer();
+    /// Whether the renderer has a compiled program of this type. Always false
+    /// on renderers without GLES (Vulkan), where niri's GLSL programs are not
+    /// compiled.
+    pub fn has_program(renderer: &mut impl NiriRenderer, program: ProgramType) -> bool {
+        renderer
+            .as_gles_renderer()
+            .is_some_and(|renderer| Self::get(renderer).program(program).is_some())
+    }
+
+    pub fn get(renderer: &mut GlesRenderer) -> &Self {
         let data = renderer.egl_context().user_data();
         data.get()
             .expect("shaders::init() must be called when creating the renderer")

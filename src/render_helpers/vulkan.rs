@@ -29,11 +29,12 @@ pub const ENV_RENDERER: &str = "NIRI_RENDERER";
 
 /// Whether niri's render tree can render an output with `VulkanRenderer`.
 ///
-/// This is `false` until the render path is generic over the renderer: window
-/// elements, effects, screenshots and screencasts all use `GlesRenderer` today.
-/// The probe and preference plumbing are in place so the switch is a focused
-/// change rather than a new subsystem.
-pub const RENDER_TREE_SUPPORTS_VULKAN: bool = false;
+/// The TTY backend renders through `TtyRenderer`, an enum over the GLES and
+/// Vulkan multi-GPU renderers, so core output rendering (windows, layers, UI
+/// textures) works on Vulkan. GLSL-only visuals (niri shader programs, blur,
+/// xray, decoration light, carousel panels) are skipped on Vulkan and keep
+/// their GLES path; see `docs/MODULES.md`.
+pub const RENDER_TREE_SUPPORTS_VULKAN: bool = true;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -187,18 +188,7 @@ pub fn decide(preference: Preference, probe: &Probe) -> Plan {
     let vulkan_available = probe.supported();
     let fallback = match preference {
         Preference::Egl => None,
-        Preference::Auto => {
-            if vulkan_available && !RENDER_TREE_SUPPORTS_VULKAN {
-                Some(
-                    "a Vulkan device is usable, but this build's render tree is EGL/GLES; \
-                     set NIRI_RENDERER=vulkan to require Vulkan once the renderer-generic \
-                     path lands"
-                        .to_owned(),
-                )
-            } else {
-                None
-            }
-        }
+        Preference::Auto => None,
         Preference::Vulkan if !vulkan_available => Some(match &probe.error {
             Some(err) => {
                 format!("Vulkan requested but unavailable ({err}); falling back to EGL/GLES")
@@ -339,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_reports_available_vulkan_but_stays_on_gles() {
+    fn auto_stays_on_gles_and_reports_vulkan_availability() {
         let probe = Probe {
             devices: vec![device("GPU", true)],
             error: None,
@@ -347,8 +337,8 @@ mod tests {
         let plan = decide(Preference::Auto, &probe);
         assert_eq!(plan.path, Path::EglGles);
         assert!(plan.vulkan_available);
-        assert!(!plan.render_tree_supports_vulkan);
-        assert!(plan.fallback.unwrap().contains("render tree is EGL/GLES"));
+        assert!(plan.render_tree_supports_vulkan);
+        assert_eq!(plan.fallback, None);
     }
 
     #[test]
@@ -384,15 +374,15 @@ mod tests {
     }
 
     #[test]
-    fn requested_vulkan_with_device_still_uses_gles_for_now() {
+    fn requested_vulkan_with_device_selects_vulkan() {
         let probe = Probe {
             devices: vec![device("GPU", true)],
             error: None,
         };
         let plan = decide(Preference::Vulkan, &probe);
-        assert_eq!(plan.path, Path::EglGles);
+        assert_eq!(plan.path, Path::Vulkan);
         assert!(plan.vulkan_available);
-        assert!(plan.fallback.unwrap().contains("render tree is EGL/GLES"));
+        assert_eq!(plan.fallback, None);
     }
 
     #[test]
@@ -405,7 +395,7 @@ mod tests {
         let json = serde_json::to_value(&plan).unwrap();
         assert_eq!(json["preference"], "auto");
         assert_eq!(json["path"], "eglgles");
-        assert_eq!(json["render_tree_supports_vulkan"], false);
+        assert_eq!(json["render_tree_supports_vulkan"], true);
         assert_eq!(json["vulkan_available"], true);
         assert_eq!(json["devices"][0]["name"], "GPU");
         assert_eq!(json["devices"][0]["supported"], true);

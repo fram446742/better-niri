@@ -70,7 +70,7 @@ impl OpenAnimation {
             .render(renderer, scale, elements)
             .context("error rendering to offscreen buffer")?;
 
-        if Shaders::get(renderer).program(ProgramType::Open).is_some() {
+        if Shaders::has_program(renderer, ProgramType::Open) {
             // OffscreenBuffer renders with Transform::Normal and the scale that we passed, so we
             // can assume that below.
             let offset = elem.offset();

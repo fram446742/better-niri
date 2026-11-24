@@ -65,13 +65,16 @@ impl ScreenTransition {
             RenderTarget::ScreenCapture => 2,
         };
 
-        PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
-            self.from_texture[idx].clone(),
-            (0., 0.),
-            alpha,
-            None,
-            None,
-            Kind::Unspecified,
-        ))
+        PrimaryGpuTextureRenderElement(
+            TextureRenderElement::from_texture_buffer(
+                self.from_texture[idx].clone(),
+                (0., 0.),
+                alpha,
+                None,
+                None,
+                Kind::Unspecified,
+            )
+            .map_texture(crate::backend::tty::TtyOffscreen::Gles),
+        )
     }
 }
