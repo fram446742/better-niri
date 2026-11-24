@@ -8,6 +8,10 @@ exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
 CLIP=${HDR_CLIP:-/home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4}
 TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
+NIRI_LOG_FILE=${NIRI_LOG:-/tmp/niri-test-session.log}
+MPV_LOG=/tmp/pending-hdr-mpv.log
+SUMMARY=/tmp/pending-hdr-summary.txt
+: > "$SUMMARY"
 DURATION=${HDR_SECONDS:-20}
 command -v mpv >/dev/null || { echo "mpv missing"; exit 1; }
 if [ ! -s "$CLIP" ]; then
@@ -27,6 +31,7 @@ fi
 if command -v ffprobe >/dev/null; then
   INFO=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,pix_fmt,color_transfer,color_primaries -of default=nw=1:nk=1 "$CLIP" 2>/dev/null | tr '\n' ' ')
   echo "clip: $INFO (HDR10 needs smpte2084 + bt2020)"
+  printf 'clip: %s\n' "$INFO" > /tmp/pending-hdr-clip.txt
 fi
 CONFIG=${NIRI_TEST_CONFIG:-$TEST_DIR/config.kdl}
 if ! grep -qE 'hdr([[:space:]]|$)' "$CONFIG" 2>/dev/null; then
@@ -50,4 +55,17 @@ Verification while mpv is playing:
 - washed-out in another session is expected on winit (nested) or without an
   `hdr` output node; that is not the Vulkan output path.
 MSG
-exec mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
+mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config \
+  --log-file="$MPV_LOG" --msg-level=all=info,vo/gpu-next=debug "$CLIP" "$@"
+RC=$?
+{
+  echo "mpv exit: $RC"
+  echo "--- mpv HDR/colour lines ---"
+  grep -iE 'hdr|pq|bt\.?2020|tone.?map|primaries|transfer' "$MPV_LOG" 2>/dev/null | tail -40
+  echo "--- niri HDR/colour lines ($NIRI_LOG_FILE) ---"
+  grep -iE 'hdr|bt2020|pq|color' "$NIRI_LOG_FILE" 2>/dev/null | tail -40
+  echo "--- niri border/shadow/clipping shader init ---"
+  grep -E 'compiled border|Vulkan renderer|renderer plan' "$NIRI_LOG_FILE" 2>/dev/null | tail -5
+} > "$SUMMARY"
+echo "summary: $SUMMARY (mpv log: $MPV_LOG)"
+exit $RC

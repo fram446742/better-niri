@@ -11,11 +11,20 @@ NIRI=${NIRI_BIN:-/home/franc/Projects/better-niri/better-niri/target/debug/niri}
 [ -x "$NIRI" ] || NIRI=niri
 say() { printf '\n== %s ==\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+OUTDIR=${PENDING_OUTDIR:-/tmp/pending-drive}
+mkdir -p "$OUTDIR"
+snap() {
+  "$NIRI" msg --json version >"$OUTDIR/version.json" 2>&1 || true
+  "$NIRI" msg --json outputs >"$OUTDIR/outputs.json" 2>&1 || true
+  "$NIRI" msg --json workspaces >"$OUTDIR/workspaces.json" 2>&1 || true
+  "$NIRI" msg --json windows >"$OUTDIR/windows.json" 2>&1 || true
+}
 
 say "session (expect isolated config $TEST_DIR/config.kdl)"
 $NIRI msg version || exit 1
 $NIRI msg outputs | head -20
 $NIRI msg workspaces | head -20
+snap
 
 say "windows (open/close/move/resize)"
 TERM_APP=foot; have alacritty && TERM_APP=alacritty
@@ -35,6 +44,7 @@ $NIRI msg action toggle-overview >/dev/null 2>&1 || true
 sleep 2
 $NIRI msg action toggle-overview >/dev/null 2>&1 || true
 
+snap
 say "screenshots"
 $NIRI msg action screenshot-screen 2>/dev/null || true
 $NIRI msg action screenshot-window 2>/dev/null || true

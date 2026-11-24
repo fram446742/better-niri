@@ -11,6 +11,15 @@ Run these **inside** a niri session on tty3 with `NIRI_RENDERER=vulkan`
 `/usr/bin/niri` does not accept a directory and fails with "Is a directory").
 The scripts default to the repo's `target/debug/niri` via `NIRI_BIN`. `HDR_OUTPUT=DP-1` adds an `hdr mode="on"` block to the copy.
 
+## Debug files
+
+`run-test-session.sh` starts the isolated session with
+`RUST_LOG=niri=debug`, using `NIRI_LOG` (default `/tmp/niri-test-session.log`).
+`drive.sh` snapshots IPC state into `/tmp/pending-drive/`. `hdr.sh` writes the
+clip probe, the full mpv log and a combined HDR summary
+(`/tmp/pending-hdr-summary.txt`, `/tmp/pending-hdr-mpv.log`). All scripts also
+tee to `/tmp/pending-<name>.log`, so the whole run can be analyzed afterwards.
+
 ## drive.sh — windows, clipping, workspaces, overview, screenshots
 
 ```sh
