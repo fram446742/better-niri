@@ -28,6 +28,8 @@ validated and reported as **config-only**; see
   compensating actions to restore `__previous` and reports exactly what
   happened.
 - Rules (match + profile + priority) with deterministic explain output.
+- Runtime `position` / `arrange` commands validate and apply logical output
+  positions through niri IPC, with `--dry-run`, `__previous` and rollback.
 - Watch mode with debounce, an advisory process lock, a post-apply cooldown and
   a post-apply fingerprint so its own changes cannot loop. `--once` evaluates
   one cycle for tests/adapters.
@@ -47,11 +49,42 @@ better-monitor apply desk --confirm-timeout 20   # roll back unless `confirm`
 better-monitor confirm            # keep the profile applied
 better-monitor cancel             # restore __previous now
 better-monitor restore            # undo the last apply (keeps __previous)
+better-monitor position           # current logical positions and sizes
+better-monitor position DP-1 0 0 # move one output (stores __previous)
+better-monitor arrange --plan '{"eDP-1":[0,0],"DP-1":[1920,0]}'
+better-monitor arrange --plan @plan.json --dry-run
 better-monitor list
 better-monitor show desk
 better-monitor delete desk
 better-monitor migrate            # rewrite old profiles as schema v2
 ```
+
+## Runtime arrangement
+
+`position` and `arrange` change logical output positions without touching
+profiles:
+
+```sh
+better-monitor position
+better-monitor position --json
+better-monitor position DP-1 1920 0
+better-monitor arrange --plan '{"eDP-1":[0,0],"DP-1":[1920,0]}'
+better-monitor arrange --plan - < plan.json          # stdin
+better-monitor arrange --plan @plan.json --dry-run   # preview only
+```
+
+A plan is an object of `output -> [x, y]` (or `{x, y}`, or a wrapped
+`{"outputs": ...}`). Every referenced output must be connected and enabled, at
+least one output must stay enabled, coordinates must be within ±1,000,000, and
+the resulting logical rectangles must not overlap (touching edges are fine).
+Validation runs before any IPC request, so a refused plan sends nothing.
+
+Apply uses the same safety contract as profiles: the pre-change layout is saved
+as `__previous`, actions are sent as ordered `OutputAction::Position` requests,
+and a mid-apply failure triggers compensating actions back to `__previous`.
+`--dry-run` prints the planned actions and geometry without connecting. The
+JSON report contains `status`, `actions`, `positions` (effective logical
+geometry), `errors`, `previous_saved` and the rollback fields.
 
 Rules:
 
