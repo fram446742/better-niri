@@ -41,4 +41,13 @@ advertise colour management and mpv will stay SDR. Add it to the test copy, then
 MSG
 fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
+cat <<'MSG'
+Verification while mpv is playing:
+- press `i` twice: look for HDR/PQ/BT.2020 in the mpv stats. If it says SDR /
+  tone-mapped, the compositor did not take HDR and mpv converted for you.
+- in the niri log (RUST_LOG=niri=debug), look for connector colour/HDR lines
+  and "hdr" state changes when the fullscreen window starts.
+- washed-out in another session is expected on winit (nested) or without an
+  `hdr` output node; that is not the Vulkan output path.
+MSG
 exec mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config "$CLIP" "$@"
