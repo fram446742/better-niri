@@ -4,14 +4,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use companion_core::{Registry, Request, Response};
-use companion_daemon::{bind, build_registry_with_activity, serve_stream, socket_default};
+use companion_daemon::{bind, build_registry_with_adapters, serve_stream, socket_default};
 
-fn usage() -> &'static str {
-    "better-companion [--socket PATH] [--once] [--help]\n\n\
-     One daemon serving parking, automation, hooks, system, windows, idle and rotate over a Unix socket.\n\
+const USAGE: &str = "better-companion [--socket PATH] [--once] [--help]\n\n\
+     One daemon serving parking, automation, hooks, system, windows, idle, rotate and optional adapters over a Unix socket.\n\
      --socket PATH  Override the socket path (default: $XDG_RUNTIME_DIR/better-companion.sock)\n\
      --once         Serve a single connection and exit (useful for tests)\n\
-     --no-track     Do not subscribe to the niri event stream\n"
+     --no-track     Do not subscribe to the niri event stream\n";
+
+fn usage() -> &'static str {
+    USAGE
 }
 
 fn main() -> ExitCode {
@@ -54,7 +56,8 @@ fn main() -> ExitCode {
 
 fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()> {
     let activity = companion_idle::ActivityClock::new();
-    let (registry, parking) = build_registry_with_activity(socket, activity.clone())?;
+    let (registry, parking, adapters) = build_registry_with_adapters(socket, activity.clone())?;
+    adapters.start_worker();
     if track && let Some(niri_socket) = companion_niri::socket_from_env() {
         let parking = parking.clone();
         let swallow = companion_niri::Swallow::from_state_dir(
@@ -62,8 +65,15 @@ fn run(socket: &std::path::Path, once: bool, track: bool) -> std::io::Result<()>
             companion_niri::Compositor::from_env(),
         )?;
         let tracker_socket = niri_socket.clone();
+        let tracker_adapters = adapters.clone();
         std::thread::spawn(move || {
-            companion_niri::run_tracker(tracker_socket, parking, swallow);
+            companion_niri::run_tracker_with(
+                tracker_socket,
+                parking,
+                swallow,
+                || tracker_adapters.reset_niri(),
+                |event| tracker_adapters.niri_event(event),
+            );
         });
         // A second, read-only subscription marks focus/window/workspace events
         // as idle activity. niri serves each connection independently.

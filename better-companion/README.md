@@ -18,7 +18,7 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-hooks` | `hooks.*` | Commands registered per event (resolution only; no implicit execution) |
 | `companion-system` | `system.*` | Ping, status and paths |
 | `companion-rules` | `rules.*` | Declarative window/workspace rules with explain/apply/run |
-| `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` | Optional Phase C ecosystem adapters (commands + event hooks) |
+| `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`, `adapters.*` | Optional ecosystem adapters: event subscriptions, command templates, timeouts, dedup and failure policy |
 | `companion-idle` | `idle.*` | Activity clock, idle/suspend policy, inhibitors, logind and DPMS actions |
 | `companion-rotate` | `rotate.*` | Orientation source, hysteresis and niri output transform/position |
 | `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
@@ -228,16 +228,180 @@ companionctl call rules explain '{"window":10}'
 companionctl call rules apply '{"window":10}'
 companionctl call rules run '{"window":10}'   # registry executes the steps
 
-# Phase C adapters: explicit commands and event hooks, no hard dependency.
+# Phase C adapters: optional commands and event subscriptions, no hard dependency.
+companionctl call adapters status
 companionctl call session enable
 companionctl call session set '{"name":"lock","command":"loginctl lock-session"}'
-companionctl call session dispatch '{"name":"lock"}'   # only runs when explicit
-companionctl call monitor set-hook '{"event":"workspace-activated","command":"waybar reload"}'
+companionctl call session dispatch '{"name":"lock"}'   # explicit, requires enable
+companionctl call session set-hook '{"event":"workspace-activated","command":"notify-send switched"}'
 companionctl call audio status
 ```
 
-Adapters are disabled by default. `dispatch` is the only action that executes
-a command; hooks just store/resolve them.
+Adapters are disabled by default. An adapter never executes a command
+automatically unless `enabled` is `true`; `dispatch` and `test` are the two
+explicit entry points, and `test` is the documented way to try a command while
+disabled. No `better-*` binary is linked or required: every command is just a
+string you configure.
+
+### Adapter schema
+
+Each adapter persists to
+`$XDG_STATE_HOME/better-companion/adapter-<name>.json`. Files written by older
+companions (`enabled`, `commands`, `hooks`) keep loading unchanged; every new
+field is optional and serde-defaulted. Legacy `hooks` still resolve to one
+command per event and are treated as subscriptions with adapter defaults when
+the adapter is enabled.
+
+```json
+{
+  "enabled": true,
+  "commands": { "apply": "better-wallpaper apply" },
+  "hooks": { "workspace-activated": "notify-send switched" },
+  "subscriptions": {
+    "workspace-activated": [
+      {
+        "command": "better-wallpaper apply",
+        "label": "wallpaper",
+        "timeout_ms": 2000,
+        "dedup_ms": 500,
+        "failure_policy": "log"
+      }
+    ],
+    "window-focused": [
+      { "command": "better-audio apply", "dedup_ms": 250 }
+    ]
+  },
+  "timeout_ms": 5000,
+  "dedup_ms": 1000,
+  "max_concurrent": 2,
+  "failure_policy": "disable-after-3"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | Master switch; default `false`. |
+| `commands` | Named command templates used by `dispatch`. |
+| `hooks` | Legacy `event -> command`; additive with subscriptions. |
+| `subscriptions` | `event -> [subscription]`; each has `command`, optional `label`, `timeout_ms`, `dedup_ms`, `failure_policy`. |
+| `timeout_ms` | Default hard timeout; default 5000. `0` is rejected for the adapter default. |
+| `dedup_ms` | Suppress the same event + subscription + payload within this window; default 1000, `0` disables dedup. |
+| `max_concurrent` | Simultaneous processes per adapter, 1–64; default 2. |
+| `failure_policy` | `ignore`, `log`, `disable`, `disable-after-N`, or `{"kind":"disable_after","failures":N}`. Default `log`. |
+
+`disable-after-N` counts consecutive failures and flips `enabled` to `false`
+without restarting the daemon. A success resets the counter.
+
+### Command templates and environment
+
+Placeholders are replaced as one shell-quoted word, so a window title such as
+`x'; rm -rf` cannot become shell syntax. Supported names:
+`{{workspace_id}}`, `{{workspace_name}}`, `{{workspace_index}}`, `{{output}}`,
+`{{window_id}}`, `{{app_id}}`, `{{title}}`, `{{focused}}`, `{{phase}}`,
+`{{event}}`, `{{adapter}}`, plus any other top-level payload field. A missing
+field expands to an empty quoted word and is reported in `unresolved`.
+
+The same values are exported to the command:
+`COMPANION_ADAPTER`, `COMPANION_EVENT`, `COMPANION_EVENT_JSON`,
+`COMPANION_PHASE`, `COMPANION_WORKSPACE_ID`/`_NAME`/`_INDEX`,
+`COMPANION_OUTPUT`, `COMPANION_WINDOW_ID`, `COMPANION_APP_ID`,
+`COMPANION_TITLE` and `COMPANION_FOCUSED` (missing values are empty).
+
+```sh
+# One subscription with a dedup window and a self-disabling failure policy.
+companionctl call audio subscribe '{"event":"window-focused","command":"better-audio apply","dedup_ms":250}'
+companionctl call audio configure '{"timeout_ms":2000,"max_concurrent":1,"failure_policy":"disable-after-3"}'
+
+# Explain what would run (no execution), then try it explicitly while disabled.
+companionctl call adapters explain '{"event":"workspace-activated","payload":{"workspace_name":"dev"}}'
+companionctl call adapters test '{"adapter":"wallpaper","event":"workspace-activated","payload":{"workspace_name":"dev"},"dry_run":true}'
+companionctl call adapters test '{"adapter":"wallpaper","event":"workspace-activated","payload":{"workspace_name":"dev"}}'
+
+# Run one named command on one adapter (requires that adapter's enable).
+companionctl call adapters dispatch '{"adapter":"monitor","name":"apply"}'
+```
+
+### Events
+
+The daemon forwards niri events from the connection it already uses for the
+parking tracker and activity clock, so adapters do not open another
+subscription. niri has no `WorkspaceAdded`/`OutputRemoved` events: the adapter
+mapper keeps the previous snapshot and derives them. The first snapshot after
+each (re)connect only seeds state, so a restart does not replay every open
+window. Companion actions are observed after they succeed, including actions
+executed by `automation.run` or `rules.run`.
+
+| Event | Source / payload |
+| --- | --- |
+| `workspace-activated` | niri `WorkspaceActivated`; workspace id/name/index, output, `focused`, `phase`. |
+| `workspace-added` | Derived from `WorkspacesChanged`; workspace fields, `phase: added`. |
+| `workspace-removed` | Derived from `WorkspacesChanged`; last known workspace fields. |
+| `workspace-moved` | Output or index changed; also `previous_output`, `previous_index`. |
+| `output-added` | New output name in the workspace snapshot; `output`, `phase`. |
+| `output-removed` | No workspace remains on that output; `output`, `phase`. |
+| `window-opened` | New window id; window id, app id, title, workspace fields, output, `focused`. |
+| `window-closed` | Last known window fields, `phase: closed`. |
+| `window-focused` | `WindowFocusChanged`; `window_id: null` and `focused: false` when focus is lost. |
+| `window-moved` | Window changed workspace; also `previous_workspace_id`. |
+| `park` | `parker.park*`; `phase` names the action. |
+| `restore` | `parker.restore*`; `phase` names the action. |
+| `stage` / `unstage` | `stage.stage|add|toggle` / `stage.activate|unstage|restore`. |
+| `scratchpad-toggle` | `scratchpad.toggle`. |
+| `scratchpad-show` / `scratchpad-hide` | `scratchpad.show|restore` / `assign|hide`. |
+| `idle-transition` | Each executed idle timeout; `phase`, `idle_secs`, `after_secs`. |
+| `idle-active` | `idle.reset`. |
+| `rotation-applied` | `rotate.tick`/`rotate.set` when the result reports `applied: true`. |
+
+`adapters.events` returns this table plus each adapter's subscribed event names.
+`adapters.status` aggregates every adapter; per-adapter `status` also keeps the
+legacy `namespace`, `enabled`, `commands` and `hooks` fields and adds
+`subscriptions`, limits and runtime stats (`executed`, `failed`, `timed_out`,
+`skipped_dedup`, `skipped_disabled`, `peak_concurrency`, last error).
+
+### Built-in adapter presets
+
+`preset` is read-only; `apply-preset` is the explicit write and never enables
+the adapter unless you pass `"enable": true`.
+
+```sh
+companionctl call monitor apply-preset '{}'      # apply profile on output hotplug
+companionctl call audio apply-preset '{}'        # route/default sink on focus changes
+companionctl call wallpaper apply-preset '{}'    # apply scene on workspace focus
+companionctl call session preset                 # capture/restore command suggestions
+companionctl call monitor enable                 # still required for automatic events
+```
+
+Presets use documented commands (`better-monitor apply`, `better-audio apply`,
+`better-wallpaper apply`, `better-session capture|restore`) and environment
+placeholders such as `${BETTER_MONITOR_PROFILE:-default}`. They are examples,
+not a runtime dependency.
+
+Session capture/restore is deliberately opt-in because capture can be
+expensive. Subscribe only the phases you want, for example:
+
+```sh
+companionctl call session subscribe '{"event":"output-added","command":"better-session capture auto-{{output}}"}'
+companionctl call session subscribe '{"event":"workspace-activated","command":"better-session restore auto-{{workspace_name}} --wait-ms 800"}'
+companionctl call session enable
+```
+
+### Adapter action summary
+
+- Per adapter: `status`, `enable`, `disable`, `set`, `remove`, `list`,
+  `dispatch`, `set-hook`, `remove-hook`, `hooks`, `subscribe`, `unsubscribe`,
+  `subscriptions`, `configure`, `explain`, `test`, `preset`, `apply-preset`.
+- Aggregate: `adapters.status`, `adapters.events`, `adapters.explain`,
+  `adapters.dispatch`, `adapters.test`, `adapters.enable`, `adapters.disable`,
+  `adapters.subscribe`, `adapters.unsubscribe`, `adapters.configure`,
+  `adapters.preset`, `adapters.apply-preset`.
+
+Safety notes: enabling is per adapter and persisted; commands are arbitrary
+`sh -c` lines you write, so treat the state files as trusted configuration.
+Payload values are always shell-quoted, timeouts are hard kills, concurrency is
+bounded per adapter, repeated events are deduplicated, and failure policies can
+disable an adapter automatically. Adapter commands run on a single background
+worker, so a slow command cannot stall the niri tracker.
+
 
 ### Rule match conditions
 
@@ -572,6 +736,10 @@ deterministic order.
 - `rules.set|remove|list|explain|apply|run`.
 - `idle.status|explain|tick|configure|enable|disable|inhibit|uninhibit|reset`.
 - `rotate.status|explain|tick|configure|enable|disable|lock|unlock|set|reset`.
+- `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`, `adapters.*`: optional
+  adapters with explicit commands, event subscriptions, templates, timeouts,
+  dedup, concurrency limits and `ignore`/`log`/`disable-after-N` failure policy
+  (see “Phase C adapters” above).
 
 ## Development
 

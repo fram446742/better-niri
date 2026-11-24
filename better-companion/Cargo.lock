@@ -16,6 +16,9 @@ name = "companion-adapters"
 version = "0.1.0"
 dependencies = [
  "companion-core",
+ "companion-niri",
+ "companion-parking",
+ "niri-ipc",
  "serde",
  "serde_json",
 ]
