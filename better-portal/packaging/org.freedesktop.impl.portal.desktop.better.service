@@ -1,4 +1,6 @@
+# Session D-Bus activation file. scripts/install.sh substitutes the absolute
+# path of the installed better-portal binary for the Exec placeholder.
 [D-BUS Service]
 Name=org.freedesktop.impl.portal.desktop.better
-Exec=/usr/libexec/better-portal
+Exec=@BETTER_PORTAL@
 SystemdService=better-portal.service

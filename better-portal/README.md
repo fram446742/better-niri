@@ -143,33 +143,105 @@ connection; it prints `{"window":…}` from `PickWindow`.
 
 ## Install and register
 
-Install the daemon somewhere stable, then point xdg-desktop-portal at it:
+`scripts/install.sh` is the supported non-xtask install path. It runs
+`cargo build --release` and installs the binaries, the D-Bus activation file,
+the optional systemd user unit, the `.portal` descriptor, and a
+`portals.conf` preference. It needs no root for the default user-local layout:
 
 ```sh
-install -Dm755 better-portal/target/release/better-portal /usr/libexec/better-portal
-install -Dm755 better-portal/target/release/better-portal-picker /usr/libexec/better-portal-picker
-install -Dm644 better-portal/portals/better.portal \
-    /usr/share/xdg-desktop-portal/portals/better.portal
-install -Dm644 better-portal/packaging/org.freedesktop.impl.portal.desktop.better.service \
-    /usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.better.service
+cd better-portal
+./scripts/install.sh              # user-local: ~/.local, ~/.config
+./scripts/install.sh --dry-run    # print every action, write nothing
+./scripts/install.sh --system     # /usr/local and /etc/xdg (run as root)
+./scripts/install.sh --uninstall  # remove what install.sh added
 ```
 
-`packaging/org.freedesktop.impl.portal.desktop.better.service` lets
-xdg-desktop-portal activate the backend over D-Bus. It references the optional
-systemd user unit in `packaging/better-portal.service`; install that unit into
-`~/.config/systemd/user/` if you prefer systemd supervision. Adjust `Exec=`
-paths when installing elsewhere (for example `~/.local/bin`).
+Installed artifacts for the default user layout:
 
-Select the backend in `~/.config/xdg-desktop-portal/portals.conf`:
+| Artifact | Destination | Purpose |
+| --- | --- | --- |
+| `better-portal` | `~/.local/bin/` | backend daemon |
+| `better-portal-picker` | `~/.local/bin/` | layer-shell overlay |
+| `better.portal` | `~/.local/share/xdg-desktop-portal/portals/` | implementation descriptor |
+| D-Bus service | `~/.local/share/dbus-1/services/` | on-demand activation |
+| systemd unit | `~/.config/systemd/user/` | optional supervision |
+| `portals.conf` | `~/.config/xdg-desktop-portal/portals.conf` | selects `better` |
+
+`--system` defaults to `PREFIX=/usr/local`, config in
+`/etc/xdg/xdg-desktop-portal/portals.conf`, and units in
+`/usr/local/lib/systemd/user`. Distro packaging can use
+`--system --prefix /usr --destdir "$pkgdir"`; `DESTDIR` is prepended to every
+destination, while the rendered `Exec=`/`ExecStart=` paths stay valid at
+runtime.
+
+All paths are overridable. Flags win over environment variables:
+
+| Flag | Environment | Default |
+| --- | --- | --- |
+| `--prefix` | `PREFIX` | `~/.local` (user), `/usr/local` (system) |
+| `--destdir` | `DESTDIR` | empty |
+| `--bindir` | `BETTER_PORTAL_BINDIR`, `BINDIR` | `$PREFIX/bin` |
+| `--datadir` | `BETTER_PORTAL_DATADIR`, `DATADIR` | `$PREFIX/share` |
+| `--portals-dir` | `BETTER_PORTAL_PORTALS_DIR`, `PORTALS_DIR` | `$DATADIR/xdg-desktop-portal/portals` |
+| `--dbus-services-dir` | `BETTER_PORTAL_DBUS_SERVICES_DIR`, `DBUS_SERVICES_DIR` | `$DATADIR/dbus-1/services` |
+| `--systemd-user-dir` | `BETTER_PORTAL_SYSTEMD_USER_DIR`, `SYSTEMD_USER_DIR` | `$XDG_CONFIG_HOME/systemd/user` (user) |
+| `--portals-conf` | `BETTER_PORTAL_PORTALS_CONF`, `PORTALS_CONF` | `$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf` |
+| `--binary-dir` | `BETTER_PORTAL_BINARY_DIR`, `CARGO_TARGET_DIR` | `./target/release` |
+| `--stage` | | render config artifacts under a staging root only |
+
+`--no-build`, `--no-binaries`, and `--no-portals-conf` skip individual steps.
+`--stage DIR` is shorthand for `--destdir DIR --no-build --no-binaries` and is
+useful for inspecting exactly what a package will ship. `--print-paths` prints
+the resolved layout as `KEY=VALUE` lines.
+
+### Portal selection
+
+The installer updates only these two keys under `[preferred]` in
+`portals.conf`, preserving everything else:
 
 ```ini
 [preferred]
-org.freedesktop.impl.portal.Screenshot=better
-org.freedesktop.impl.portal.ScreenCast=better
+org.freedesktop.impl.portal.Screenshot=better;
+org.freedesktop.impl.portal.ScreenCast=better;
 ```
 
-`portals/better.portal` uses `UseIn=niri`, so the backend is only selected on
-niri sessions. The portal frontend restarts when the configuration changes.
+If the file already exists, `install.sh` copies it to
+`portals.conf.better-portal.bak` once, merges the two keys, and `--uninstall`
+restores the backup. Pass `--no-portals-conf` to manage the file yourself.
+
+PickColor is part of `org.freedesktop.impl.portal.Screenshot` version 2, so
+there is no separate `PickColor` interface or `portals.conf` key. The
+`better.portal` descriptor uses `UseIn=niri`; the explicit `portals.conf`
+entries make `better` win over niri's own Screenshot/ScreenCast backend. The
+portal frontend restarts when the configuration changes.
+
+`packaging/org.freedesktop.impl.portal.desktop.better.service` lets
+xdg-desktop-portal activate the backend over D-Bus. It references the optional
+systemd user unit in `packaging/better-portal.service`; the installer renders
+the same absolute binary path into both files. After installing, run
+`systemctl --user daemon-reload` and restart `xdg-desktop-portal` (or log out
+and back in). The installer does not start services for you.
+
+### Manual install
+
+To install by hand, render the two templates with the absolute daemon path:
+
+```sh
+install -Dm755 target/release/better-portal /usr/local/bin/better-portal
+install -Dm755 target/release/better-portal-picker /usr/local/bin/better-portal-picker
+install -d /usr/local/share/dbus-1/services /usr/local/share/xdg-desktop-portal/portals
+sed "s|@BETTER_PORTAL@|/usr/local/bin/better-portal|g" \
+    packaging/org.freedesktop.impl.portal.desktop.better.service \
+    > /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.better.service
+install -d /etc/systemd/user
+sed "s|@BETTER_PORTAL@|/usr/local/bin/better-portal|g" \
+    packaging/better-portal.service \
+    > /etc/systemd/user/better-portal.service
+install -Dm644 better.portal \
+    /usr/local/share/xdg-desktop-portal/portals/better.portal
+install -Dm644 packaging/portals.conf \
+    /etc/xdg/xdg-desktop-portal/portals.conf   # merge if it already exists
+```
 
 Run manually for development:
 
@@ -200,13 +272,34 @@ The tests start their own `dbus-daemon` session buses and skip when
   through `ScreenshotArea`, cancellation, and colour-cancellation mapping.
 - `better-portal-picker` window mode, cancel exit code `2`, missing
   `NIRI_SOCKET`, and output mode without a compositor.
+- The shipped `.portal`, D-Bus service, systemd unit, and `portals.conf` parse
+  and agree on the bus name and rendered binary path.
+- `install.sh --print-paths`, `--dry-run`, `--stage`, and `--uninstall` with
+  overridden paths in temporary roots, including merging and restoring an
+  existing `portals.conf`.
 
-A manual private-bus smoke check:
+### Smoke test
+
+`scripts/smoke.sh` starts a private `dbus-daemon`, runs the portal without a
+compositor, lists the backend bus name, and calls `Screenshot` once. Without
+niri the expected reply is response `2` (other failure), which proves the
+method and its Request lifecycle are reachable.
+
+```sh
+cargo build                                  # or cargo build --release
+./scripts/smoke.sh                           # private bus + one method call
+./scripts/smoke.sh --binary ./target/release/better-portal
+./scripts/smoke.sh --dry-run                 # print the plan, start nothing
+```
+
+The script skips with exit status `0` when `dbus-daemon` or a D-Bus tool is
+missing, so it is safe in minimal containers. It never needs a live compositor
+or PipeWire. A manual equivalent is:
 
 ```sh
 cargo build
 dbus-run-session -- bash -c '
-  ./target/debug/better-portal &
+  BETTER_PORTAL_PICKER=/nonexistent ./target/debug/better-portal &
   sleep 1
   busctl --user introspect \
     org.freedesktop.impl.portal.desktop.better \
@@ -244,3 +337,15 @@ respectively.
 - Only the Screenshot, PickColor, and ScreenCast impl interfaces are provided.
   Settings, Wallpaper, Inhibit, and the other portals remain with niri or
   another backend.
+- `install.sh` is a plain install helper, not a distro package. It does not
+  create users, run `systemctl`/`dbus-send`, or reload the running portal; do
+  those steps after installing (`systemctl --user daemon-reload`, then restart
+  `xdg-desktop-portal` or log out and back in).
+- The `portals.conf` merge is line-based and only rewrites the two
+  `[preferred]` keys above. Unusual hand-written syntax, includes, or another
+  tool rewriting the file afterwards can defeat it; use `--no-portals-conf`
+  and manage the preference yourself if that matters.
+- `better.portal` selects the backend with `UseIn=niri`. Other compositors need
+  their own `portals.conf` entry or an edited descriptor; PickColor and
+  Screenshot still delegate to niri's compositor interfaces, so better-portal
+  is not a standalone capture implementation.
