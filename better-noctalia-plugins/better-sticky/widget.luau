@@ -38,3 +38,11 @@ end
 function onMiddleClick()
   noctalia.runInTerminal("companionctl call stage list")
 end
+
+function onIpc(event)
+  if event == "refresh" then
+    refresh()
+  elseif event == "click" then
+    onClick()
+  end
+end

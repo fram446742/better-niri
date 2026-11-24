@@ -37,6 +37,21 @@ Packaging installs the same tree under
 `/usr/share/better-desktop/noctalia-plugins` so it can be added as a source
 without cloning the repository.
 
+## Scripted interaction
+
+Every widget accepts events through Noctalia's plugin IPC, which is useful for
+keybinds, tests and automation:
+
+```sh
+noctalia msg plugin better-desktop/better-companion:status focused refresh
+noctalia msg plugin better-desktop/better-companion:status focused click
+noctalia msg plugin better-desktop/better-companion:status focused right-click
+```
+
+`refresh` reruns the widget's data read, `click` invokes the same handler as a
+left click, and `right-click` the secondary action. Use `all` instead of
+`focused` for provider entries; bar widgets are addressed by their output.
+
 ## Requirements
 
 - Noctalia with plugin API 24+.

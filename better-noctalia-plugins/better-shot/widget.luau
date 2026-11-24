@@ -32,3 +32,11 @@ function onRightClick()
   end
   run({ "better-shot", "screen", "--copy" })
 end
+
+function onIpc(event)
+  if event == "refresh" then
+    refresh()
+  elseif event == "click" then
+    onClick()
+  end
+end

@@ -98,5 +98,9 @@ end
 function onIpc(event)
   if event == "refresh" then
     refresh()
+  elseif event == "click" then
+    onClick()
+  elseif event == "right-click" then
+    onRightClick()
   end
 end
