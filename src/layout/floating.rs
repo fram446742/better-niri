@@ -1235,6 +1235,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) where
         LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
         PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+        TileRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
     {
         let scale = Scale::from(self.scale);
         let view_rect = Rectangle::from_size(self.view_size);

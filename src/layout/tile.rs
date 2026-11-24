@@ -6,7 +6,6 @@ use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
@@ -1632,6 +1631,7 @@ impl<W: LayoutElement> Tile<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, true, push);
     }
@@ -1646,6 +1646,7 @@ impl<W: LayoutElement> Tile<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, false, push);
     }
@@ -1661,6 +1662,7 @@ impl<W: LayoutElement> Tile<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         if ctx.target.should_hide(self.window.rules().block_out_from) {
             return;
@@ -1704,19 +1706,17 @@ impl<W: LayoutElement> Tile<W> {
         let mut pushed = false;
         self.window().set_offscreen_data(None);
 
-        if let Some(open) = &self.open_animation
-            && let Some(mut gles_ctx) = ctx.as_gles()
-        {
+        if let Some(open) = &self.open_animation {
             let mut elements = Vec::new();
-            self.render_inner::<GlesRenderer>(
-                gles_ctx.r(),
+            self.render_inner::<R>(
+                ctx.r(),
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
             match open.render(
-                gles_ctx.renderer,
+                ctx.renderer,
                 &elements,
                 self.animated_tile_size(),
                 location,
@@ -1732,19 +1732,16 @@ impl<W: LayoutElement> Tile<W> {
                     warn!("error rendering window opening animation: {err:?}");
                 }
             }
-        } else if alpha_animations
-            && let Some(alpha) = &self.alpha_animation
-            && let Some(mut gles_ctx) = ctx.as_gles()
-        {
+        } else if alpha_animations && let Some(alpha) = &self.alpha_animation {
             let mut elements = Vec::new();
-            self.render_inner::<GlesRenderer>(
-                gles_ctx.r(),
+            self.render_inner::<R>(
+                ctx.r(),
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
-            match alpha.offscreen.render(gles_ctx.renderer, scale, &elements) {
+            match alpha.offscreen.render(ctx.renderer, scale, &elements) {
                 Ok((elem, _sync, data)) => {
                     let offset = elem.offset();
                     let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
@@ -2090,6 +2087,127 @@ mod vulkan_tests {
                 &pixels[0..4],
                 &[0, 255, 0, 255],
                 "the baked tile snapshot did not reach the readback target"
+            );
+        });
+    }
+
+    /// The opening animation's generic fallback must bake its frame on Vulkan too: when no GLES
+    /// renderer (and thus no custom open shader) exists, `OpenAnimation::render` bakes through the
+    /// generic offscreen and returns the rescaled/alpha-faded offscreen element.
+    #[test]
+    fn vulkan_opening_animation_bakes_without_gles() {
+        for_each_vulkan_renderer(|renderer| {
+            let green = SolidColorBuffer::new((8., 8.), [0., 1., 0., 1.]);
+            let elem = SolidColorRenderElement::from_buffer(
+                &green,
+                Point::from((0., 0.)),
+                1.,
+                Kind::Unspecified,
+            );
+            let anim = Animation::new(
+                Clock::with_time(std::time::Duration::ZERO),
+                0.,
+                1.,
+                0.,
+                niri_config::Animation {
+                    off: false,
+                    kind: niri_config::animations::Kind::Easing(
+                        niri_config::animations::EasingParams {
+                            duration_ms: 1000,
+                            curve: niri_config::animations::Curve::Linear,
+                        },
+                    ),
+                },
+            );
+            let open = OpenAnimation::new(anim);
+
+            let (element, _data) = open
+                .render(
+                    renderer,
+                    &[elem],
+                    Size::from((8., 8.)),
+                    Point::from((0., 0.)),
+                    Scale::from(1.),
+                    1.,
+                )
+                .expect("bake the opening animation frame");
+            assert!(
+                matches!(element, OpeningWindowRenderElement::Offscreen(_)),
+                "Vulkan must take the generic offscreen fallback, not the GLES shader"
+            );
+        });
+    }
+
+    /// The tile alpha fade bakes the tile contents into the generic offscreen buffer and draws
+    /// them back with the animation alpha. On Vulkan this must produce a Vulkan texture and a
+    /// half-transparent result (the same path `Tile::render_with_alpha_animations` takes).
+    #[test]
+    fn vulkan_tile_alpha_fade_bakes_and_draws_with_alpha() {
+        for_each_vulkan_renderer(|renderer| {
+            let size = Size::<i32, Buffer>::from((4, 4));
+            let green = SolidColorBuffer::new((4., 4.), [0., 1., 0., 1.]);
+            let elem = SolidColorRenderElement::from_buffer(
+                &green,
+                Point::from((0., 0.)),
+                1.,
+                Kind::Unspecified,
+            );
+
+            let offscreen = OffscreenBuffer::default();
+            let (baked, _sync, _data) = offscreen
+                .render(renderer, Scale::from(1.), &[elem])
+                .expect("bake tile contents for the alpha fade");
+            assert!(
+                matches!(baked.texture(), TtyOffscreen::Vulkan(_)),
+                "the alpha-fade bake must be a Vulkan texture"
+            );
+            let element =
+                PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                    TextureBuffer::from_tty_texture(
+                        baked.texture().clone(),
+                        baked.context_id(),
+                        Scale::from(1.),
+                        Transform::Normal,
+                        Vec::new(),
+                    ),
+                    baked.offset(),
+                    0.5,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                ));
+
+            let physical = Size::<i32, smithay::utils::Physical>::from((4, 4));
+            let mut target = renderer
+                .create_buffer(Fourcc::Abgr8888, size)
+                .expect("readback target");
+            {
+                let mut fb = renderer.bind(&mut target).expect("bind target");
+                let mut frame = renderer
+                    .render(&mut fb, physical, Transform::Normal)
+                    .expect("begin frame");
+                let dst = Rectangle::from_size(physical);
+                frame
+                    .clear(Color32F::TRANSPARENT, &[dst])
+                    .expect("clear frame");
+                RenderElement::<VulkanRenderer>::draw(
+                    &element,
+                    &mut frame,
+                    element.src(),
+                    dst,
+                    &[dst],
+                    &[],
+                    None,
+                )
+                .expect("draw alpha-faded tile");
+                let _sync = frame.finish().expect("finish frame");
+            }
+
+            let pixels = read_back(renderer, &mut target, size);
+            let alpha = pixels[3];
+            assert!(
+                (100..=155).contains(&alpha),
+                "expected a half-transparent draw, got alpha {alpha}"
             );
         });
     }

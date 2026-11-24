@@ -3994,6 +3994,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     ) where
         LayoutElementRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
         PrimaryGpuTextureRenderElement: smithay::backend::renderer::element::RenderElement<R>,
+        TileRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
     {
         let scale = Scale::from(self.scale);
 

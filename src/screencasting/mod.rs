@@ -20,6 +20,7 @@ use crate::dbus::mutter_screen_cast::{
     self, CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId,
 };
 use crate::layout::LayoutElementRenderElement;
+use crate::layout::tile::TileRenderElement;
 use crate::niri::{CastTarget, Niri, OutputRenderElements, PointerRenderElements, State};
 use crate::niri_render_elements;
 use crate::render_helpers::{CaptureRenderer, RenderCtx, RenderIntent, RenderTarget};
@@ -520,9 +521,12 @@ impl Niri {
         R: CaptureRenderer,
         OutputRenderElements<R>: RenderElement<R>,
         LayoutElementRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
+        crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
         CastRenderElement<R>: RenderElement<R>,
     {

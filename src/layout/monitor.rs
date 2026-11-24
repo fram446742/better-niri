@@ -19,7 +19,7 @@ use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::grid_overview::GridDirection;
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
-use super::tile::Tile;
+use super::tile::{Tile, TileRenderElement};
 use super::workspace::{
     GridRenderPass, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
     WorkspaceRenderElement, compute_working_area,
@@ -2662,6 +2662,7 @@ impl<W: LayoutElement> Monitor<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Monitor::render_workspaces");
 
@@ -3017,6 +3018,7 @@ impl<W: LayoutElement> Monitor<W> {
     ) where
         LayoutElementRenderElement<R>: RenderElement<R>,
         PrimaryGpuTextureRenderElement: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Monitor::render_overview_at_zoom");
 

@@ -14,16 +14,16 @@ use pango::FontDescription;
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::Color32F;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
 };
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::element::{Kind, RenderElement};
 use smithay::input::keyboard::Keysym;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::backend::tty::TtyOffscreen;
 use crate::layout::focus_ring::{FocusRing, FocusRingRenderElement};
 use crate::layout::{Layout, LayoutElement as _, LayoutElementRenderElement};
 use crate::niri::Niri;
@@ -185,7 +185,11 @@ struct MoveAnimation {
     from: f64,
 }
 
-type MruTexture = TextureBuffer<GlesTexture>;
+/// Cached MRU text/panel texture.
+///
+/// Baked from a cairo pixel buffer with the active renderer (GLES or Vulkan), the texture is
+/// stored backend-agnostically and drawn through [`PrimaryGpuTextureRenderElement`].
+type MruTexture = TextureBuffer<TtyOffscreen>;
 
 /// Cached title texture.
 #[derive(Debug, Default)]
@@ -322,9 +326,9 @@ impl Thumbnail {
         size.to_physical_precise_round(scale).to_logical(scale)
     }
 
-    fn title_texture(
+    fn title_texture<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         mapped: &Mapped,
         scale: f64,
     ) -> Option<MruTexture> {
@@ -463,10 +467,7 @@ impl Thumbnail {
         });
 
         let mut title_size = None;
-        let title_texture = match ctx.as_gles() {
-            Some(gles_ctx) => self.title_texture(gles_ctx.renderer, mapped, scale),
-            None => None,
-        };
+        let title_texture = self.title_texture(ctx.renderer, mapped, scale);
         let title_texture = title_texture.map(|texture| {
             let mut size = texture.logical_size();
             size.w = f64::min(size.w, preview_geo.size.w);
@@ -502,9 +503,7 @@ impl Thumbnail {
                 Kind::Unspecified,
             );
 
-            let elem = PrimaryGpuTextureRenderElement(
-                texture.map_texture(crate::backend::tty::TtyOffscreen::Gles),
-            );
+            let elem = PrimaryGpuTextureRenderElement(texture);
             push(WindowMruUiRenderElement::TextureElement(elem));
         }
 
@@ -1130,7 +1129,9 @@ impl WindowMruUi {
         output: &Output,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
-    ) {
+    ) where
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+    {
         let (inner, progress) = match &self.state {
             UiState::Closed { .. } => return,
             UiState::Closing { inner, anim } => (inner, anim.clamped_value()),
@@ -1165,10 +1166,7 @@ impl WindowMruUi {
 
         // During the closing fade, use an offscreen to avoid transparent compositing artifacts.
         let mut pushed_offscreen = false;
-        if *output == inner.output
-            && alpha < 1.
-            && let Some(mut ctx) = ctx.as_gles()
-        {
+        if *output == inner.output && alpha < 1. {
             let mut elems = Vec::new();
             inner.render(niri, ctx.r(), &mut |elem| elems.push(elem));
             elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
@@ -1587,34 +1585,29 @@ impl Inner {
         niri: &Niri,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
-    ) {
+    ) where
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+    {
         let output_size = output_size(&self.output);
         let scale = self.output.current_scale().fractional_scale();
 
-        let panel_texture = match ctx.as_gles() {
-            Some(gles_ctx) => {
-                self.scope_panel
-                    .borrow_mut()
-                    .get(gles_ctx.renderer, scale, self.wmru.scope)
-            }
-            None => None,
-        };
+        let panel_texture = self
+            .scope_panel
+            .borrow_mut()
+            .get(ctx.renderer, scale, self.wmru.scope);
         if let Some(texture) = panel_texture {
             let padding = round_logical_in_physical(scale, f64::from(PANEL_PADDING));
 
             let size = texture.logical_size();
             let location = Point::new((output_size.w - size.w) / 2., padding * 2.);
-            let elem = PrimaryGpuTextureRenderElement(
-                TextureRenderElement::from_texture_buffer(
-                    texture.clone(),
-                    location,
-                    1.,
-                    None,
-                    None,
-                    Kind::Unspecified,
-                )
-                .map_texture(crate::backend::tty::TtyOffscreen::Gles),
-            );
+            let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                texture.clone(),
+                location,
+                1.,
+                None,
+                None,
+                Kind::Unspecified,
+            ));
             push(WindowMruUiRenderElement::TextureElement(elem));
         }
 
@@ -1671,7 +1664,12 @@ impl Inner {
 }
 
 impl TitleTexture {
-    fn get(&mut self, renderer: &mut GlesRenderer, title: &str, scale: f64) -> Option<MruTexture> {
+    fn get<R: NiriRenderer>(
+        &mut self,
+        renderer: &mut R,
+        title: &str,
+        scale: f64,
+    ) -> Option<MruTexture> {
         if self.title != title || self.scale != scale {
             self.texture = None;
             self.title = title.to_owned();
@@ -1692,8 +1690,8 @@ impl TitleTexture {
     }
 }
 
-fn generate_title_texture(
-    renderer: &mut GlesRenderer,
+fn generate_title_texture<R: NiriRenderer>(
+    renderer: &mut R,
     title: &str,
     scale: f64,
 ) -> anyhow::Result<MruTexture> {
@@ -1737,13 +1735,13 @@ fn generate_title_texture(
         Vec::new(),
     )?;
 
-    Ok(buffer)
+    Ok(buffer.map_texture(R::wrap_texture))
 }
 
 impl ScopePanel {
-    fn get(
+    fn get<R: NiriRenderer>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         scale: f64,
         scope: MruScope,
     ) -> Option<MruTexture> {
@@ -1759,8 +1757,8 @@ impl ScopePanel {
     }
 }
 
-fn generate_scope_panels(
-    renderer: &mut GlesRenderer,
+fn generate_scope_panels<R: NiriRenderer>(
+    renderer: &mut R,
     scale: f64,
 ) -> anyhow::Result<[MruTexture; 3]> {
     fn make_panel_text(idx: usize) -> String {
@@ -1800,7 +1798,11 @@ fn generate_scope_panels(
     ])
 }
 
-fn render_panel(renderer: &mut GlesRenderer, scale: f64, text: &str) -> anyhow::Result<MruTexture> {
+fn render_panel<R: NiriRenderer>(
+    renderer: &mut R,
+    scale: f64,
+    text: &str,
+) -> anyhow::Result<MruTexture> {
     let _span = tracy_client::span!("mru::render_panel");
 
     let mut font = FontDescription::from_string(FONT);
@@ -1859,7 +1861,7 @@ fn render_panel(renderer: &mut GlesRenderer, scale: f64, text: &str) -> anyhow::
         Vec::new(),
     )?;
 
-    Ok(buffer)
+    Ok(buffer.map_texture(R::wrap_texture))
 }
 
 /// Returns key bindings available when the MRU UI is open.
@@ -1988,4 +1990,74 @@ fn make_dynamic_opened_binds(config: &Config) -> Vec<Bind> {
     }
 
     rv
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod vulkan_tests {
+    use smithay::backend::renderer::Texture as _;
+    use smithay::backend::renderer::vulkan::VulkanRenderer;
+    use smithay::backend::vulkan::version::Version;
+    use smithay::backend::vulkan::{Instance, PhysicalDevice};
+
+    use super::*;
+    use crate::render_helpers::copy_tty_texture_to_vec;
+
+    /// Runs `test` on the first Vulkan device that can create a renderer, silently skipping when
+    /// there is no Vulkan loader/device/driver (CI without a GPU).
+    fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        for device in devices {
+            if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                test(&mut renderer);
+                return;
+            }
+        }
+    }
+
+    fn has_visible_pixels(pixels: &[u8]) -> bool {
+        pixels.chunks_exact(4).any(|px| px[3] != 0)
+    }
+
+    /// The MRU title and scope-panel bakes are renderer-independent (cairo/pango into a pixel
+    /// buffer) and must upload through the active renderer. On Vulkan they must come out as
+    /// Vulkan textures with visible glyph pixels, so the Alt-Tab UI can draw them without GLES.
+    #[test]
+    fn vulkan_mru_text_and_panel_bakes_read_back() {
+        for_each_vulkan_renderer(|renderer| {
+            let title =
+                generate_title_texture(renderer, "niri", 1.).expect("bake MRU title texture");
+            assert!(
+                matches!(title.texture(), TtyOffscreen::Vulkan(_)),
+                "MRU title must be baked into a Vulkan texture"
+            );
+            let region = Rectangle::from_size(title.texture().size());
+            let pixels =
+                copy_tty_texture_to_vec(renderer, title.texture(), region, Fourcc::Abgr8888)
+                    .expect("read back MRU title texture");
+            assert!(
+                has_visible_pixels(&pixels),
+                "the MRU title bake produced no visible pixels"
+            );
+
+            let panel = render_panel(renderer, 1., "<b>Scope:</b> All")
+                .expect("bake MRU scope panel texture");
+            assert!(
+                matches!(panel.texture(), TtyOffscreen::Vulkan(_)),
+                "MRU scope panel must be baked into a Vulkan texture"
+            );
+            let region = Rectangle::from_size(panel.texture().size());
+            let pixels =
+                copy_tty_texture_to_vec(renderer, panel.texture(), region, Fourcc::Abgr8888)
+                    .expect("read back MRU scope panel texture");
+            assert!(
+                has_visible_pixels(&pixels),
+                "the MRU scope panel bake produced no visible pixels"
+            );
+        });
+    }
 }

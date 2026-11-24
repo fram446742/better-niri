@@ -36,18 +36,18 @@ mod enabled {
         Relocate, RelocateRenderElement, RescaleRenderElement,
     };
     use smithay::backend::renderer::element::{Kind, RenderElement};
-    use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
     use smithay::output::{Output, WeakOutput};
     use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
     use super::PREVIEW_FRAME_INTERVAL;
     use crate::animation::{Animation, Clock};
+    use crate::backend::tty::TtyOffscreen;
     use crate::dbus::mutter_screen_cast::StreamTargetId;
     use crate::dbus::niri_portal_screen_cast::{
         PickSourcesReply, PickSourcesRequest, PickerPersistMode, PickerRequestId, PickerSelection,
         PickerSourceTypes,
     };
-    use crate::layout::LayoutElement as _;
+    use crate::layout::{LayoutElement as _, LayoutElementRenderElement};
     use crate::niri::Niri;
     use crate::niri_render_elements;
     use crate::render_helpers::memory::MemoryBuffer;
@@ -233,7 +233,7 @@ mod enabled {
         output_size: Size<f64, Logical>,
         palette: PickerPalette,
         blocked_window_ids: Vec<u64>,
-        buffer: TextureBuffer<GlesTexture>,
+        buffer: TextureBuffer<TtyOffscreen>,
     }
 
     #[derive(Default)]
@@ -497,15 +497,16 @@ mod enabled {
             }
         }
 
-        pub fn update_display_preview<E>(
+        pub fn update_display_preview<R, E>(
             &self,
             name: &str,
-            renderer: &mut GlesRenderer,
+            renderer: &mut R,
             scale: Scale<f64>,
             bounds: Rectangle<i32, Physical>,
             elements: &[E],
         ) where
-            E: RenderElement<GlesRenderer>,
+            R: NiriRenderer,
+            E: RenderElement<R>,
         {
             let mut previews = self.display_previews.borrow_mut();
             let preview = previews.entry(name.to_owned()).or_default();
@@ -828,7 +829,10 @@ mod enabled {
             output: &Output,
             mut ctx: RenderCtx<R>,
             push: &mut dyn FnMut(ScreenCastPickerRenderElement<R>),
-        ) {
+        ) where
+            LayoutElementRenderElement<R>: RenderElement<R>,
+            ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        {
             let Some(state) = self.state.visible() else {
                 return;
             };
@@ -847,9 +851,6 @@ mod enabled {
             }
 
             let scale = output.current_scale().fractional_scale();
-            let Some(mut ctx) = ctx.as_gles() else {
-                return;
-            };
             let mut elements = Vec::new();
             self.render_contents(niri, output, ctx.r(), 1., &mut |element| {
                 elements.push(element)
@@ -884,7 +885,9 @@ mod enabled {
             ctx: RenderCtx<R>,
             alpha: f32,
             push: &mut dyn FnMut(ScreenCastPickerRenderElement<R>),
-        ) {
+        ) where
+            LayoutElementRenderElement<R>: RenderElement<R>,
+        {
             let Some(state) = self.state.visible() else {
                 return;
             };
@@ -936,11 +939,8 @@ mod enabled {
                     || entry.blocked_window_ids != blocked_window_ids
             });
             if stale {
-                let Some(gles_renderer) = ctx.renderer.as_gles_renderer() else {
-                    return;
-                };
                 cache.remove(&cache_key);
-                match render_panel(gles_renderer, output, state, &palette, &blocked_window_ids) {
+                match render_panel(ctx.renderer, output, state, &palette, &blocked_window_ids) {
                     Ok(buffer) => {
                         cache.insert(
                             cache_key.clone(),
@@ -971,9 +971,7 @@ mod enabled {
                 Kind::Unspecified,
             );
             push(ScreenCastPickerRenderElement::<R>::Texture(
-                PrimaryGpuTextureRenderElement(
-                    element.map_texture(crate::backend::tty::TtyOffscreen::Gles),
-                ),
+                PrimaryGpuTextureRenderElement(element),
             ));
 
             if state.view == PickerView::Window {
@@ -1028,11 +1026,8 @@ mod enabled {
                 let key = WindowPreviewCacheKey { scale, items };
                 let mut cache = self.window_previews.borrow_mut();
                 if cache.should_refresh(key, self.clock.now_unadjusted()) {
-                    let Some(gles_renderer) = ctx.renderer.as_gles_renderer() else {
-                        return;
-                    };
                     let mut preview_ctx = RenderCtx {
-                        renderer: gles_renderer,
+                        renderer: ctx.renderer,
                         target: RenderTarget::Screencast,
                         intent: RenderIntent::PickerPreview,
                         xray: ctx.xray,
@@ -1580,13 +1575,13 @@ mod enabled {
         card_width
     }
 
-    fn render_panel(
-        renderer: &mut GlesRenderer,
+    fn render_panel<R: NiriRenderer>(
+        renderer: &mut R,
         output: &Output,
         state: &OpenPicker,
         palette: &PickerPalette,
         blocked_window_ids: &[u64],
-    ) -> anyhow::Result<TextureBuffer<GlesTexture>> {
+    ) -> anyhow::Result<TextureBuffer<TtyOffscreen>> {
         let scale = output.current_scale().fractional_scale();
         let geometry = picker_geometry(output, state);
         let logical_size = geometry.panel.size;
@@ -1796,7 +1791,7 @@ mod enabled {
             scale,
             Transform::Normal,
         );
-        Ok(TextureBuffer::from_memory_buffer(renderer, &memory)?)
+        Ok(TextureBuffer::from_memory_buffer(renderer, &memory)?.map_texture(R::wrap_texture))
     }
 
     fn candidate_labels<'a>(
@@ -2138,6 +2133,87 @@ mod enabled {
             assert_eq!(subtitle, messages.hidden_from_screen_share);
             assert_ne!(title, candidate.title);
             assert_ne!(subtitle, candidate.subtitle.as_deref().unwrap());
+        }
+    }
+
+    #[cfg(all(test, feature = "vulkan"))]
+    mod vulkan_tests {
+        use smithay::backend::renderer::vulkan::VulkanRenderer;
+        use smithay::backend::vulkan::version::Version;
+        use smithay::backend::vulkan::{Instance, PhysicalDevice};
+        use smithay::utils::Buffer;
+
+        use super::*;
+        use crate::render_helpers::copy_tty_texture_to_vec;
+
+        /// Runs `test` on the first Vulkan device that can create a renderer, silently skipping
+        /// when there is no Vulkan loader/device/driver (CI without a GPU).
+        fn for_each_vulkan_renderer(mut test: impl FnMut(&mut VulkanRenderer)) {
+            let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+                return;
+            };
+            let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+                return;
+            };
+            for device in devices {
+                if let Ok(mut renderer) = VulkanRenderer::new(&device) {
+                    test(&mut renderer);
+                    return;
+                }
+            }
+        }
+
+        /// Display-preview bakes go through the generic `OffscreenBuffer` on the active renderer
+        /// (the same path as the window-card previews). On Vulkan this must produce a Vulkan
+        /// texture whose contents can be read back.
+        #[test]
+        fn vulkan_picker_preview_bake_reads_back_contents() {
+            for_each_vulkan_renderer(|renderer| {
+                let ui = ScreenCastPickerUi::new(
+                    Clock::with_time(Duration::ZERO),
+                    Rc::new(RefCell::new(Config::default())),
+                );
+
+                let red = SolidColorBuffer::new((8., 8.), [1., 0., 0., 1.]);
+                let elem = SolidColorRenderElement::from_buffer(
+                    &red,
+                    Point::from((0., 0.)),
+                    1.,
+                    Kind::Unspecified,
+                );
+                let size = Size::<i32, Physical>::from((8, 8));
+                let bounds = Rectangle::from_size(size);
+                ui.update_display_preview(
+                    "test-output",
+                    renderer,
+                    Scale::from(1.),
+                    bounds,
+                    &[elem],
+                );
+
+                let previews = ui.display_previews.borrow();
+                let element = previews
+                    .get("test-output")
+                    .and_then(|preview| preview.element.as_ref())
+                    .expect("display preview was baked");
+                assert!(
+                    matches!(element.texture(), TtyOffscreen::Vulkan(_)),
+                    "the picker preview must be baked into a Vulkan texture"
+                );
+
+                let pixels = copy_tty_texture_to_vec(
+                    renderer,
+                    element.texture(),
+                    Rectangle::from_size(Size::<i32, Buffer>::from((8, 8))),
+                    Fourcc::Abgr8888,
+                )
+                .expect("read back picker preview");
+                assert_eq!(
+                    &pixels[0..4],
+                    &[255, 0, 0, 255],
+                    "the picker preview bake did not contain the drawn colour"
+                );
+            });
         }
     }
 }
