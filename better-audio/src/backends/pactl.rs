@@ -122,6 +122,26 @@ impl AudioBackend for PactlBackend {
         ])
         .map(|_| ())
     }
+
+    fn set_sink_volume(&self, sink: &str, volume: f32) -> Result<(), String> {
+        self.run(&["set-sink-volume", sink, &linear_to_percent(volume)])
+            .map(|_| ())
+    }
+
+    fn set_sink_mute(&self, sink: &str, mute: bool) -> Result<(), String> {
+        self.run(&["set-sink-mute", sink, if mute { "1" } else { "0" }])
+            .map(|_| ())
+    }
+
+    fn set_source_volume(&self, source: &str, volume: f32) -> Result<(), String> {
+        self.run(&["set-source-volume", source, &linear_to_percent(volume)])
+            .map(|_| ())
+    }
+
+    fn set_source_mute(&self, source: &str, mute: bool) -> Result<(), String> {
+        self.run(&["set-source-mute", source, if mute { "1" } else { "0" }])
+            .map(|_| ())
+    }
 }
 
 pub fn parse_sinks(json: &str) -> Result<Vec<Sink>, String> {
@@ -149,6 +169,8 @@ pub fn parse_sinks(json: &str) -> Result<Vec<Sink>, String> {
             id: id as u32,
             name,
             description,
+            volume: parse_volume(entry),
+            mute: entry.get("mute").and_then(Value::as_bool),
         });
     }
     Ok(sinks)
@@ -177,6 +199,8 @@ pub fn parse_sources(json: &str) -> Result<Vec<Source>, String> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
+            volume: parse_volume(entry),
+            mute: entry.get("mute").and_then(Value::as_bool),
         });
     }
     Ok(sources)
@@ -269,6 +293,7 @@ mod tests {
 
     const SINKS: &str = include_str!("../../tests/fixtures/pactl-sinks.json");
     const STREAMS: &str = include_str!("../../tests/fixtures/pactl-sink-inputs.json");
+    const SOURCES: &str = include_str!("../../tests/fixtures/pactl-sources.json");
 
     #[test]
     fn parses_pactl_fixtures() {
@@ -276,6 +301,16 @@ mod tests {
         assert_eq!(sinks.len(), 3);
         assert_eq!(sinks[1].name, "alsa_output.hdmi");
         assert_eq!(sinks[2].description, "BT");
+        assert_eq!(sinks[0].volume, Some(1.0));
+        assert_eq!(sinks[0].mute, Some(false));
+        assert_eq!(sinks[2].volume, Some(0.125));
+        assert_eq!(sinks[2].mute, Some(true));
+
+        let sources = parse_sources(SOURCES).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "alsa_input.usb-mic");
+        assert_eq!(sources[0].volume, Some(0.125));
+        assert_eq!(sources[0].mute, Some(false));
 
         let streams = parse_streams(STREAMS).unwrap();
         assert_eq!(streams[0].app, "Spotify");

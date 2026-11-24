@@ -19,6 +19,9 @@ niri's Cargo workspace).
 - **Sources** (capture devices) can be listed and made the default, and named
   **profiles** set a default sink, default source and a global volume/mute set
   with `profile apply` / `profile restore`.
+- **Device mixer**: `volume` and `mute` set a sink or source directly. Device
+  listings and `status` report the current linear volume and mute flag, and an
+  already-matching value is a no-op (idempotent preview/apply).
 - `apply` queries sinks, streams and the default sink, then moves every
   matching stream whose current sink differs and applies the profile. Streams
   without a rule are left alone.
@@ -39,8 +42,8 @@ same rule/plan model, so matching and dry-run behaviour is identical.
 | Backend | Implementation | Requirements |
 | --- | --- | --- |
 | `native` | Direct `libpipewire-0.3` connection through the `pipewire` crate: registry enumeration (sinks, sources, streams, links), link creation/destruction for moves, `default` metadata for default sink/source, node `Props` for volume/mute. | Build-time `libpipewire-0.3` headers and library; enabled by the default `native` feature. |
-| `pactl` | `pactl -f json list …` for sinks/sources/streams, `move-sink-input`, `set-default-sink`/`set-default-source`, `set-sink-input-volume/-mute`. | `pactl` (PipeWire's PulseAudio compatibility layer). |
-| `wpctl` | `pw-dump` JSON snapshots, `pw-cli create-link`/`destroy`/`set-param` for moves and profile, `wpctl set-default` for defaults. | `pw-dump`, `pw-cli` and `wpctl`; no PulseAudio needed. |
+| `pactl` | `pactl -f json list …` for sinks/sources/streams, `move-sink-input`, `set-default-sink`/`set-default-source`, `set-sink-input-volume/-mute`, `set-sink-volume/-mute` and `set-source-volume/-mute`. | `pactl` (PipeWire's PulseAudio compatibility layer). |
+| `wpctl` | `pw-dump` JSON snapshots, `pw-cli create-link`/`destroy`/`set-param` for moves, stream profiles and sink/source volume+mute, `wpctl set-default` for defaults. | `pw-dump`, `pw-cli` and `wpctl`; no PulseAudio needed. |
 
 `auto` (the default) probes **native → pactl → wpctl** and uses the first backend
 that can reach a server. An explicit `--backend` that is unavailable also falls
@@ -126,6 +129,25 @@ and every interval; a `ChangeGate` suppresses an identical plan, so repeated
 ticks do not rewrite volume or relink a stream. This is polling, not a
 PipeWire event subscription.
 
+## Device mixer
+
+```sh
+better-audio volume sink <device> <0..1>
+better-audio mute sink <device> on|off
+better-audio volume source <device> <0..1>
+better-audio mute source <device> on|off
+```
+
+`<device>` is an exact name or a unique substring, resolved separately in the
+sink or source list. Volumes are linear (`0.5` is 50%); `pactl` converts to its
+cubic percentage and `wpctl`/`native` write PipeWire `Props`, so the same value
+means the same loudness on every backend. Invalid values (`<0`, `>1`, NaN) are
+rejected before a backend is contacted. A value that already matches is a no-op
+(`changed: false`) and is not written. `--dry-run` resolves the device and
+reports `changed` without writing. `sinks`, `sources` and `status` include each
+device's current `volume` and `mute`; `--json` wraps a command result as
+`{ "command": "volume", "ok": true, "data": { ... } }`.
+
 ## Context-aware rules
 
 Rules can additionally match the focused window/workspace:
@@ -183,6 +205,9 @@ better-audio rules add 'fire*' hdmi --priority 5
 better-audio rules add mpv 'usb-headset' --volume 0.6 --mute off
 better-audio default headset
 better-audio default-source alsa_input.usb-mic
+better-audio volume sink alsa_output.usb-headset 0.5
+better-audio mute source alsa_input.usb-mic on
+better-audio volume sink headset 0.75 --dry-run --json
 better-audio profile apply headset
 better-audio profile restore
 better-audio apply --dry-run

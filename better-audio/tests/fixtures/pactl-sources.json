@@ -1,0 +1,14 @@
+[
+  {
+    "index": 5,
+    "state": "RUNNING",
+    "name": "alsa_input.usb-mic",
+    "description": "USB Microphone",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "mono": { "value": 32768, "value_percent": "50%", "db": "-6.00 dB" }
+    },
+    "properties": { "device.description": "USB Microphone" }
+  }
+]

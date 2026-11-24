@@ -108,6 +108,24 @@ pub trait AudioBackend {
     fn set_stream_volume(&self, stream_id: u32, volume: f32) -> Result<(), String>;
     fn set_stream_mute(&self, stream_id: u32, mute: bool) -> Result<(), String>;
 
+    /// Device-level volume and mute. Backends that cannot address sinks or
+    /// sources directly return an error instead of pretending to work.
+    fn set_sink_volume(&self, _sink: &str, _volume: f32) -> Result<(), String> {
+        Err("this backend cannot set sink volume".to_owned())
+    }
+
+    fn set_sink_mute(&self, _sink: &str, _mute: bool) -> Result<(), String> {
+        Err("this backend cannot set sink mute".to_owned())
+    }
+
+    fn set_source_volume(&self, _source: &str, _volume: f32) -> Result<(), String> {
+        Err("this backend cannot set source volume".to_owned())
+    }
+
+    fn set_source_mute(&self, _source: &str, _mute: bool) -> Result<(), String> {
+        Err("this backend cannot set source mute".to_owned())
+    }
+
     fn set_default_source(&self, _source: &str) -> Result<(), String> {
         Err("this backend cannot set the default source".to_owned())
     }

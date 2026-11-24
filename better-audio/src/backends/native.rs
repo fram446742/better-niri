@@ -91,6 +91,8 @@ impl RawSnapshot {
                     id: *id,
                     name,
                     description,
+                    volume: node.volume,
+                    mute: node.mute,
                 }
             })
             .collect();
@@ -123,6 +125,8 @@ impl RawSnapshot {
                     id: *id,
                     name,
                     description,
+                    volume: node.volume,
+                    mute: node.mute,
                 }
             })
             .collect();
@@ -581,6 +585,22 @@ impl AudioBackend for NativeBackend {
     fn set_stream_mute(&self, stream_id: u32, mute: bool) -> Result<(), String> {
         self.set_stream_props(stream_id, None, Some(mute))
     }
+
+    fn set_sink_volume(&self, sink: &str, volume: f32) -> Result<(), String> {
+        self.set_device_props(false, sink, Some(volume), None)
+    }
+
+    fn set_sink_mute(&self, sink: &str, mute: bool) -> Result<(), String> {
+        self.set_device_props(false, sink, None, Some(mute))
+    }
+
+    fn set_source_volume(&self, source: &str, volume: f32) -> Result<(), String> {
+        self.set_device_props(true, source, Some(volume), None)
+    }
+
+    fn set_source_mute(&self, source: &str, mute: bool) -> Result<(), String> {
+        self.set_device_props(true, source, None, Some(mute))
+    }
 }
 
 impl NativeBackend {
@@ -608,10 +628,45 @@ impl NativeBackend {
     ) -> Result<(), String> {
         let session = Session::open()?;
         let snapshot = session.snapshot()?;
+        self.write_node_props(&session, &snapshot, stream_id, "out", volume, mute)
+    }
+
+    fn set_device_props(
+        &self,
+        source: bool,
+        reference: &str,
+        volume: Option<f32>,
+        mute: Option<bool>,
+    ) -> Result<(), String> {
+        let session = Session::open()?;
+        let snapshot = session.snapshot()?;
+        let (node_id, direction) = if source {
+            let sources = snapshot.sources();
+            let found = crate::resolve_source(&sources, reference)
+                .ok_or_else(|| format!("source `{reference}` does not resolve"))?;
+            (found.id, "out")
+        } else {
+            let sinks = snapshot.sinks();
+            let found = resolve_sink(&sinks, reference)
+                .ok_or_else(|| format!("sink `{reference}` does not resolve"))?;
+            (found.id, "in")
+        };
+        self.write_node_props(&session, &snapshot, node_id, direction, volume, mute)
+    }
+
+    fn write_node_props(
+        &self,
+        session: &Session,
+        snapshot: &RawSnapshot,
+        node_id: u32,
+        direction: &str,
+        volume: Option<f32>,
+        mute: Option<bool>,
+    ) -> Result<(), String> {
         let channels = snapshot
             .ports
             .iter()
-            .filter(|port| port.node_id == stream_id && port.direction == "out")
+            .filter(|port| port.node_id == node_id && port.direction == direction)
             .count()
             .max(1);
         let bytes = props_pod(volume, mute, channels)?;
@@ -619,8 +674,8 @@ impl NativeBackend {
             .ok_or_else(|| "cannot serialize PipeWire properties".to_owned())?;
         let proxies = session.node_proxies.borrow();
         let node = proxies
-            .get(&stream_id)
-            .ok_or_else(|| format!("stream {stream_id} is not present"))?;
+            .get(&node_id)
+            .ok_or_else(|| format!("audio node {node_id} is not present"))?;
         node.set_param(spa::param::ParamType::Props, 0, pod);
         drop(proxies);
         session.sync()

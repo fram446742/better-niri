@@ -19,24 +19,36 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub mod backends;
+pub mod mixer;
 
 pub use backends::{AudioBackend, BackendConfig, BackendKind, BackendStatus, Selection};
+pub use mixer::{DeviceKind, MixerReport, parse_mute, parse_volume, set_mute, set_volume};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
     pub id: u32,
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Current linear volume (1.0 == 100%), when the backend reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<bool>,
 }
 
 /// A capture device ("source" in PulseAudio terms).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub id: u32,
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Current linear volume (1.0 == 100%), when the backend reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<bool>,
 }
 
 /// A PipeWire link between two nodes, for diagnostics.
@@ -680,7 +692,7 @@ pub fn plan_default_source(
 
 /// A snapshot of every device the backend knows about, used for hotplug
 /// watching and diagnostics.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DeviceSnapshot {
     pub sinks: Vec<Sink>,
     pub sources: Vec<Source>,
@@ -1055,16 +1067,22 @@ mod tests {
                 id: 1,
                 name: "alsa_output.usb-headset".to_owned(),
                 description: "Headset".to_owned(),
+                volume: None,
+                mute: None,
             },
             Sink {
                 id: 2,
                 name: "alsa_output.hdmi".to_owned(),
                 description: "HDMI".to_owned(),
+                volume: None,
+                mute: None,
             },
             Sink {
                 id: 3,
                 name: "bluez_output.headphones".to_owned(),
                 description: "BT".to_owned(),
+                volume: None,
+                mute: None,
             },
         ]
     }
@@ -1493,6 +1511,8 @@ mod tests {
             id: 4,
             name: "alsa_input.usb-mic".to_owned(),
             description: "Mic".to_owned(),
+            volume: None,
+            mute: None,
         }];
         backend.set_devices(
             sinks(),
@@ -1565,6 +1585,8 @@ mod tests {
             id: 4,
             name: "alsa_input.usb-mic".to_owned(),
             description: String::new(),
+            volume: None,
+            mute: None,
         }];
         let plan = plan_profile_restore(
             &store,
@@ -1657,11 +1679,15 @@ mod tests {
                 id: 4,
                 name: "alsa_input.usb-mic".to_owned(),
                 description: "Mic".to_owned(),
+                volume: None,
+                mute: None,
             },
             Source {
                 id: 5,
                 name: "alsa_input.pci".to_owned(),
                 description: "PCI".to_owned(),
+                volume: None,
+                mute: None,
             },
         ];
         assert_eq!(
@@ -1679,6 +1705,8 @@ mod tests {
             id: 4,
             name: "alsa_input.usb-mic".to_owned(),
             description: String::new(),
+            volume: None,
+            mute: None,
         }];
         backend.set_devices(
             sinks(),
@@ -1709,6 +1737,8 @@ mod tests {
                 id: 4,
                 name: "alsa_input.usb-mic".to_owned(),
                 description: String::new(),
+                volume: None,
+                mute: None,
             }],
             Some("alsa_output.hdmi"),
             Some("alsa_input.usb-mic"),
