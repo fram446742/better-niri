@@ -11,8 +11,8 @@ Status legend:
 
 The status column was refreshed on 2026-11-24 against `integration/elite-base`:
 everything marked **Integrated** is implemented and covered by the workspace test
-suite (875 tests on the default build, 407 with `--no-default-features`).
-The only core port still planned is `wp-commit-timing-v1` plus SurfaceBarrier;
+suite (886 tests on the default build, 418 with `--no-default-features`).
+All planned core protocol ports are integrated;
 hardware behaviour (VRR, tearing, explicit sync, multi-GPU, HDR mixed) is
 implemented but still needs validation on real panels. The rows below keep the
 original integration contract in their notes; treat this column as the current
@@ -53,8 +53,8 @@ state.
 | FIFO (`wp-fifo-v1`) | Absent | urayde | urayde | Integrated | Upstream Smithay already has `fifo`. |
 | Mailbox / immediate presentation | Absent | urayde, niri-spicy | urayde | Integrated | Expressed through tearing/content-type and async flips. |
 | Async page flips | Absent | urayde (niri) + losnoco (Smithay) | urayde + losnoco | Integrated | Driver fallback to blocking commit required. |
-| SurfaceBarrier / atomic layout transactions | Absent | niri-spicy + losnoco | niri-spicy | Planned (later) | Reworks transaction handling; adopt after presentation baseline. |
-| Commit timing (`wp-commit-timing-v1`) | Absent | niri-spicy + losnoco | niri-spicy | Planned (later) | Smithay module exists upstream but niri does not wire it; spicy's version is coupled to barrier work. |
+| SurfaceBarrier / atomic layout transactions | Absent | niri-spicy + losnoco | niri-spicy | Integrated | Committing surfaces register into the transaction's `SurfaceBarrier`; buffer readiness (dmabuf/syncobj) still comes from the default per-surface pre-commit hook, and the deadline timer force-releases a stalled barrier. Ready barriers are released in `refresh()` right after `notify_blocker_cleared()`, before `layout.refresh()`. |
+| Commit timing (`wp-commit-timing-v1`) | Absent | niri-spicy + losnoco | niri-spicy | Integrated | Protocol-only (no config, matching spicy). Due timers are signalled per output at its next target presentation time before `refresh()`, unmapped surfaces included; the earliest deadline arms a refresh-aligned wakeup timer. |
 | Pointer warp (`wp_pointer_warp_v1`) | Absent | urayde | urayde | Integrated | PR #4001 closed unmerged; upstream Smithay has `pointer_warp`. |
 | Multi-GPU | Partial | niri-elite (SHORiN) | niri-elite | Integrated (hardware validation pending) | Better render-node selection and display-only GPU handling. |
 | Software EGL | Absent | niri-elite | niri-elite | Integrated | Upstream explicitly skips llvmpipe/softpipe. |

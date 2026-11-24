@@ -15,6 +15,8 @@ use smithay::reexports::wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::
 
 use smithay::reexports::wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_feedback_v1::{self, WpColorManagementSurfaceFeedbackV1};
 use smithay::reexports::wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_v1::WpColorManagementSurfaceV1;
+use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timer_v1::WpCommitTimerV1;
+use smithay::reexports::wayland_protocols::wp::commit_timing::v1::client::wp_commit_timing_manager_v1::WpCommitTimingManagerV1;
 use smithay::reexports::wayland_protocols::wp::color_management::v1::client::wp_color_manager_v1::{
     Primaries, RenderIntent, TransferFunction, WpColorManagerV1,
 };
@@ -81,6 +83,7 @@ pub struct State {
     pub ksim: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
     pub subcompositor: Option<WlSubcompositor>,
     pub color_manager: Option<WpColorManagerV1>,
+    pub commit_timing_manager: Option<WpCommitTimingManagerV1>,
     /// Feedback objects kept alive so preferred_changed events can arrive.
     pub surface_feedbacks: Vec<WpColorManagementSurfaceFeedbackV1>,
     /// Identities received in preferred_changed events, in order.
@@ -297,6 +300,7 @@ impl Client {
             ksim: None,
             subcompositor: None,
             color_manager: None,
+            commit_timing_manager: None,
             surface_feedbacks: Vec::new(),
             preferred_changed: Vec::new(),
             ready_identities: Vec::new(),
@@ -341,6 +345,18 @@ impl Client {
 
     pub fn window(&mut self, surface: &WlSurface) -> &mut Window {
         self.state.window(surface)
+    }
+
+    /// Creates a `wp_commit_timer_v1` for `surface`, like a client using commit timing would.
+    pub fn get_commit_timer(&mut self, surface: &WlSurface) -> WpCommitTimerV1 {
+        let manager = self
+            .state
+            .commit_timing_manager
+            .clone()
+            .expect("commit timing manager not bound");
+        let timer = manager.get_timer(surface, &self.qh, ());
+        self.connection.flush().unwrap();
+        timer
     }
 
     pub fn probe_output_color_management(&mut self) {
@@ -873,6 +889,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == WpColorManagerV1::interface().name {
                     let version = min(version, WpColorManagerV1::interface().version);
                     state.color_manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WpCommitTimingManagerV1::interface().name {
+                    let version = min(version, WpCommitTimingManagerV1::interface().version);
+                    state.commit_timing_manager = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -1435,6 +1454,32 @@ impl Dispatch<WpColorManagementSurfaceV1, ()> for State {
         _state: &mut Self,
         _proxy: &WpColorManagementSurfaceV1,
         _event: <WpColorManagementSurfaceV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events.
+    }
+}
+
+impl Dispatch<WpCommitTimingManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCommitTimingManagerV1,
+        _event: <WpCommitTimingManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events.
+    }
+}
+
+impl Dispatch<WpCommitTimerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCommitTimerV1,
+        _event: <WpCommitTimerV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
