@@ -1325,7 +1325,8 @@ impl State {
             Action::ScreenshotScreen(write_to_disk, show_pointer, path) => {
                 let active = self.niri.layout.active_output().cloned();
                 if let Some(active) = active {
-                    self.backend.with_primary_renderer(|renderer| {
+                    let path_fallback = path.clone();
+                    let ran = self.backend.with_primary_renderer(|renderer| {
                         if let Err(err) = self.niri.screenshot(
                             renderer,
                             &active,
@@ -1336,6 +1337,20 @@ impl State {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });
+                    if ran.is_none() {
+                        // Vulkan-only TTY session: no GLES primary renderer.
+                        self.backend.with_primary_tty_renderer(|renderer| {
+                            if let Err(err) = self.niri.screenshot(
+                                renderer,
+                                &active,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                            ) {
+                                warn!("error taking screenshot: {err:?}");
+                            }
+                        });
+                    }
                 }
             }
             Action::ConfirmScreenshot { write_to_disk } => {
@@ -1363,7 +1378,8 @@ impl State {
             Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
                 let focus = self.niri.layout.focus_with_output();
                 if let Some((mapped, output)) = focus {
-                    self.backend.with_primary_renderer(|renderer| {
+                    let path_fallback = path.clone();
+                    let ran = self.backend.with_primary_renderer(|renderer| {
                         if let Err(err) = self.niri.screenshot_window(
                             renderer,
                             output,
@@ -1375,6 +1391,21 @@ impl State {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });
+                    if ran.is_none() {
+                        // Vulkan-only TTY session: no GLES primary renderer.
+                        self.backend.with_primary_tty_renderer(|renderer| {
+                            if let Err(err) = self.niri.screenshot_window(
+                                renderer,
+                                output,
+                                mapped,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                            ) {
+                                warn!("error taking screenshot: {err:?}");
+                            }
+                        });
+                    }
                 }
             }
             Action::ScreenshotWindowById {
@@ -1385,7 +1416,8 @@ impl State {
             } => {
                 let id = MappedId::specific(id);
                 if let Some((mapped, Some(output))) = self.niri.find_mapped_output_by_id(id) {
-                    self.backend.with_primary_renderer(|renderer| {
+                    let path_fallback = path.clone();
+                    let ran = self.backend.with_primary_renderer(|renderer| {
                         if let Err(err) = self.niri.screenshot_window(
                             renderer,
                             output,
@@ -1397,6 +1429,21 @@ impl State {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });
+                    if ran.is_none() {
+                        // Vulkan-only TTY session: no GLES primary renderer.
+                        self.backend.with_primary_tty_renderer(|renderer| {
+                            if let Err(err) = self.niri.screenshot_window(
+                                renderer,
+                                output,
+                                mapped,
+                                write_to_disk,
+                                show_pointer,
+                                path_fallback,
+                            ) {
+                                warn!("error taking screenshot: {err:?}");
+                            }
+                        });
+                    }
                 }
             }
             Action::ToggleKeyboardShortcutsInhibit => {

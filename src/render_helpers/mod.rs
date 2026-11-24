@@ -12,7 +12,7 @@ use smithay::backend::renderer::gles::{
 };
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
-    Bind, Color32F, ExportMem, Frame, Offscreen, Renderer, Texture as _,
+    Bind, Color32F, ErasedContextId, ExportMem, Frame, Offscreen, Renderer, Texture as _,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
@@ -25,7 +25,7 @@ use self::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use self::texture::{TextureBuffer, TextureRenderElement};
 use crate::backend::tty::TtyOffscreen;
 use crate::render_helpers::blend::{DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend};
-use crate::render_helpers::renderer::AsGlesRenderer;
+use crate::render_helpers::renderer::{AsGlesRenderer, NiriRenderer};
 use crate::render_helpers::xray::Xray;
 
 pub mod background_effect;
@@ -353,6 +353,96 @@ pub fn render_to_vec(
         .map_texture(&mapping)
         .context("error mapping texture")?;
     Ok(copy.to_vec())
+}
+
+/// Renders `elements` into a backend-agnostic offscreen texture covering `bounds`.
+///
+/// Unlike [`render_to_texture`], this works for every [`NiriRenderer`]: the render goes through
+/// the generic [`offscreen::OffscreenBuffer`], which stores a [`TtyOffscreen`]. A GLES renderer
+/// produces `TtyOffscreen::Gles`, a Vulkan renderer `TtyOffscreen::Vulkan`.
+///
+/// `elements` must be in front-to-back order, like the vectors returned by `Niri::render_to_vec`.
+pub fn render_to_tty_texture<R: NiriRenderer>(
+    renderer: &mut R,
+    bounds: Rectangle<i32, Physical>,
+    scale: Scale<f64>,
+    elements: &[impl RenderElement<R>],
+) -> anyhow::Result<(TtyOffscreen, ErasedContextId, SyncPoint)> {
+    let _span = tracy_client::span!();
+
+    let buffer = offscreen::OffscreenBuffer::default();
+    let (element, sync, _data) = buffer
+        .render_with_bounds(renderer, scale, bounds, elements)
+        .context("error rendering to offscreen texture")?;
+
+    Ok((element.texture().clone(), element.context_id(), sync))
+}
+
+/// Renders `elements` into a backend-agnostic offscreen texture encompassing their geometry.
+///
+/// The returned offset is where the texture should be placed in logical output coordinates.
+/// `elements` must be in front-to-back order.
+pub fn render_to_encompassing_tty_texture<R: NiriRenderer>(
+    renderer: &mut R,
+    scale: Scale<f64>,
+    elements: &[impl RenderElement<R>],
+) -> anyhow::Result<(TtyOffscreen, ErasedContextId, Point<f64, Logical>)> {
+    let _span = tracy_client::span!();
+
+    let buffer = offscreen::OffscreenBuffer::default();
+    let (element, _sync, _data) = buffer
+        .render(renderer, scale, elements)
+        .context("error rendering to encompassing offscreen texture")?;
+
+    Ok((
+        element.texture().clone(),
+        element.context_id(),
+        element.offset(),
+    ))
+}
+
+/// Reads a backend-agnostic offscreen texture back into CPU memory.
+///
+/// Uses the concrete GLES or Vulkan renderer behind `renderer`, so it works for both the plain
+/// renderers and the TTY renderer abstraction.
+pub fn copy_tty_texture_to_vec<R: NiriRenderer>(
+    renderer: &mut R,
+    texture: &TtyOffscreen,
+    region: Rectangle<i32, smithay::utils::Buffer>,
+    fourcc: Fourcc,
+) -> anyhow::Result<Vec<u8>> {
+    let _span = tracy_client::span!();
+
+    if let Some(gles) = renderer.as_gles_renderer() {
+        let TtyOffscreen::Gles(texture) = texture else {
+            bail!("trying to read a non-GLES texture with the GLES renderer");
+        };
+
+        let mapping = gles
+            .copy_texture(texture, region, fourcc)
+            .context("error copying GLES texture")?;
+        let copy = gles
+            .map_texture(&mapping)
+            .context("error mapping GLES texture")?;
+        return Ok(copy.to_vec());
+    }
+
+    #[cfg(feature = "vulkan")]
+    if let Some(vulkan) = renderer.as_vulkan_renderer() {
+        let TtyOffscreen::Vulkan(texture) = texture else {
+            bail!("trying to read a non-Vulkan texture with the Vulkan renderer");
+        };
+
+        let mapping = vulkan
+            .copy_texture(texture, region, fourcc)
+            .context("error copying Vulkan texture")?;
+        let copy = vulkan
+            .map_texture(&mapping)
+            .context("error mapping Vulkan texture")?;
+        return Ok(copy.to_vec());
+    }
+
+    bail!("renderer does not support texture readback")
 }
 
 pub fn render_to_dmabuf(
