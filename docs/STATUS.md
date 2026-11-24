@@ -179,7 +179,11 @@ picked up without re-auditing.
    clipping/decoration build (Vulkan renderer active, border/shadow/clipping/
    decoration shaders compiled, 4K DP-1 output created, no renderer errors
    during a ~2.5 minute session).
-   Still open: HDR output on Vulkan, and Vulkan paths for the remaining
+   HDR fullscreen passthrough works on Vulkan (validated 2026-11-24: the DRM
+   compositor came up with hdr=true, 10-bit formats, and "updated HDR
+   signalling" while a fullscreen HDR10 clip played with mpv tone-mapping to
+   the display's 1083-nit peak); SDR/HDR mixed compositing still uses the GLES
+   path. Still open: HDR compositing, and Vulkan paths for the remaining
    GLSL-only visuals (window/global/
    scoped shaders, decoration light, blur/xray, liquid glass, carousel panels,
    magnified screenshot capture, screen transitions). Global/scoped/window

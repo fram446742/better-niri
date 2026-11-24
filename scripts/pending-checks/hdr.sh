@@ -60,15 +60,17 @@ mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-c
 RC=$?
 {
   echo "mpv exit: $RC"
-  echo "--- mpv HDR/colour lines ---"
-  grep -iE 'hdr|pq|bt\.?2020|tone.?map|primaries|transfer' "$MPV_LOG" 2>/dev/null | tail -40
+  echo "--- mpv HDR summary ---"
+  grep -iE 'Dynamic tone map target|HDR metadata|display .*nits|peak' "$MPV_LOG" 2>/dev/null | tail -10
   echo "--- niri HDR/colour lines ($NIRI_LOG_FILE) ---"
-  grep -iE 'hdr|bt2020|pq|color' "$NIRI_LOG_FILE" 2>/dev/null | tail -40
+  sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null \
+    | grep -iE 'hdr=true|hdr=false|updated HDR signalling|connector color capabilities' | tail -10
   echo "--- niri HDR state ---"
-  if grep -q 'hdr=false' "$NIRI_LOG_FILE" 2>/dev/null; then
+  if sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null | grep -q 'hdr=false'; then
     echo "WARNING: niri created the DRM compositor with hdr=false (no hdr output node applied)"
   fi
-  grep -q 'hdr=true' "$NIRI_LOG_FILE" 2>/dev/null && echo "niri: hdr=true seen"
+  sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null | grep -q 'hdr=true' \
+    && echo "niri: HDR signalling enabled (hdr=true)"
   echo "--- niri border/shadow/clipping shader init ---"
   grep -E 'compiled border|Vulkan renderer|renderer plan' "$NIRI_LOG_FILE" 2>/dev/null | tail -5
 } > "$SUMMARY"
