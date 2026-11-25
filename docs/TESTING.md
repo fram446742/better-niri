@@ -20,7 +20,7 @@ summary under `/tmp/better-test-run-<timestamp>/summary.tsv`.
 | Feature matrix | `cargo check -p niri --no-default-features --features <each>` for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan; plus the full explicit set | **Pass** |
 | Clippy | `cargo clippy --workspace --all-targets` + all companion workspaces | **Pass** (root keeps pre-existing style warnings; companions clean) |
 | Format | `cargo fmt --check` in niri and every workspace | **Pass** |
-| Companion workspaces | `cargo test --workspace` in each of the nine apps | **Pass**; companion 225, portal 42, monitor 80, session 54, shot 122, wallpaper 43, settings 88, audio 54, sidepanels 62 |
+| Companion workspaces | `cargo test --workspace` in each of the nine apps | **Pass**; companion 225, portal 42, monitor 80, session 54, shot 122, wallpaper 43, settings 98, audio 54, sidepanels 62 |
 | Packaging | `packaging/scripts/verify.sh` | **Pass** |
 | Completions | `generate-completions.py --check` | **Pass**, 36 files in sync |
 | Noctalia plugins | `better-noctalia-plugins/verify.sh` + live shell | **Pass**, 8 loaded, refresh/click exercised |

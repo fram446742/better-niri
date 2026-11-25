@@ -309,7 +309,9 @@ picked up without re-auditing.
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
-   byte-preserving edits, dry-run diffs, export/import and a sectioned GTK UI.
+   byte-preserving edits, dry-run diffs, export/import and a libadwaita control
+   center with Overview, Compositor, Displays, Sessions, Wallpaper, Audio, Side
+   panels, Automation, Services and About pages.
    `better-monitor/` now has schema v2 (matching by name/make/model/serial,
    max BPC, HDR notes, VRR aliases), layout validation, ordered apply,
    partial-failure rollback, rules with priorities, a debounced watch mode and
