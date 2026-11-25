@@ -154,6 +154,10 @@ fn emit<T: serde::Serialize>(options: &Options, command: &str, data: &T) {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("better-audio {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

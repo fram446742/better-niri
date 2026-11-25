@@ -202,6 +202,10 @@ fn parse_u64(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<u64,
 }
 
 fn main() -> ExitCode {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("better-monitor {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     let mut json = std::env::args().any(|arg| arg == "--json");
     let mut command = std::env::args()
         .skip(1)

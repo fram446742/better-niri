@@ -56,6 +56,10 @@ struct Picker {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("better-portal-picker {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if let Err(err) = run() {
         eprintln!("better-portal-picker: {err}");
         std::process::exit(1);

@@ -100,6 +100,33 @@ My talk about some testing techniques used in niri: property-based tests, snapsh
 The first half overlaps with my RustCon talk, the second half is new.
 The talk is in Russian, but I prepared full English subtitles that you can find in YouTube's subtitle language selector.
 
+## Better Desktop companion tools
+
+The companion applications live as independent Cargo workspaces inside this
+repository (`better-companion/`, `better-portal/`, `better-monitor/`, ...).
+Their sources still build and package on their own, but for development you can
+run every tool from the repository root through small forwarding binaries:
+
+```sh
+cargo run --bin better-monitor -- --help
+cargo run --bin better-settings -- --version
+cargo run --bin companionctl -- status
+cargo run --bin better-shot -- screen --copy
+cargo run --bin better-audio -- sinks
+cargo run --bin better-wallpaper -- status
+cargo run --bin better-session -- list
+cargo run --bin better-sidepanels -- --check
+cargo run --bin better-portal -- --version
+```
+
+Available bins: `better-companion`, `companionctl`, `better-portal`,
+`better-portal-picker`, `better-monitor`, `better-session`, `better-shot`,
+`better-wallpaper`, `better-settings`, `better-settingsctl`, `better-audio`,
+`better-sidepanels`. Each shim forwards its arguments and exit status to the
+tool's own `cargo run`, so the separate lockfiles and packaging stay intact.
+Use the workspace directly (`cd better-monitor && cargo run -- …`) when you want
+a fully isolated build.
+
 ## Contributing
 
 If you'd like to help with niri, there are plenty of both coding- and non-coding-related ways to do so.

@@ -1401,6 +1401,10 @@ fn validation_message(text: &str) -> String {
 }
 
 fn main() -> gtk::glib::ExitCode {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("better-settings {}", env!("CARGO_PKG_VERSION"));
+        return gtk::glib::ExitCode::SUCCESS;
+    }
     let app = gtk::Application::builder()
         .application_id("org.better.Settings")
         .build();
