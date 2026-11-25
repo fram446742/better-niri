@@ -294,7 +294,10 @@ Tool paths can be redirected for wrappers or tests:
 `BETTER_SETTINGS_BETTER_MONITOR`, `BETTER_SETTINGS_BETTER_SESSION`,
 `BETTER_SETTINGS_BETTER_WALLPAPER`, `BETTER_SETTINGS_BETTER_AUDIO`,
 `BETTER_SETTINGS_BETTER_SIDEPANELS` and `BETTER_SETTINGS_COMPANIONCTL`. The
-sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`.
+sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`; `niri` can be
+redirected with `BETTER_SETTINGS_NIRI`, the portal selection file with
+`BETTER_SETTINGS_PORTALS_CONF`, and the Noctalia plugin source with
+`BETTER_SETTINGS_NOCTALIA_PLUGINS`.
 
 ### Displays arrangement editor
 
