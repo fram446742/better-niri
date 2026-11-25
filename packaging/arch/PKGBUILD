@@ -341,8 +341,8 @@ package_better-wallpaper() {
 package_better-settings() {
   _install_completions better-settings
   _install_completions better-settingsctl
-  pkgdesc="GTK4 settings frontend and CLI for Better Niri"
-  depends=(gcc-libs glibc gtk4)
+  pkgdesc="GTK4/libadwaita control center and CLI for Better Niri"
+  depends=(gcc-libs glibc gtk4 libadwaita)
 
   cd "${_pkgname}"
   local target="${srcdir}/target/release"

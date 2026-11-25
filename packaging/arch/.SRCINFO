@@ -107,10 +107,11 @@ pkgname = better-wallpaper
 	optdepends = swww: alternative wallpaper daemon for the command backend
 
 pkgname = better-settings
-	pkgdesc = GTK4 settings frontend and CLI for Better Niri
+	pkgdesc = GTK4/libadwaita control center and CLI for Better Niri
 	depends = gcc-libs
 	depends = glibc
 	depends = gtk4
+	depends = libadwaita
 
 pkgname = better-audio
 	pkgdesc = Rule-based PipeWire audio routing for Better Niri

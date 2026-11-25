@@ -122,6 +122,7 @@ known_official_packages=(
     glib2
     glibc
     gtk4
+    libadwaita
     libdisplay-info
     libdrm
     libglvnd

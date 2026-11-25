@@ -112,7 +112,7 @@ installing a subset never rebuilds niri or another Rust crate.
 | `better-session` | `better-session` | named workspace/window/output contexts | `gcc-libs`, `glibc` |
 | `better-shot` | `better-shot` | screenshot capture, built-in annotations | `gcc-libs`, `glibc`; optional `satty`, `wl-clipboard` |
 | `better-wallpaper` | `better-wallpaper` | per-workspace wallpaper scenes | `gcc-libs`, `glibc`, `wayland`; optional `swaybg`, `swww` |
-| `better-settings` | `better-settings`, `better-settingsctl` | GTK4 settings UI, CLI and desktop entry | `gtk4`, `gcc-libs`, `glibc` |
+| `better-settings` | `better-settings`, `better-settingsctl` | GTK4 settings UI, CLI and desktop entry | `gtk4`/`libadwaita`, `gcc-libs`, `glibc` |
 | `better-audio` | `better-audio` | rule-based PipeWire routing and default sink | `libpipewire`, `gcc-libs`, `glibc`; optional `pipewire`, `wireplumber`, `libpulse`, `pulseaudio` |
 | `better-sidepanels` | `better-sidepanels` | layer-shell panels with exclusive zones | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
 | `better-noctalia-plugins` | — | Noctalia plugin source (Luau bar widgets) installed under `/usr/share/better-desktop/noctalia-plugins` | optional `noctalia`, `better-companion`, `better-monitor`, `better-session`, `better-shot`, `better-audio`, `better-wallpaper`, `better-sidepanels` |
