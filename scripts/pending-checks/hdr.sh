@@ -57,7 +57,8 @@ Verification while mpv is playing:
   HDR_OUTPUT to get an SDR session again.
 MSG
 mpv --fs --vo=gpu-next --target-colorspace-hint=yes --hdr-compute-peak=no --no-config \
-  --log-file="$MPV_LOG" --msg-level=all=info,vo/gpu-next=debug "$CLIP" "$@"
+  --length="$DURATION" --log-file="$MPV_LOG" \
+  --msg-level=all=info,vo/gpu-next=debug "$CLIP" "$@"
 RC=$?
 {
   echo "mpv exit: $RC"

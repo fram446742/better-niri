@@ -311,6 +311,8 @@ pub fn capabilities() -> niri_ipc::Capabilities {
         explicit_sync: true,
         pointer_warp: true,
         async_flips: true,
+        commit_timing: true,
+        surface_barrier: true,
         screencopy: true,
         ext_image_copy_capture: true,
         screencast: true,
@@ -1332,6 +1334,8 @@ mod tests {
         assert!(capabilities.hdr);
         assert!(capabilities.tearing);
         assert!(capabilities.explicit_sync);
+        assert!(capabilities.commit_timing);
+        assert!(capabilities.surface_barrier);
         assert!(capabilities.screenshot);
         assert_eq!(capabilities.agent_seat, cfg!(feature = "agent"));
         assert_eq!(capabilities.shaders, cfg!(feature = "effects"));

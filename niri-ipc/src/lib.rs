@@ -287,6 +287,10 @@ pub struct Capabilities {
     pub pointer_warp: bool,
     /// Asynchronous page flips.
     pub async_flips: bool,
+    /// `wp-commit-timing-v1` managed-mode deadlines.
+    pub commit_timing: bool,
+    /// SurfaceBarrier/atomic layout transactions.
+    pub surface_barrier: bool,
     /// wlr-screencopy.
     pub screencopy: bool,
     /// ext-image-copy-capture.
