@@ -3465,6 +3465,12 @@ fn add_and_remove_output() {
 }
 
 #[test]
+fn reconnect_output_after_empty_workspace_placeholder() {
+    let ops = [Op::AddOutput(1), Op::RemoveOutput(1), Op::AddOutput(1)];
+    check_ops(ops);
+}
+
+#[test]
 fn switch_ewaf_on() {
     let ops = [
         Op::AddOutput(1),

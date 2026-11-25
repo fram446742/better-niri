@@ -1059,8 +1059,14 @@ impl<W: LayoutElement> Layout<W> {
                     active_monitor_idx,
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { mut workspaces } => {
                 let ws_id_to_activate = self.last_active_workspace_id.remove(&output.name());
+
+                // A previous output removal leaves one empty unnamed workspace behind so the layout
+                // has something to show while no output is connected. Monitor::new always adds a
+                // fresh workspace, and its invariant requires every passed workspace to have
+                // windows or a name, so drop that placeholder on reconnect.
+                workspaces.retain(|ws| ws.has_windows_or_name());
 
                 let mut monitor = Monitor::new(
                     output,
@@ -1111,9 +1117,10 @@ impl<W: LayoutElement> Layout<W> {
                         ws.update_config(self.options.clone());
                     }
 
-                    if workspaces.is_empty()
-                        && !(self.interactive_move.is_some() && sticky_tiles.is_empty())
-                    {
+                    // With no windows, name or sticky tiles there is nothing to keep while no
+                    // output is connected; Monitor::new creates a fresh workspace on reconnect.
+                    // Keeping an empty unnamed placeholder here used to break output reconnection.
+                    if workspaces.is_empty() && !sticky_tiles.is_empty() {
                         workspaces.push(Workspace::new_no_outputs(
                             self.clock.clone(),
                             self.options.clone(),
