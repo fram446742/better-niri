@@ -22,11 +22,11 @@ state.
 
 | Feature | Upstream | Best source | Decision | better-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
-| HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Integrated | Needs Smithay connector colour state. |
+| HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Integrated | Default auto on HDR-capable outputs; `off`/`on` and runtime `niri msg output <out> hdr …` overrides; hardware pass entered/left HDR on DP-1. |
 | `wp_color_management_v1` | Absent | niri-spicy | niri-spicy | Integrated | Windows scRGB, BT.2100, extended target volume, custom primaries. |
 | Tone mapping | Absent | niri-spicy | niri-spicy | Integrated | Peak-luminance override, cursor-plane/LUT acceleration. |
 | scRGB / Windows HDR | Absent | niri-spicy | niri-spicy | Integrated | Wine/Proton detection fixes included. |
-| HDR metadata and transitions | Absent | niri-spicy | niri-spicy | Integrated | Output recreation on HDR toggle. |
+| HDR metadata and transitions | Absent | niri-spicy | niri-spicy | Integrated | Connector colour state is staged and switched with the frame; HDR mode changes reconnect the output to re-probe 10-bit formats. |
 | Custom primaries | Absent | niri-spicy | niri-spicy | Integrated | Smithay side required. |
 | SDR/HDR mixing | Absent | niri-spicy | niri-spicy | Integrated | SDR composited at reference luminance; niri-elite has an equivalent always-HDR blend fix. |
 | HDR → SDR capture | Absent | niri-spicy, niri-elite | niri-spicy | Integrated | Must cover screenshot, ext-image-copy-capture, PipeWire. |
