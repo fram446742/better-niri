@@ -190,6 +190,14 @@ picked up without re-auditing.
    `texture_hdr_to_sdr` for SDR captures, and niri's own Vulkan programs read
    the frame blend state. Capture state is cleared after the output so
    screenshots/screencasts stay SDR; 10-bit scanout formats are unchanged.
+   HDR is now enabled by default in `auto` mode on HDR-capable outputs (no
+   `hdr` block needed); `mode="off"` disables it permanently and `mode="on"`
+   keeps it always on. `niri msg output <out> hdr auto|on|off
+   [--reference-luminance N]` is a temporary runtime override, the output JSON
+   exposes `hdr_supported`/`hdr_enabled`/`hdr_active`/`hdr_mode`, and
+   better-settings offers the same selector in Displays. Switching HDR
+   enabledness reconnects the output so the 10-bit scanout formats are
+   re-probed.
    Screen capture protocols run on Vulkan too: wlr-screencopy (output/window/
    region, SHM and dmabuf), ext-image-copy-capture (SHM advertised, dmabuf
    accepted), and screencast frames (SHM advertised on Vulkan; dmabuf handled)
