@@ -1073,6 +1073,7 @@ mod tests {
             vrr_enabled: false,
             logical: None,
             max_bpc: Some(10),
+            ..Default::default()
         }
     }
 

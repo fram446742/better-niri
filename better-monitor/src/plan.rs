@@ -79,6 +79,17 @@ pub fn action_description(action: &OutputAction) -> String {
             }
         }
         OutputAction::MaxBpc { max_bpc } => format!("max bpc {}", max_bpc_number(*max_bpc)),
+        OutputAction::Hdr { hdr } => {
+            let mode = match hdr.mode {
+                niri_ipc::HdrModeArg::Auto => "auto",
+                niri_ipc::HdrModeArg::On => "on",
+                niri_ipc::HdrModeArg::Off => "off",
+            };
+            match hdr.reference_luminance {
+                Some(nits) => format!("hdr {mode} ({nits} nits)"),
+                None => format!("hdr {mode}"),
+            }
+        }
     }
 }
 

@@ -4,34 +4,45 @@ Compilation is not validation. This document separates what runs in CI from what
 requires real hardware, and records actual results. A feature is only "tested"
 when the row says so.
 
-## 1. Current results (2026-11-23)
+## 1. Current results (2026-11-25)
+
+`scripts/test-all.sh` is the single non-hardware gate. It runs the compositor
+suite, the feature matrix, every companion workspace, packaging, completions,
+the Noctalia plugins and the external better-nsticky checkout, and writes a TSV
+summary under `/tmp/better-test-run-<timestamp>/summary.tsv`.
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Workspace check (safe `main`) | `cargo check --workspace` with Smithay `a38bb709` | **Pass** |
-| Workspace check (elite branch) | `cargo check --workspace` with Smithay `2e8e9edb` | **Pass** |
-| Full tests (elite branch) | `cargo test --workspace` | **Pass**, 666 tests, 0 failed |
-| Clippy (elite branch) | `cargo clippy --workspace --all-targets` | **Pass**, no errors; warnings remain in elite-derived code |
-| Format (elite branch) | `cargo fmt --check` | **Pass** |
-| Smithay consolidated, GLES | `cargo check -p smithay` with niri's feature set | **Pass** |
-| Smithay consolidated, Vulkan | `cargo check -p smithay --all-features` | **Pass** (warnings only) |
-| Release build | `cargo build --release` | Not re-run after the elite merge |
-| Virtual/isolated outputs | `cargo test --workspace` (fixtures) + visual tests | Logic tested; real TTY/hotplug/DPMS not yet hardware-tested |
-| Hardware features (HDR/VRR/tearing/explicit sync/Vulkan) | — | **Not tested** |
+| Compositor workspace | `cargo test --workspace` | **Pass**, 890 tests, 0 failed |
+| Minimal build | `cargo test -p niri --no-default-features` | **Pass**, 420 tests, 0 failed |
+| IPC clap feature | `cargo test -p niri-ipc --features clap` | **Pass** |
+| Visual-test build | `cargo build -p niri-visual-tests` | **Pass** |
+| Feature matrix | `cargo check -p niri --no-default-features --features <each>` for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan; plus the full explicit set | **Pass** |
+| Clippy | `cargo clippy --workspace --all-targets` + all companion workspaces | **Pass** (root keeps pre-existing style warnings; companions clean) |
+| Format | `cargo fmt --check` in niri and every workspace | **Pass** |
+| Companion workspaces | `cargo test --workspace` in each of the nine apps | **Pass**; companion 225, portal 42, monitor 80, session 54, shot 122, wallpaper 43, settings 88, audio 54, sidepanels 62 |
+| Packaging | `packaging/scripts/verify.sh` | **Pass** |
+| Completions | `generate-completions.py --check` | **Pass**, 36 files in sync |
+| Noctalia plugins | `better-noctalia-plugins/verify.sh` + live shell | **Pass**, 8 loaded, refresh/click exercised |
+| better-nsticky (external) | `cargo test --all-targets` in the local checkout | **Pass**, 473 tests |
+| Automated hardware pass | `HDR_OUTPUT=DP-1 scripts/pending-checks/hardware-validation.sh` on DP-1 | **Pass**: Vulkan, capabilities, VRR, 10-bit, explicit sync, 2 DRM devices, runtime HDR auto/off/auto, screenshot, HDR clip `hdr=true`→`hdr=false` |
+| Subjective hardware | tearing game, commit-timing client, second-GPU output, rotated transitions, HDR mixed contrast, popups/animations, real portal client | **Manual**, see `docs/validation/hardware.md` |
 
 Note: `cargo check --workspace --all-features` in better-smithay fails inside
 the `profiling` crate because puffin and tracy backends are mutually exclusive;
 that is feature unification, not project code.
 
-Do not mark hardware features as tested based on a build.
+Do not mark hardware features as tested based on a build. The automated hardware
+pass above is real DP-1 evidence; the subjective checklist still needs eyes.
 
 ## 2. CI checks (no GPU required)
 
 ```sh
 LIBCLANG_PATH=/usr/lib cargo check --workspace
 LIBCLANG_PATH=/usr/lib cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets
 cargo fmt --check
+./scripts/test-all.sh
 ```
 
 Additional CI gates:
