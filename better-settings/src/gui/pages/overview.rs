@@ -10,9 +10,20 @@ use crate::gui::{App, widgets};
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let text = app.config_text();
-    let page = widgets::preferences_page();
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     let portals_conf = integrations::portal_config_path(None);
     let status = integrations::overview_status(app.runner.as_ref(), &portals_conf);
+
+    page.append(&widgets::intro(
+        "Better Niri",
+        "One control center for the compositor, displays, sessions, audio and automation.",
+    ));
+    page.append(&widgets::stat_grid(vec![
+        (status.compositor.outputs.to_string(), "outputs"),
+        (status.profiles.to_string(), "monitor profiles"),
+        (status.contexts.to_string(), "session contexts"),
+        (status.scenes.to_string(), "wallpaper scenes"),
+    ]));
 
     let summary = widgets::group(
         "Compositor",
@@ -58,7 +69,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         "Config",
         &format!("{} ({} bytes)", app.path.display(), text.len()),
     ));
-    page.add(&summary);
+    page.append(&summary);
 
     let validation = widgets::group(
         "Validation",
@@ -68,7 +79,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         "Status",
         &crate::gui::validation_message(&text),
     ));
-    page.add(&validation);
+    page.append(&validation);
 
     let actions = widgets::group(
         "Quick actions",
@@ -107,7 +118,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             },
         ));
     }
-    page.add(&actions);
+    page.append(&actions);
 
     let outputs_group = widgets::group(
         "Outputs",
@@ -143,7 +154,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             outputs_group.add(&row);
         }
     }
-    page.add(&outputs_group);
+    page.append(&outputs_group);
 
     let counts = widgets::group(
         "Saved state",
@@ -164,14 +175,14 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         "Wallpaper scenes",
         &format!("{} scene(s) in better-wallpaper", status.scenes),
     ));
-    page.add(&counts);
+    page.append(&counts);
 
     let companion = widgets::group(
         "Automation",
         Some("better-companion daemon and its action registry."),
     );
     app.view_group(&companion, &status.companion);
-    page.add(&companion);
+    page.append(&companion);
 
     let portal = widgets::group(
         "Portal",
@@ -194,14 +205,14 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             format!("{} does not name the better backend", status.portal.config)
         },
     ));
-    page.add(&portal);
+    page.append(&portal);
 
     let tools = widgets::group(
         "Companion tools",
         Some("Installed CLIs and their versions."),
     );
     app.view_group(&tools, &status.tools);
-    page.add(&tools);
+    page.append(&tools);
 
-    page.upcast()
+    widgets::custom_page(page).upcast()
 }

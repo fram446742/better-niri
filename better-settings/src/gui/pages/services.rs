@@ -34,9 +34,17 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             format!("not installed · {}", status.program)
         };
         let row = widgets::info_row(status.tool.program(), &detail);
-        if !status.installed {
-            row.add_css_class("warning");
+        let icon = gtk::Image::from_icon_name(if status.installed {
+            "emblem-ok-symbolic"
+        } else {
+            "action-unavailable-symbolic"
+        });
+        if status.installed {
+            icon.add_css_class("success");
+        } else {
+            icon.add_css_class("dim-label");
         }
+        row.add_suffix(&icon);
         tools.add(&row);
     }
     page.add(&tools);

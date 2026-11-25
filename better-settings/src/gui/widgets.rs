@@ -12,6 +12,29 @@ pub fn preferences_page() -> adw::PreferencesPage {
     page
 }
 
+/// Scrolls arbitrary page content inside the same 600 px clamp that
+/// `AdwPreferencesPage` uses, so custom dashboards keep the native rhythm.
+pub fn custom_page(content: gtk::Box) -> gtk::ScrolledWindow {
+    content.set_spacing(18);
+    content.set_margin_top(12);
+    content.set_margin_bottom(24);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let clamp = adw::Clamp::new();
+    clamp.set_maximum_size(600);
+    clamp.set_tightening_threshold(400);
+    clamp.set_valign(gtk::Align::Start);
+    clamp.set_child(Some(&content));
+
+    gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .hexpand(true)
+        .child(&clamp)
+        .build()
+}
+
 /// A titled group with an optional description.
 pub fn group(title: &str, description: Option<&str>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
@@ -52,6 +75,50 @@ where
     button.connect_clicked(move |_| action());
     row.add_suffix(&button);
     row
+}
+
+/// A page introduction: a large title and a wrapping description.
+pub fn intro(title: &str, subtitle: &str) -> gtk::Box {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    body.add_css_class("page-intro");
+
+    let heading = gtk::Label::new(Some(title));
+    heading.set_xalign(0.0);
+    heading.add_css_class("title-1");
+    body.append(&heading);
+
+    let description = gtk::Label::new(Some(subtitle));
+    description.set_xalign(0.0);
+    description.set_wrap(true);
+    description.add_css_class("dim-label");
+    body.append(&description);
+
+    body
+}
+
+/// A responsive row of big-number summary cards.
+pub fn stat_grid(items: Vec<(String, &'static str)>) -> gtk::Box {
+    let grid = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    grid.add_css_class("stat-grid");
+    grid.set_homogeneous(true);
+    for (value, label) in items {
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        card.add_css_class("stat-card");
+
+        let value_label = gtk::Label::new(Some(&value));
+        value_label.set_xalign(0.0);
+        value_label.add_css_class("stat-value");
+        card.append(&value_label);
+
+        let text = gtk::Label::new(Some(label));
+        text.set_xalign(0.0);
+        text.set_wrap(true);
+        text.add_css_class("stat-label");
+        card.append(&text);
+
+        grid.append(&card);
+    }
+    grid
 }
 
 /// A wrapping dim note, for page-level explanations.

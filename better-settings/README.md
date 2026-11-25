@@ -58,10 +58,16 @@ cargo build --features gui      # or just `cargo build` (gui is the default)
 
 The window is a libadwaita control center: an `AdwApplicationWindow` with a
 collapsible `AdwNavigationSplitView`, a `navigation-sidebar` page list, a header
-bar (preview / reload / save), toast feedback and a scrollable
-`AdwPreferencesPage` per section. Light and dark follow the system through
-`AdwStyleManager`; the minimum window is 760×540. `F1` opens About from any
-page, and the sidebar has a search field.
+bar with page-specific actions, toast feedback and a scrollable page per
+section. Overview is a small dashboard (status cards plus grouped details);
+Compositor and Displays use `AdwPreferencesPage` with grouped preference rows.
+Light and dark follow the system through `AdwStyleManager`; the minimum window
+is 760×540. `F1` opens About from any page, and the sidebar has a search field.
+The version is shown at the bottom of the sidebar.
+
+Preview and Save only appear on Compositor and Displays, the two pages that
+edit the KDL file in place. Every other page has explicit actions on the page
+itself, so the header never offers a save that would do nothing.
 
 No screenshots are checked in (the widget tree is built at run time from the
 catalog, so a bitmap would go stale). The layout is:

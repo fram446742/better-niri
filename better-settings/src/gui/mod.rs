@@ -267,14 +267,18 @@ impl App {
         group: &adw::PreferencesGroup,
         view: &IntegrationView,
     ) -> adw::PreferencesGroup {
-        let status = widgets::info_row(&view.status, "");
-        group.add(&status);
-        for line in &view.lines {
-            group.add(&widgets::info_row(line, ""));
+        let details = view.lines.join("\n");
+        let row = widgets::info_row(&view.status, &details);
+        if !details.is_empty() {
+            row.set_subtitle_lines(0);
         }
+        group.add(&row);
         if let Some(error) = &view.error {
             let row = widgets::info_row("error", error);
             row.add_css_class("error");
+            let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            icon.add_css_class("error");
+            row.add_suffix(&icon);
             group.add(&row);
         }
         group.clone()
@@ -360,16 +364,21 @@ fn build_application(
     let content_header = adw::HeaderBar::new();
     content_header.set_title_widget(Some(&content_title));
 
-    let preview_button = gtk::Button::from_icon_name("edit-find-symbolic");
+    let preview_button = gtk::Button::with_label("Preview");
     preview_button.set_tooltip_text(Some("Preview changes (dry run)"));
+    preview_button.add_css_class("flat");
     let reload_button = gtk::Button::from_icon_name("view-refresh-symbolic");
     reload_button.set_tooltip_text(Some("Reload config"));
-    let save_button = gtk::Button::from_icon_name("document-save-symbolic");
+    let save_button = gtk::Button::with_label("Save");
     save_button.set_tooltip_text(Some("Save changed settings"));
     save_button.add_css_class("suggested-action");
-    content_header.pack_end(&save_button);
-    content_header.pack_end(&reload_button);
-    content_header.pack_end(&preview_button);
+
+    let content_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content_actions.set_valign(gtk::Align::Center);
+    content_actions.append(&preview_button);
+    content_actions.append(&reload_button);
+    content_actions.append(&save_button);
+    content_header.pack_end(&content_actions);
 
     let content_toolbar = adw::ToolbarView::new();
     content_toolbar.add_top_bar(&content_header);
@@ -401,7 +410,18 @@ fn build_application(
         .build();
     sidebar_body.append(&sidebar_scroll);
 
+    let version = gtk::Label::new(Some(&format!(
+        "Better Settings {}",
+        env!("CARGO_PKG_VERSION")
+    )));
+    version.add_css_class("dim-label");
+    version.add_css_class("caption");
+    version.set_margin_top(6);
+    version.set_margin_bottom(10);
+    sidebar_body.append(&version);
+
     let sidebar_toolbar = adw::ToolbarView::new();
+    sidebar_toolbar.add_css_class("sidebar-pane");
     sidebar_toolbar.add_top_bar(&sidebar_header);
     sidebar_toolbar.set_content(Some(&sidebar_body));
     let sidebar_page = adw::NavigationPage::new(&sidebar_toolbar, "Better Settings");
@@ -412,6 +432,38 @@ fn build_application(
     split.set_min_sidebar_width(220.0);
     split.set_max_sidebar_width(330.0);
     split.set_sidebar_width_fraction(0.24);
+
+    // Small visual polish that works with the system palette: a consistent
+    // separator between the navigation sidebar and the content, and a little
+    // breathing room under row titles.
+    if let Some(display) = gtk::gdk::Display::default() {
+        let css = gtk::CssProvider::new();
+        css.load_from_data(
+            ".sidebar-pane { border-right: 1px solid alpha(@window_fg_color, 0.10); }\n\
+             .sidebar-pane list.navigation-sidebar { padding: 6px 8px; }\n\
+             .sidebar-pane list.navigation-sidebar > row { border-radius: 10px; margin: 1px 0; }\n\
+             .page-intro { margin: 4px 0 10px 0; }\n\
+             .stat-grid { margin: 0 0 6px 0; }\n\
+             .stat-card {\n\
+                 background-color: alpha(@window_fg_color, 0.06);\n\
+                 border: 1px solid alpha(@window_fg_color, 0.10);\n\
+                 border-radius: 12px;\n\
+                 padding: 12px 14px;\n\
+             }\n\
+             .stat-value { font-size: 20px; font-weight: 800; }\n\
+             .stat-label { font-size: 12px; opacity: 0.72; }\n\
+             preferencesgroup row { padding-top: 4px; padding-bottom: 4px; }\n\
+             preferencesgroup row:not(:last-child) {\n\
+                 border-bottom: 1px solid alpha(@window_fg_color, 0.08);\n\
+             }\n\
+             row .subtitle { margin-top: 3px; }\n",
+        );
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&split));
@@ -436,6 +488,8 @@ fn build_application(
 
     {
         let weak = Rc::downgrade(&app);
+        let preview_button = preview_button.clone();
+        let save_button = save_button.clone();
         sidebar.connect_row_selected(move |_, row| {
             let Some(row) = row else {
                 return;
@@ -449,6 +503,12 @@ fn build_application(
             app.stack.set_visible_child_name(page.name());
             app.content_title.set_text(page.title());
             app.split.set_show_content(true);
+
+            // Only the compositor catalog and the permanent HDR rows are
+            // edited in place; other pages have their own explicit actions.
+            let edits_config = matches!(page, Page::Compositor | Page::Displays);
+            preview_button.set_visible(edits_config);
+            save_button.set_visible(edits_config);
         });
     }
 

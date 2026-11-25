@@ -50,13 +50,21 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let page = widgets::preferences_page();
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Filter settings by name, path or section"));
-    search.set_margin_start(12);
-    search.set_margin_end(12);
-    search.set_margin_top(6);
-    search.set_margin_bottom(6);
+
+    // Keep the filter aligned with the preferences groups: both use an
+    // AdwClamp of 600 with 12 px inner margins.
+    let search_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    search_box.set_margin_start(12);
+    search_box.set_margin_end(12);
+    search_box.set_margin_top(6);
+    search_box.set_margin_bottom(6);
+    search_box.append(&search);
+    let search_clamp = libadwaita::Clamp::new();
+    search_clamp.set_maximum_size(600);
+    search_clamp.set_child(Some(&search_box));
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&search);
+    root.append(&search_clamp);
     root.append(&page);
 
     let index = Rc::new(settings::SearchIndex::new());
