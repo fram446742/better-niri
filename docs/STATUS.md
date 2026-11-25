@@ -288,7 +288,7 @@ picked up without re-auditing.
    workspaces with per-chip click and scroll cycling, window title, media,
    battery, cpu, memory, network, volume, custom), safe click/scroll actions,
    panels on all four edges (several per output), config v2 with per-output
-   overrides, validation and file-watch reload. Remaining in the `better-*`
+   overrides, validation and file-watch reload. Delivered in the `better-*`
    family: `better-audio/` has a native PipeWire backend (registry
    enumeration, port-link moves, metadata default sink, per-stream
    volume/mute) with `pactl`/`wpctl` fallbacks, backend selection and restore;
@@ -325,8 +325,8 @@ picked up without re-auditing.
    undo/redo, capture history, OCR and multi-output stitching); companion
    protocol v2 (request ids, error codes, UDS event subscriptions), window
    marks, workspace-triggered rules, automation history and an optional config
-   file; and the Noctalia plugin source (manifest + Lua syntax checked, live
-   shell check pending).
+   file; and the Noctalia plugin source (loaded live; refresh/click/right-click
+   handlers exercised in an isolated headless niri session).
    App depth also landed: sidepanels auto-hide/peek, floating panels,
    app/workspace rules, named layouts, session state and SIGHUP reload;
    audio sources, named profiles, focus/workspace context rules, hotplug gating

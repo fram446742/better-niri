@@ -1171,10 +1171,17 @@ pub const OUTPUT_TEMPLATES: &[OutputTemplate] = &[
         section: "Outputs",
     },
     OutputTemplate {
-        suffix: "hdr",
-        label: "HDR",
-        help: "Enable HDR signalling on this output.",
-        kind: Kind::Flag,
+        suffix: "hdr.mode",
+        label: "HDR mode",
+        help: "auto: HDR only with fullscreen HDR content; on: always HDR; off: never HDR.",
+        kind: Kind::Choice(&["auto", "on", "off"]),
+        section: "Outputs",
+    },
+    OutputTemplate {
+        suffix: "hdr.reference-luminance",
+        label: "HDR reference luminance (nits)",
+        help: "Luminance SDR white maps to while HDR is active (0-10000, default 203).",
+        kind: Kind::Int { min: 0, max: 10000 },
         section: "Outputs",
     },
     OutputTemplate {

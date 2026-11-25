@@ -33,7 +33,7 @@ shown relative to the config root; output settings are generated once per
 | Input / Touch | `off`, `map-to-output` |
 | Input / Tablet | `off`, `map-to-output`, `map-to-focused-output`, `left-handed`, `calibration-matrix` |
 | Input / Global | `disable-power-key-handling`, `warp-mouse-to-focus`, `focus-follows-mouse`, `confine-mouse-to-fullscreen`, `workspace-auto-back-and-forth`, `mod-key`, `mod-key-nested` |
-| Outputs | `off`, `create-virtual`, `mode`, `scale`, `transform`, `position`, `variable-refresh-rate`, `focus-at-startup`, `isolated`, `drm-lease`, `backdrop-color`, `background-color`, `max-bpc`, `hdr`, `hot-corners.off`, `layout.gaps`, `layout.center-focused-column`, `layout.always-center-single-column`, `layout.default-column-width` |
+| Outputs | `off`, `create-virtual`, `mode`, `scale`, `transform`, `position`, `variable-refresh-rate`, `focus-at-startup`, `isolated`, `drm-lease`, `backdrop-color`, `background-color`, `max-bpc`, `hdr.mode`, `hdr.reference-luminance`, `hot-corners.off`, `layout.gaps`, `layout.center-focused-column`, `layout.always-center-single-column`, `layout.default-column-width` |
 | Binds | list, add/replace, remove; multi-action binds and `repeat`, `cooldown-ms`, `allow-when-locked`, `allow-inhibiting`, `hotkey-overlay-title` |
 | Window rules | list, add, remove (matches, excludes and raw property/nested-block lines) |
 | Layer rules | list, add, remove |

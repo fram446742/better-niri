@@ -278,16 +278,24 @@ More resolved:
   a standalone option for users who want only sticky/staged windows.
 - **Portal picker**: external layer-shell picker owned by better-portal.
 
-Remaining questions:
+Resolved during delivery:
 
-- **better-idle / better-rotate**: companion modules first, or independent
-  repositories from the start? (Recommended: companion first.)
-- **better-audio**: audit PWSW and then decide between adapting it and a
-  WirePlumber-native rule engine.
-- **better-shot scope**: screenshots + annotation first, recording/OCR later?
-- **better-portal scope**: ScreenCast + Screenshot first, RemoteDesktop later?
-- **better-settings**: thin GTK4 frontend that delegates to each app's
-  validated config API (recommended) rather than owning configuration itself.
+- **better-idle / better-rotate**: delivered as `companion-idle`/`companion-rotate`
+  modules; split into repositories only if they need their own lifecycle.
+- **better-audio**: native PipeWire backend delivered (registry, port links,
+  metadata default sink, volume/mute) with pactl/wpctl fallbacks; PWSW was not
+  adopted.
+- **better-shot scope**: screenshots, HDR handling, annotations, history, OCR
+  and recording are all in `better-shot/`.
+- **better-portal scope**: Screenshot and PickColor native, ScreenCast proxies
+  niri (the compositor keeps capture and PipeWire ownership); RemoteDesktop is
+  not part of this scope.
+- **better-settings**: thin GTK4 frontend plus CLI that delegates to each app's
+  own config/CLI; it never owns their data. HDR mode and reference luminance
+  are editable in KDL, and the Displays tab also has the runtime selector.
+- **nsticky delegation**: `contrib/patches/nsticky-native-sticky.patch` makes
+  better-nsticky use the compositor's native sticky flag when `Capabilities`
+  reports it, with the move-based fallback otherwise.
 
 
 ## better-portal status
