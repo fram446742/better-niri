@@ -305,8 +305,8 @@ picked up without re-auditing.
    `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
    `better-session`, `better-shot`, `better-wallpaper`, `better-settings`,
    `better-audio`, `better-sidepanels` and the `better-desktop` meta package,
-   with ownership/staging checks in `verify.sh`. Remaining: hardware validation
-   (VRR/tearing/explicit sync/multi-GPU/HDR mixed on real panels). `better-settings/` now covers layout, input
+   with ownership/staging checks in `verify.sh`. Remaining release tasks: AUR
+   publishing/signing and the subjective hardware checklist. `better-settings/` now covers layout, input
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
