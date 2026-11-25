@@ -286,6 +286,13 @@ impl TtyGpuManager {
         let _ = self.0.devices();
     }
 
+    /// Frees dead texture imports on every GPU, including non-primary devices.
+    pub fn cleanup_texture_cache(&mut self) -> Result<(), String> {
+        self.0
+            .cleanup_texture_cache()
+            .map_err(|err| format!("{err:?}"))
+    }
+
     pub fn early_import(
         &mut self,
         target: smithay::backend::drm::DrmNode,
@@ -2474,6 +2481,12 @@ impl Tty {
             .single_renderer(&self.primary_render_node)
             .ok()?;
         Some(f(renderer.as_gles_renderer()?))
+    }
+
+    pub fn cleanup_texture_cache(&mut self) {
+        if let Err(err) = self.gpu_manager.cleanup_texture_cache() {
+            warn!("error cleaning up renderer texture cache: {err}");
+        }
     }
 
     /// Runs `f` with the primary renderer behind the TTY abstraction, even when it is the Vulkan

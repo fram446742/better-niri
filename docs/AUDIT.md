@@ -102,7 +102,7 @@ picker, liquid glass, consolidated carousel overview, vertical main axis.
 | Window groups | upstream tabbed columns, kde-niri | **upstream** + optional Naxdy group refinements | Upstream already has tabbed columns; do not reimplement groups. |
 | Blur | upstream, kde-niri extra modes | **upstream** + evaluate Naxdy extras | Upstream already has passes/noise/saturation/xray. |
 | DPMS frame callbacks | demoji, upstream | **upstream** | Already fixed upstream; porting would duplicate. |
-| DPMS memory cleanup | demoji PR #4750 | **investigate** | PR is still open; do not adopt a timer mitigation without a demonstrated leak. |
+| DPMS memory cleanup | RiversJin/niri PR #4550 (`4da66421`), demoji PR #4750 | **backport #4550** | #3295/#4750 remain open; #4550 is diagnosis-complete and user-confirmed. Reclaim dead imports on the 1 s timer; tests in `src/tests/renderer_cleanup.rs`. |
 | Native sticky vs better-nsticky | biri, better-nsticky | **biri native** + nsticky compatibility mode | Native sticky is compositor-level and follows workspaces correctly; nsticky keeps staging/scratchpads, its unique value. |
 
 ## 5. Smithay decision, in detail
@@ -223,8 +223,9 @@ files where possible, tests around integration seams, and a documented list of
 4. **Direct scanout vs effects** — global shaders, liquid glass and blur can
    disable scanout. Keep effects gated; report damage per region; preserve
    scanout when inactive.
-5. **DPMS/VRAM growth** — frame-callback leak is fixed upstream; PR #4750's timer
-   cleanup is not merged. Reproduce first (see `TESTING.md`) before adopting.
+5. **DPMS/VRAM growth** — frame-callback leak is fixed upstream. The renderer
+   cache cleanup from PR #4550 is backported and unit-tested; GTT profiling on
+   a real DRM seat is still pending (see `TESTING.md`).
 6. **Shaders × HDR × Vulkan** — three interacting spaces. Define one shader
    contract (working space, encode stage, feedback buffer format) and implement
    GLES first; Vulkan must match or be disabled with a clear warning.

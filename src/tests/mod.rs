@@ -28,6 +28,7 @@ mod grid_scroll;
 mod keyboard_config;
 mod layer_shell;
 mod remove_output;
+mod renderer_cleanup;
 mod transactions;
 mod virtual_output;
 mod virtual_pointer;

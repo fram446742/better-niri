@@ -743,6 +743,21 @@ impl TtyGpuManager {
         }
     }
 
+    /// Frees dead texture imports on every GPU, including non-primary devices.
+    ///
+    /// Imports do not need a rendered frame, so this must not wait for one: clients
+    /// may create and destroy buffers while the outputs are powered off.
+    pub fn cleanup_texture_cache(&mut self) -> Result<(), String> {
+        match self {
+            TtyGpuManager::Gles(gpus) => gpus
+                .cleanup_texture_cache()
+                .map_err(|err| format!("{err:?}")),
+            TtyGpuManager::Vulkan(gpus) => gpus
+                .cleanup_texture_cache()
+                .map_err(|err| format!("{err:?}")),
+        }
+    }
+
     pub fn early_import(
         &mut self,
         target: smithay::backend::drm::DrmNode,

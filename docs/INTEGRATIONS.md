@@ -148,9 +148,24 @@ fallback reference if urayde's patches stop applying. Do not port both.
 | SurfaceBarrier atomic transactions | `50b1be19` |
 | Smithay barrier/delayed blockers | losnoco `f06a5999`, `0a12ae58`, `4a33ddb7`, `1e5b84d1`, `556930ca` |
 
-Deferred until HDR/presentation is stable: this reworks transaction handling and
-is the most invasive change in the spicy series. Upstream Smithay already has a
-`commit_timing` module, so only niri-side wiring and SurfaceBarrier need care.
+Integrated after the presentation/HDR baseline landed: this reworks transaction
+handling and is the most invasive change in the spicy series. Upstream Smithay
+already has a `commit_timing` module, so the port covers the niri-side wiring
+and SurfaceBarrier. See `STATUS.md` for the verified transaction behaviour.
+
+### Renderer cache cleanup (DPMS memory) — RiversJin/niri #4550
+
+| Feature | Commit |
+| --- | --- |
+| Reclaim dead imports without a frame | RiversJin `4da66421fe745aed1d6442b844ff20aa3ac7ebe6` (PR #4550, closed upstream) |
+
+Backported to the 1 s fallback timer: `Backend::cleanup_texture_cache()` frees
+dead textures on every GPU (GLES and Vulkan), so clients that import and destroy
+buffers while the outputs are powered off no longer pin their EGLImages until
+the next rendered frame. Two EGL tests (`renderer_cleanup`) cover the no-output
+and monitors-off cases. The upstream issue (`niri#3295`) remains open; the PR
+was closed by maintainer policy, not because the diagnosis was wrong, and
+multiple users confirmed the fix.
 
 ### Grid, minimisation UX, magnifier, agent seat, portal, SVG, shake — niri-elite
 

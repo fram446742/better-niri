@@ -9,9 +9,9 @@ Status legend:
 - **Planned** — accepted for better-niri; not integrated yet.
 - **Deferred** — evaluated, not scheduled (reason given).
 
-The status column was refreshed on 2026-11-24 against `integration/elite-base`:
+The status column was refreshed on 2026-11-25 against `integration/elite-base`:
 everything marked **Integrated** is implemented and covered by the workspace test
-suite (886 tests on the default build, 418 with `--no-default-features`).
+suite (892 tests on the default build, 423 with `--no-default-features`).
 All planned core protocol ports are integrated;
 hardware behaviour (VRR, tearing, explicit sync, multi-GPU, HDR mixed) is
 implemented but still needs validation on real panels. The rows below keep the
@@ -59,7 +59,7 @@ state.
 | Multi-GPU | Partial | niri-elite (SHORiN) | niri-elite | Integrated (hardware validation pending) | Better render-node selection and display-only GPU handling. |
 | Software EGL | Absent | niri-elite | niri-elite | Integrated | Upstream explicitly skips llvmpipe/softpipe. |
 | DPMS frame callbacks | Upstream | upstream | do not port | Upstream | Fixed by `78b7adfe`, `bb38b7e1`. |
-| DPMS VRAM/GTT cleanup | Partial | demoji PR #4750 (open) | investigate | Deferred | Reproduce and profile first; no timer mitigation without evidence. |
+| DPMS VRAM/GTT cleanup | Partial | demoji PR #4750 (open) | backport RiversJin #4550 | Integrated | Dead buffer imports are reclaimed by the 1 s fallback timer even with no rendered frame (both renderers, every GPU); two EGL regression tests cover no outputs and monitors off. Hardware GTT profiling still needs a DRM seat. |
 | DPMS isolated-output policy | Absent | biri | biri | Integrated (core) | `skip-isolated` keeps isolated outputs on while the rest sleep. |
 | Suspend/resume, hotplug resource cleanup | Partial | upstream + niri-spicy | integration work | Partial | Covered by hardware tests. |
 

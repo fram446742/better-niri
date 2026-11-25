@@ -5,6 +5,7 @@ use std::time::Duration;
 use niri_config::{Config, ModKey};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
+use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -92,6 +93,23 @@ impl OutputId {
 }
 
 impl Backend {
+    /// Reclaims dead buffer imports even when no output renders a frame.
+    ///
+    /// Importing a client buffer does not require a frame; a client can create and
+    /// destroy dmabufs while the outputs are powered off or unplugged. Without this,
+    /// their EGLImages stay pinned until the next rendered frame.
+    pub fn cleanup_texture_cache(&mut self) {
+        if let Self::Tty(tty) = self {
+            tty.cleanup_texture_cache();
+        } else {
+            self.with_primary_renderer(|renderer| {
+                if let Err(err) = renderer.cleanup_texture_cache() {
+                    warn!("error cleaning up renderer texture cache: {err:?}");
+                }
+            });
+        }
+    }
+
     pub fn init(&mut self, niri: &mut Niri) {
         let _span = tracy_client::span!("Backend::init");
         match self {

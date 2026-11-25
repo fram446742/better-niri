@@ -15,14 +15,16 @@
 | Component | Source | Revision | Notes |
 | --- | --- | --- | --- |
 | better-niri | `fram446742/better-niri` | branch `integration/elite-base` | niri upstream + niri-elite feature base, reconciled. |
-| better-smithay | `fram446742/better-smithay` | `252e346b8244e8e95029526e7d174b4fe7bce0aa` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
-| smithay-drm-extras | same better-smithay commit | `252e346b…` | |
+| better-smithay | `fram446742/better-smithay` | `c76148907cf6dae4441aa7224ac518bc120e356a` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
+| smithay-drm-extras | same better-smithay commit | `c7614890…` | |
 | niri-config / niri-ipc | workspace | `26.4.0-elite` | Elitish version string; to be renamed for better-niri. |
-| Rust | toolchain | MSRV 1.88 | |
+| Rust | toolchain | MSRV 1.95 (edition 2024) | |
 
 Verified at this pin: `cargo check --workspace`, `cargo test --workspace`
-(652 tests), `cargo clippy --workspace --all-targets` (no errors) and
-`cargo fmt --check`. Hardware is still untested.
+(892 tests), `cargo test -p niri --no-default-features` (423 tests),
+`cargo clippy --workspace --all-targets` (no errors) and `cargo fmt --check`.
+Hardware: DP-1 on RADV passed Vulkan, VRR, 10-bit, explicit sync, multi-device
+and HDR signalling; other GPUs/panels are still untested.
 
 ## 2. Integration-branch API adaptation
 

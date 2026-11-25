@@ -145,6 +145,12 @@ binds, `toggle-dwt`, pointer warp, confine-to-fullscreen, agent seat isolation.
 - Scanout preserved when effects are inactive.
 - No allocation growth over a 10-minute animated shader run.
 - VRAM/GTT after DPMS cycles and after closing fullscreen games.
+  - Automated: `cargo test -p niri --lib renderer_cleanup` imports two EGL
+    textures, drops one (and later the other) with no output rendering, and
+    asserts the 1 s fallback timer reclaims it while live textures survive.
+    Run once with no outputs and once with `deactivate_monitors`.
+  - Manual: driver counters (DRM fdinfo / `amdgpu_top` / `nvtop`) across real
+    DPMS cycles and a fullscreen game exit.
 - Input latency (high-speed camera or `libinput debug-events` + frame timing)
   before/after effects.
 

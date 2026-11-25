@@ -4744,6 +4744,10 @@ impl Niri {
                 Timer::from_duration(Duration::from_secs(1)),
                 |_, _, state| {
                     state.niri.send_frame_callbacks_on_fallback_timer();
+                    // Imports do not need a frame: clients can still create and destroy
+                    // buffers while the outputs are off or unplugged. Only dead entries are
+                    // freed; live textures and frame-callback policy are untouched.
+                    state.backend.cleanup_texture_cache();
                     TimeoutAction::ToDuration(Duration::from_secs(1))
                 },
             )
