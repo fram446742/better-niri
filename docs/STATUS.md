@@ -111,7 +111,7 @@ Verified on this branch:
 | Automated hardware pass (DP-1) | pass: Vulkan, capabilities, VRR, 10-bit, explicit sync, 2 DRM devices, runtime HDR auto/off/auto, screenshot IPC, HDR clip `hdr=true`→`hdr=false` |
 | `cargo clippy --workspace --all-targets` | pass (no errors; pre-existing style warnings in elite code) |
 | `cargo fmt --check` (niri + 9 workspaces) | pass |
-| `cargo build --release` | pass (packaging profiles) |
+| `cargo build --release` | not re-run in this pass; packaging verifies all profiles with debug `cargo check` |
 
 **Manual/remaining:** subjective full-client checks (tearing in a game, a
 commit-timing client, an output on the second GPU, rotated transitions, HDR
