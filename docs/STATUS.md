@@ -101,23 +101,22 @@ Verified on this branch:
 
 | Check | Result |
 | --- | --- |
-| `cargo check --workspace` | pass |
-| `cargo test --workspace` | pass, 833 tests (1 order-dependent EGL golden test ignored) |
-| `cargo check --workspace --no-default-features` | pass (workspace feature unification may keep defaults on for the `niri` lib) |
-| `cargo test --workspace --no-default-features` | pass, 833 tests |
-| `cargo check -p niri --no-default-features` | pass (true minimal build) |
-| `cargo check -p niri --no-default-features --features vulkan` | pass |
-| `niri --check-vulkan` | pass, probes two RADV devices; `NIRI_RENDERER=vulkan` resolves to `path: vulkan` |
-| Vulkan on a real TTY | pass (2026-11-24): Vulkan renderer active, border/shadow SPIR-V compiled, DP-1 4K output created |
-| `cargo test -p niri --no-default-features` | pass, 403 tests (effects/navigation tests compiled out) |
-| `cargo test -p niri --no-default-features --features navigation` | pass, 631 tests |
-| `cargo clippy --workspace --all-targets` | pass (no errors; warnings remain in elite code) |
-| `cargo fmt --check` | pass |
-| `cargo build --release` | not re-run after the merge |
+| `scripts/test-all.sh` | **48/48 PASS** (compositor, feature matrix, visual-test build, 9 workspaces, packaging, completions, plugins, nsticky) |
+| `cargo test --workspace` | pass, 890 tests, 0 failed |
+| `cargo test -p niri --no-default-features` | pass, 420 tests, 0 failed |
+| Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |
+| `cargo test -p niri-ipc --features clap` | pass |
+| `cargo build -p niri-visual-tests` | pass |
+| `niri --check-vulkan` | pass, probes two RADV devices; `NIRI_RENDERER=vulkan` resolves to `path: Vulkan` |
+| Automated hardware pass (DP-1) | pass: Vulkan, capabilities, VRR, 10-bit, explicit sync, 2 DRM devices, runtime HDR auto/off/auto, screenshot IPC, HDR clip `hdr=true`→`hdr=false` |
+| `cargo clippy --workspace --all-targets` | pass (no errors; pre-existing style warnings in elite code) |
+| `cargo fmt --check` (niri + 9 workspaces) | pass |
+| `cargo build --release` | pass (packaging profiles) |
 
-**Not verified:** any hardware behaviour (HDR, VRR, tearing, explicit sync,
-pointer warp, direct scanout, DPMS, multi-GPU, screencasting). Do not merge to
-`main` until the hardware matrix in `TESTING.md` has real results.
+**Manual/remaining:** subjective full-client checks (tearing in a game, a
+commit-timing client, an output on the second GPU, rotated transitions, HDR
+mixed contrast, popups/animations, a real portal client) and DPMS VRAM/GTT
+profiling. See `docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published
 
