@@ -1,0 +1,18 @@
+[
+  {
+    "id": "20261125T120000-work",
+    "name": "work",
+    "created_at": 1764072000,
+    "trigger": "manual",
+    "windows": 7,
+    "workspaces": 4
+  },
+  {
+    "id": "20261124T090000-work",
+    "name": "work",
+    "created_at": 1763974800,
+    "trigger": "pre-restore",
+    "windows": 6,
+    "workspaces": 3
+  }
+]

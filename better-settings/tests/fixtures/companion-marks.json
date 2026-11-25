@@ -1,0 +1,13 @@
+{
+  "marks": [
+    {
+      "window": 10,
+      "mark": "browser"
+    },
+    {
+      "window": 12,
+      "mark": "editor"
+    }
+  ],
+  "count": 2
+}

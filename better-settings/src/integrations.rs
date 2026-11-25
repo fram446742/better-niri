@@ -276,29 +276,26 @@ fn ensure_success(result: &CommandResult, tool: Tool) -> Result<(), IntegrationE
         return Err(IntegrationError::missing(tool));
     }
     if !result.success() {
-        let detail = if result.stderr.trim().is_empty() {
-            result.stdout.trim()
-        } else {
-            result.stderr.trim()
-        };
+        let detail = detail_of(result);
         let status = result
             .status
             .map(|code| code.to_string())
             .unwrap_or_default();
         return Err(IntegrationError::new(
             tool,
-            format!(
-                "`{}` failed (exit {status}){}",
-                result.describe(),
-                if detail.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {detail}")
-                }
-            ),
+            format!("`{}` failed (exit {status}): {detail}", result.describe()),
         ));
     }
     Ok(())
+}
+
+/// The most useful text a failed command produced.
+fn detail_of(result: &CommandResult) -> String {
+    if result.stderr.trim().is_empty() {
+        result.stdout.trim().to_owned()
+    } else {
+        result.stderr.trim().to_owned()
+    }
 }
 
 fn tool_json(
@@ -452,6 +449,129 @@ pub fn tool_statuses(runner: &dyn CommandRunner) -> Vec<ToolStatus> {
         .iter()
         .map(|tool| tool_status(runner, *tool))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Compositor: niri
+// ---------------------------------------------------------------------------
+
+/// A never-failing summary of the running compositor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompositorStatus {
+    /// Version reported by the compositor (`niri msg --json version`).
+    pub compositor_version: Option<String>,
+    /// Version of the `niri` CLI on `PATH`.
+    pub cli_version: Option<String>,
+    /// The build advertises Vulkan renderer support.
+    pub vulkan: bool,
+    /// The build advertises HDR output support.
+    pub hdr: bool,
+    /// Number of connected outputs (`niri msg --json outputs`).
+    pub outputs: usize,
+    /// Outputs that advertise HDR capability.
+    pub hdr_outputs: usize,
+    /// Outputs currently signalling HDR.
+    pub hdr_active: usize,
+    /// First error encountered while probing, if any.
+    pub error: Option<String>,
+}
+
+impl CompositorStatus {
+    /// Human-readable renderer line. `niri` does not expose the active
+    /// renderer over IPC, so this reports the build capability the compositor
+    /// advertises (`capabilities.vulkan`).
+    pub fn renderer(&self) -> &'static str {
+        if self.vulkan {
+            "Vulkan capable"
+        } else {
+            "GLES (Vulkan not advertised)"
+        }
+    }
+}
+
+/// Probes version, capabilities and outputs. Never fails; a missing
+/// compositor is reported in [`CompositorStatus::error`].
+pub fn compositor_status(runner: &dyn CommandRunner) -> CompositorStatus {
+    let program = niri_program();
+    let mut status = CompositorStatus {
+        compositor_version: None,
+        cli_version: None,
+        vulkan: false,
+        hdr: false,
+        outputs: 0,
+        hdr_outputs: 0,
+        hdr_active: 0,
+        error: None,
+    };
+
+    let version = runner.run(&program, &["msg", "--json", "version"]);
+    if !version.installed() {
+        status.error = Some(format!(
+            "{program} is not installed; the compositor status is unavailable"
+        ));
+        return status;
+    }
+    match version.success() {
+        true => match serde_json::from_str::<Value>(&version.stdout) {
+            Ok(value) => {
+                status.compositor_version = option_string(value.get("compositor"));
+                status.cli_version = option_string(value.get("cli"));
+            }
+            Err(err) => status.error = Some(format!("cannot parse niri version JSON: {err}")),
+        },
+        false => {
+            status.error = Some(detail_of(&version));
+        }
+    }
+
+    let capabilities = runner.run(&program, &["msg", "--json", "capabilities"]);
+    if capabilities.success() {
+        if let Ok(value) = serde_json::from_str::<Value>(&capabilities.stdout) {
+            status.vulkan = value
+                .get("vulkan")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            status.hdr = value.get("hdr").and_then(Value::as_bool).unwrap_or(false);
+        }
+    } else if status.error.is_none() && capabilities.installed() {
+        status.error = Some(detail_of(&capabilities));
+    }
+
+    let outputs = runner.run(&program, &["msg", "--json", "outputs"]);
+    if outputs.success() {
+        if let Ok(value) = serde_json::from_str::<Value>(&outputs.stdout)
+            && let Some(outputs) = value.as_object()
+        {
+            status.outputs = outputs.len();
+            for output in outputs.values() {
+                if output
+                    .get("hdr_supported")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    status.hdr_outputs += 1;
+                }
+                if output
+                    .get("hdr_active")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    status.hdr_active += 1;
+                }
+            }
+        }
+    } else if status.error.is_none() && outputs.installed() {
+        status.error = Some(detail_of(&outputs));
+    }
+
+    status
+}
+
+/// Reloads niri's config through the compositor (`niri msg action reload-config`).
+pub fn reload_config(runner: &dyn CommandRunner) -> Result<(), IntegrationError> {
+    let program = niri_program();
+    let result = runner.run(&program, &["msg", "action", "reload-config"]);
+    ensure_success(&result, Tool::Monitor)
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +876,10 @@ pub fn session_context(
     name: &str,
 ) -> Result<SessionContext, IntegrationError> {
     let value = tool_json(runner, Tool::Session, &["show", name])?;
+    Ok(session_context_value(name, &value))
+}
+
+fn session_context_value(name: &str, value: &Value) -> SessionContext {
     let count = |key: &str| {
         value
             .get(key)
@@ -763,7 +887,7 @@ pub fn session_context(
             .map(Vec::len)
             .unwrap_or(0)
     };
-    Ok(SessionContext {
+    SessionContext {
         name: name.to_owned(),
         workspaces: count("workspaces"),
         windows: count("windows"),
@@ -778,7 +902,57 @@ pub fn session_context(
             .map(|commands| commands.len())
             .unwrap_or(0),
         template: option_string(value.get("template")),
-    })
+    }
+}
+
+/// Captures the current session as a context (`better-session capture <name>`).
+///
+/// This is a mutation with no preview; callers must ask the user first.
+pub fn session_capture(
+    runner: &dyn CommandRunner,
+    name: &str,
+) -> Result<SessionContext, IntegrationError> {
+    let value = tool_json(runner, Tool::Session, &["capture", name])?;
+    Ok(session_context_value(name, &value))
+}
+
+/// One snapshot in `better-session history list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionHistoryEntry {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub trigger: String,
+    pub windows: usize,
+    pub workspaces: usize,
+}
+
+pub fn session_history(
+    runner: &dyn CommandRunner,
+) -> Result<Vec<SessionHistoryEntry>, IntegrationError> {
+    let value = tool_json(runner, Tool::Session, &["history", "list"])?;
+    let entries = as_array(&value, Tool::Session, "history")?;
+    entries
+        .iter()
+        .map(|entry| {
+            Ok(SessionHistoryEntry {
+                id: required_string(entry, "id", Tool::Session)?,
+                name: entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                created_at: entry.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                trigger: entry
+                    .get("trigger")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                windows: entry.get("windows").and_then(Value::as_u64).unwrap_or(0) as usize,
+                workspaces: entry.get("workspaces").and_then(Value::as_u64).unwrap_or(0) as usize,
+            })
+        })
+        .collect()
 }
 
 fn session_outcome(value: &Value) -> Result<SessionOutcome, IntegrationError> {
@@ -1287,6 +1461,8 @@ pub struct SidepanelsConfig {
     pub exists: bool,
     pub version: u32,
     pub outputs: Vec<String>,
+    /// Named layouts/profiles the daemon accepts with `--profile`/`--layout`.
+    pub layouts: Vec<String>,
     pub panels: Vec<SidepanelSummary>,
 }
 
@@ -1317,6 +1493,7 @@ pub fn read_sidepanels(path: &Path) -> Result<SidepanelsConfig, IntegrationError
                 exists: false,
                 version: 2,
                 outputs: Vec::new(),
+                layouts: Vec::new(),
                 panels: Vec::new(),
             });
         }
@@ -1338,6 +1515,11 @@ pub fn read_sidepanels(path: &Path) -> Result<SidepanelsConfig, IntegrationError
 
 /// Parses a v2 (`panels`) or v1 (bare panel) config.
 pub fn parse_sidepanels(path: &Path, value: &Value) -> Result<SidepanelsConfig, IntegrationError> {
+    let layouts = ["layouts", "profiles"]
+        .iter()
+        .find_map(|field| value.get(*field).and_then(Value::as_object))
+        .map(|layouts| layouts.keys().cloned().collect())
+        .unwrap_or_default();
     let (version, outputs, panels) = if value.get("panels").is_some() {
         let panels = match value.get("panels") {
             Some(panels) => as_array(panels, Tool::Sidepanels, "panels")?.clone(),
@@ -1388,7 +1570,29 @@ pub fn parse_sidepanels(path: &Path, value: &Value) -> Result<SidepanelsConfig, 
         exists: true,
         version,
         outputs,
+        layouts,
         panels,
+    })
+}
+
+/// Runs `better-sidepanels --check --profile <name>` to print what a named
+/// layout would load without starting the daemon.
+pub fn check_sidepanels_layout(
+    runner: &dyn CommandRunner,
+    path: &Path,
+    layout: &str,
+) -> Result<String, IntegrationError> {
+    let path_text = path.display().to_string();
+    let result = run_tool(
+        runner,
+        Tool::Sidepanels,
+        &["--check", "--profile", layout, "--config", &path_text],
+    );
+    ensure_success(&result, Tool::Sidepanels)?;
+    Ok(if result.stdout.trim().is_empty() {
+        format!("{path_text}: {layout} is valid")
+    } else {
+        result.stdout.trim().to_owned()
     })
 }
 
@@ -1443,6 +1647,109 @@ pub fn open_sidepanels(path: &Path) -> Result<String, IntegrationError> {
         ));
     }
     Ok(format!("opened {}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// Portal and Noctalia plugin source
+// ---------------------------------------------------------------------------
+
+/// Where better-portal publishes its frontend selection.
+pub fn portal_config_path(explicit: Option<&Path>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path.to_owned();
+    }
+    if let Some(path) = std::env::var_os("BETTER_SETTINGS_PORTALS_CONF") {
+        return PathBuf::from(path);
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".config")
+        });
+    base.join("xdg-desktop-portal/portals.conf")
+}
+
+/// Portal backend/unit status. Read-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PortalStatus {
+    pub unit: String,
+    pub active: Option<String>,
+    pub enabled: Option<String>,
+    pub config: String,
+    pub config_exists: bool,
+    /// The frontend config names `org.freedesktop.impl.portal.desktop.better`.
+    pub selected: bool,
+}
+
+pub fn portal_status(runner: &dyn CommandRunner, config: &Path) -> PortalStatus {
+    let unit = "better-portal".to_owned();
+    let probe = |verb: &str| {
+        let result = runner.run("systemctl", &["--user", verb, &unit]);
+        if result.installed() {
+            first_line(&result.stdout)
+        } else {
+            None
+        }
+    };
+    let config_text = std::fs::read_to_string(config).ok();
+    let active = probe("is-active");
+    let enabled = probe("is-enabled");
+    PortalStatus {
+        unit,
+        active,
+        enabled,
+        config: config.display().to_string(),
+        config_exists: config_text.is_some(),
+        selected: config_text
+            .as_deref()
+            .map(|text| text.contains("org.freedesktop.impl.portal.desktop.better"))
+            .unwrap_or(false),
+    }
+}
+
+/// Resolves a Noctalia plugin source directory.
+pub fn noctalia_source(explicit: Option<&Path>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path.to_owned();
+    }
+    if let Some(path) = std::env::var_os("BETTER_SETTINGS_NOCTALIA_PLUGINS") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("/usr/share/better-desktop/noctalia-plugins")
+}
+
+/// Read-only status of a Noctalia plugin source tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NoctaliaSource {
+    pub path: String,
+    pub exists: bool,
+    pub plugins: Vec<String>,
+    pub verify_script: bool,
+}
+
+pub fn read_noctalia_source(path: &Path) -> NoctaliaSource {
+    let mut plugins = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir()
+                && entry_path.join("plugin.toml").is_file()
+                && let Some(name) = entry_path.file_name()
+            {
+                plugins.push(name.to_string_lossy().into_owned());
+            }
+        }
+    }
+    plugins.sort();
+    NoctaliaSource {
+        path: path.display().to_string(),
+        exists: path.is_dir(),
+        verify_script: path.join("verify.sh").is_file(),
+        plugins,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1597,6 +1904,213 @@ pub fn companion_run(
         ));
     }
     Ok(value)
+}
+
+/// One completed rule/automation run from `companionctl history`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompanionHistoryEntry {
+    pub timestamp_ms: u64,
+    pub source: String,
+    pub name: String,
+    pub steps: usize,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Recent rule/automation runs, newest first.
+pub fn companion_history(
+    runner: &dyn CommandRunner,
+    limit: u32,
+) -> Result<Vec<CompanionHistoryEntry>, IntegrationError> {
+    let limit = limit.to_string();
+    let value = tool_json(runner, Tool::Companion, &["history", &limit])?;
+    let records = as_array(
+        value.get("records").ok_or_else(|| {
+            IntegrationError::new(Tool::Companion, "history JSON has no `records`")
+        })?,
+        Tool::Companion,
+        "records",
+    )?;
+    records
+        .iter()
+        .map(|record| {
+            let result = record.get("result");
+            Ok(CompanionHistoryEntry {
+                timestamp_ms: record
+                    .get("timestamp_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                source: record
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                name: record
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                steps: record
+                    .get("steps")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                ok: result
+                    .and_then(|result| result.get("ok"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                error: result.and_then(|result| option_string(result.get("error"))),
+            })
+        })
+        .collect()
+}
+
+/// `companionctl explain <target>` for `rules`, `windows` or `adapters`.
+/// Explanation is read-only; it never executes steps.
+pub fn companion_explain(
+    runner: &dyn CommandRunner,
+    target: &str,
+) -> Result<Value, IntegrationError> {
+    if !matches!(target, "rules" | "windows" | "adapters") {
+        return Err(IntegrationError::new(
+            Tool::Companion,
+            format!("unknown explain target `{target}`"),
+        ));
+    }
+    tool_json(runner, Tool::Companion, &["explain", target])
+}
+
+/// Runs matching rules. The caller must confirm first; `dry_run` only explains.
+pub fn companion_rules_apply(
+    runner: &dyn CommandRunner,
+    dry_run: bool,
+) -> Result<Value, IntegrationError> {
+    if dry_run {
+        return companion_explain(runner, "rules");
+    }
+    tool_json(runner, Tool::Companion, &["call", "rules", "run"])
+}
+
+/// Idle or rotation policy state from `companionctl call <ns> status`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompanionAdapterStatus {
+    pub namespace: String,
+    pub enabled: bool,
+    pub lines: Vec<String>,
+    pub value: Value,
+}
+
+fn companion_adapter_status(
+    runner: &dyn CommandRunner,
+    namespace: &str,
+) -> Result<CompanionAdapterStatus, IntegrationError> {
+    let value = companion_run(runner, namespace, "status", None, false)?;
+    let enabled = value
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let lines = if namespace == "idle" {
+        idle_lines(&value)
+    } else {
+        rotate_lines(&value)
+    };
+    Ok(CompanionAdapterStatus {
+        namespace: namespace.to_owned(),
+        enabled,
+        lines,
+        value,
+    })
+}
+
+fn idle_lines(value: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(idle) = value.get("idle_secs").and_then(Value::as_u64) {
+        lines.push(format!("idle for {idle}s"));
+    }
+    if let Some(source) = value.get("source").and_then(Value::as_str) {
+        lines.push(format!("idle source: {source}"));
+    }
+    if let Some(inhibited) = value.get("inhibited").and_then(Value::as_bool) {
+        lines.push(format!(
+            "inhibited: {}",
+            if inhibited { "yes" } else { "no" }
+        ));
+    }
+    if let Some(due) = value.get("due").and_then(Value::as_array) {
+        lines.push(format!("{} step(s) due", due.len()));
+    }
+    if let Some(next) = value.get("next").and_then(Value::as_object)
+        && let Some(after) = next.get("after_secs").and_then(Value::as_u64)
+    {
+        lines.push(format!("next timeout at {after}s idle"));
+    }
+    if let Some(skipped) = value.get("skipped").and_then(Value::as_str) {
+        lines.push(format!("skipped: {skipped}"));
+    }
+    lines
+}
+
+fn rotate_lines(value: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(output) = value.get("output").and_then(Value::as_str) {
+        lines.push(format!("output: {output}"));
+    }
+    if let Some(source) = value.get("source") {
+        lines.push(format!("source: {}", compact(source)));
+    }
+    if let Some(orientation) = value.get("last_orientation").and_then(Value::as_str) {
+        lines.push(format!("last orientation: {orientation}"));
+    }
+    if let Some(transform) = value.get("last_transform").and_then(Value::as_str) {
+        lines.push(format!("last transform: {transform}"));
+    }
+    if let Some(locked) = value.get("locked").and_then(Value::as_bool) {
+        lines.push(format!("locked: {}", if locked { "yes" } else { "no" }));
+    }
+    if let Some(skipped) = value.get("skipped").and_then(Value::as_str) {
+        lines.push(format!("skipped: {skipped}"));
+    }
+    lines
+}
+
+pub fn idle_status(runner: &dyn CommandRunner) -> Result<CompanionAdapterStatus, IntegrationError> {
+    companion_adapter_status(runner, "idle")
+}
+
+pub fn rotate_status(
+    runner: &dyn CommandRunner,
+) -> Result<CompanionAdapterStatus, IntegrationError> {
+    companion_adapter_status(runner, "rotate")
+}
+
+/// Enables or disables the idle or rotation policy (`idle.enable`,
+/// `rotate.disable`, ...). Mutating; callers confirm first.
+pub fn companion_adapter_set_enabled(
+    runner: &dyn CommandRunner,
+    namespace: &str,
+    enabled: bool,
+    dry_run: bool,
+) -> Result<Value, IntegrationError> {
+    if !matches!(namespace, "idle" | "rotate") {
+        return Err(IntegrationError::new(
+            Tool::Companion,
+            format!("unknown adapter namespace `{namespace}`"),
+        ));
+    }
+    let action = if enabled { "enable" } else { "disable" };
+    companion_run(runner, namespace, action, None, dry_run)
+}
+
+/// Window marks tracked by the companion (`marks.list`).
+pub fn companion_marks(runner: &dyn CommandRunner) -> Result<Value, IntegrationError> {
+    companion_run(runner, "marks", "list", None, false)
+}
+
+/// A validated automatic-rotation or idle action pair for the Automation page.
+pub fn companion_adapters(
+    runner: &dyn CommandRunner,
+) -> [Result<CompanionAdapterStatus, IntegrationError>; 2] {
+    [idle_status(runner), rotate_status(runner)]
 }
 
 // ---------------------------------------------------------------------------
@@ -1847,6 +2361,9 @@ pub fn sidepanels_view(runner: &dyn CommandRunner, path: &Path) -> IntegrationVi
                 }
             ));
         }
+        if !config.layouts.is_empty() {
+            lines.push(format!("layouts: {}", config.layouts.join(", ")));
+        }
     }
     if !installed {
         lines.push(format!(
@@ -1902,6 +2419,100 @@ pub fn companion_view(runner: &dyn CommandRunner) -> IntegrationView {
     }
 }
 
+/// Portal daemon and frontend selection status.
+pub fn portal_view(runner: &dyn CommandRunner, config: &Path) -> IntegrationView {
+    let status = portal_status(runner, config);
+    let mut lines = vec![
+        format!(
+            "unit: {} ({}, {})",
+            status.unit,
+            status.active.as_deref().unwrap_or("unknown"),
+            status.enabled.as_deref().unwrap_or("unknown")
+        ),
+        format!("frontend config: {}", status.config),
+    ];
+    if !status.config_exists {
+        lines.push("no portals.conf; the frontend picks a backend by itself".to_owned());
+    } else if status.selected {
+        lines.push(
+            "selection: `org.freedesktop.impl.portal.desktop.better` is named in portals.conf"
+                .to_owned(),
+        );
+    } else {
+        lines.push(
+            "selection: portals.conf does not name `org.freedesktop.impl.portal.desktop.better`"
+                .to_owned(),
+        );
+    }
+    lines.push("start with `systemctl --user enable --now better-portal`".to_owned());
+    IntegrationView::ready(if status.active.as_deref() == Some("active") {
+        "running".to_owned()
+    } else {
+        status
+            .active
+            .as_deref()
+            .unwrap_or("status unavailable")
+            .to_owned()
+    })
+    .with_lines(lines)
+}
+
+/// Noctalia plugin source status.
+pub fn noctalia_view(path: &Path) -> IntegrationView {
+    let source = read_noctalia_source(path);
+    if !source.exists {
+        return IntegrationView::ready("plugin source not installed").with_lines(vec![
+            format!("looked in: {}", source.path),
+            "install the tree from better-noctalia-plugins or set BETTER_SETTINGS_NOCTALIA_PLUGINS"
+                .to_owned(),
+        ]);
+    }
+    let mut lines = vec![
+        format!("source: {}", source.path),
+        if source.plugins.is_empty() {
+            "no plugin manifests found".to_owned()
+        } else {
+            format!(
+                "plugins ({}): {}",
+                source.plugins.len(),
+                source.plugins.join(", ")
+            )
+        },
+    ];
+    if source.verify_script {
+        lines.push("verify.sh is available for manifest/syntax checks".to_owned());
+    }
+    IntegrationView::ready(format!("{} plugin(s)", source.plugins.len())).with_lines(lines)
+}
+
+/// The small, never-failing aggregate the Overview page renders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OverviewStatus {
+    pub compositor: CompositorStatus,
+    pub tools: IntegrationView,
+    pub portal: PortalStatus,
+    pub companion: IntegrationView,
+    pub profiles: usize,
+    pub contexts: usize,
+    pub scenes: usize,
+    pub sessions_history: usize,
+}
+
+pub fn overview_status(runner: &dyn CommandRunner, portals_conf: &Path) -> OverviewStatus {
+    let count =
+        |result: Result<Vec<String>, IntegrationError>| result.map(|v| v.len()).unwrap_or(0);
+    OverviewStatus {
+        compositor: compositor_status(runner),
+        tools: tools_view(runner),
+        portal: portal_status(runner, portals_conf),
+        companion: companion_view(runner),
+        profiles: count(display_profiles(runner)),
+        contexts: count(session_contexts(runner)),
+        scenes: count(wallpaper_scenes(runner)),
+        sessions_history: session_history(runner).map(|v| v.len()).unwrap_or(0),
+    }
+}
+
 /// Every section, in the order the GTK window shows them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IntegrationOverview {
@@ -1949,6 +2560,8 @@ pub fn usage() -> &'static str {
     "better-settingsctl <command>\n\n\
      Companion app integrations (each app stays the authority for its own data):\n\
        integrations [status]             Which CLIs are installed and their versions\n\
+       compositor status                 niri version, renderer and HDR capability\n\
+       compositor reload --apply         Reload the running compositor config\n\
        displays list                     List better-monitor profiles\n\
        displays show <name>              Show one profile and its outputs\n\
        displays preview <name>           Dry-run an apply (no changes)\n\
@@ -1959,6 +2572,8 @@ pub fn usage() -> &'static str {
        displays confirm --apply          Confirm a pending safe apply\n\
        displays cancel --apply           Cancel a pending safe apply\n\
        sessions list | show <name>       List contexts or show one\n\
+       sessions history                  List recorded snapshots\n\
+       sessions capture <name> --apply   Capture the current session explicitly\n\
        sessions explain <name>           Plan a restore without changing anything\n\
        sessions activate <name> --apply  Restore a context (requires --apply)\n\
        wallpaper status | scenes         Active scene, backend and scene names\n\
@@ -1971,10 +2586,20 @@ pub fn usage() -> &'static str {
        audio default <sink> --apply      Set the configured default sink\n\
        audio apply|restore [--apply]     Preview, then route or restore streams\n\
        sidepanels status | validate      Read and validate the JSON config\n\
+       sidepanels layouts | check <name> Named layouts and a read-only preview\n\
        sidepanels path                   Print the config path\n\
        sidepanels open                   Open the config in $VISUAL/$EDITOR\n\
        companion describe | status | list  Action registry and daemon status\n\
-       companion run <ns> <action> [json]  Dry-run an action; --apply calls it\n\n\
+       companion history [limit]         Recent rule/automation runs\n\
+       companion explain rules|windows   Explain matches without acting\n\
+       companion rules --apply           Run matching rules (preview, then apply)\n\
+       companion idle|rotate status      Idle and auto-rotation policy state\n\
+       companion idle|rotate enable|disable --apply\n\
+                                    Change an automation policy\n\
+       companion marks                   Window marks tracked by the daemon\n\
+       companion run <ns> <action> [json]  Dry-run an action; --apply calls it\n\
+       portal status                     better-portal unit and portals.conf hint\n\
+       noctalia status                   Noctalia plugin source status\n\n\
      Mutating commands print a preview and refuse to run without --apply.\n\
      Tools can be redirected with BETTER_SETTINGS_BETTER_MONITOR,\n\
      BETTER_SETTINGS_BETTER_SESSION, BETTER_SETTINGS_BETTER_WALLPAPER,\n\
@@ -2030,6 +2655,27 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
 
     match section {
         "integrations" => Ok(json(&tool_statuses(runner))?),
+        "overview" => {
+            let conf = portal_config_path(None);
+            Ok(json(&overview_status(runner, &conf))?)
+        }
+        "compositor" => match sub.unwrap_or("status") {
+            "status" => Ok(json(&compositor_status(runner))?),
+            "reload" => {
+                if !apply {
+                    return Err(IntegrationError::new(
+                        Tool::Monitor,
+                        "reload tells the compositor to reread its config; pass --apply",
+                    ));
+                }
+                reload_config(runner)?;
+                Ok(json(&serde_json::json!({ "reloaded": true }))?)
+            }
+            other => Err(IntegrationError::new(
+                Tool::Monitor,
+                format!("unknown compositor command `{other}`"),
+            )),
+        },
         "displays" => match sub.unwrap_or("list") {
             "list" => Ok(json(&display_profiles(runner)?)?),
             "show" => {
@@ -2126,6 +2772,19 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
                     IntegrationError::new(Tool::Session, "sessions explain needs a context name")
                 })?;
                 Ok(json(&session_explain(runner, name)?)?)
+            }
+            "history" => Ok(json(&session_history(runner)?)?),
+            "capture" => {
+                let name = positional.get(1).ok_or_else(|| {
+                    IntegrationError::new(Tool::Session, "sessions capture needs a context name")
+                })?;
+                if !apply {
+                    return Err(IntegrationError::new(
+                        Tool::Session,
+                        format!("capturing `{name}` overwrites a context; pass --apply"),
+                    ));
+                }
+                Ok(json(&session_capture(runner, name)?)?)
             }
             "activate" => {
                 let name = positional.get(1).ok_or_else(|| {
@@ -2295,6 +2954,16 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
             let path = sidepanels_path(explicit.as_deref());
             match sub.unwrap_or("status") {
                 "status" => Ok(json(&read_sidepanels(&path)?)?),
+                "layouts" => Ok(json(&read_sidepanels(&path)?.layouts)?),
+                "check" => {
+                    let layout = positional.get(1).ok_or_else(|| {
+                        IntegrationError::new(
+                            Tool::Sidepanels,
+                            "sidepanels check needs a layout name",
+                        )
+                    })?;
+                    Ok(check_sidepanels_layout(runner, &path, layout)?)
+                }
                 "path" => Ok(path.display().to_string()),
                 "validate" => Ok(validate_sidepanels(runner, &path)?),
                 "open" => Ok(open_sidepanels(&path)?),
@@ -2304,10 +2973,73 @@ pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> Result<String, I
                 )),
             }
         }
+        "portal" => {
+            let conf = portal_config_path(None);
+            Ok(json(&portal_status(runner, &conf))?)
+        }
+        "noctalia" => {
+            let path = noctalia_source(None);
+            Ok(json(&read_noctalia_source(&path))?)
+        }
         "companion" => match sub.unwrap_or("status") {
             "describe" => Ok(json(&companion_describe(runner)?)?),
             "status" => Ok(json(&companion_status(runner)?)?),
             "list" => Ok(json(&companion_namespace_list(runner)?)?),
+            "history" => {
+                let limit = positional
+                    .get(1)
+                    .map(|limit| {
+                        limit.parse::<u32>().map_err(|_| {
+                            IntegrationError::new(
+                                Tool::Companion,
+                                format!("history limit must be an integer, got `{limit}`"),
+                            )
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or(20);
+                Ok(json(&companion_history(runner, limit)?)?)
+            }
+            "explain" => {
+                let target = positional.get(1).copied().unwrap_or("rules");
+                Ok(json(&companion_explain(runner, target)?)?)
+            }
+            "rules" => Ok(json(&companion_rules_apply(runner, !apply)?)?),
+            "idle" | "rotate" => {
+                let namespace = sub.unwrap_or("idle");
+                let action = positional.get(1).copied().unwrap_or("status");
+                match action {
+                    "status" => {
+                        let status = if namespace == "idle" {
+                            idle_status(runner)?
+                        } else {
+                            rotate_status(runner)?
+                        };
+                        Ok(json(&status)?)
+                    }
+                    "enable" | "disable" => {
+                        if !apply {
+                            return Err(IntegrationError::new(
+                                Tool::Companion,
+                                format!(
+                                    "{namespace} {action} changes the policy; preview with `status` then pass --apply"
+                                ),
+                            ));
+                        }
+                        Ok(json(&companion_adapter_set_enabled(
+                            runner,
+                            namespace,
+                            action == "enable",
+                            false,
+                        )?)?)
+                    }
+                    other => Err(IntegrationError::new(
+                        Tool::Companion,
+                        format!("unknown {namespace} command `{other}`"),
+                    )),
+                }
+            }
+            "marks" => Ok(json(&companion_marks(runner)?)?),
             "run" => {
                 let namespace = positional.get(1).ok_or_else(|| {
                     IntegrationError::new(
@@ -2344,11 +3076,15 @@ pub fn is_section(name: &str) -> bool {
     matches!(
         name,
         "integrations"
+            | "overview"
+            | "compositor"
             | "displays"
             | "sessions"
             | "wallpaper"
             | "audio"
             | "sidepanels"
+            | "portal"
+            | "noctalia"
             | "companion"
     )
 }
@@ -3157,5 +3893,399 @@ mod tests {
             assert!(tool.override_env().starts_with("BETTER_SETTINGS_"));
             assert_eq!(program_for(tool), tool.program());
         }
+    }
+
+    fn niri_runner() -> ScriptedRunner {
+        ScriptedRunner::new()
+            .on(
+                "niri",
+                &["msg", "--json", "version"],
+                result(
+                    "niri",
+                    &["msg", "--json", "version"],
+                    &fixture("niri-version.json"),
+                ),
+            )
+            .on(
+                "niri",
+                &["msg", "--json", "capabilities"],
+                result(
+                    "niri",
+                    &["msg", "--json", "capabilities"],
+                    &fixture("niri-capabilities.json"),
+                ),
+            )
+            .on(
+                "niri",
+                &["msg", "--json", "outputs"],
+                result(
+                    "niri",
+                    &["msg", "--json", "outputs"],
+                    &fixture("niri-outputs.json"),
+                ),
+            )
+            .on(
+                "niri",
+                &["msg", "action", "reload-config"],
+                CommandResult::output("niri", ["msg", "action", "reload-config"], 0, "", ""),
+            )
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "better-settings-test-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn compositor_status_reads_version_capabilities_and_outputs() {
+        let runner = niri_runner();
+        let status = compositor_status(&runner);
+        assert_eq!(
+            status.compositor_version.as_deref(),
+            Some("better-niri 26.1")
+        );
+        assert_eq!(status.cli_version.as_deref(), Some("better-niri 26.1"));
+        assert!(status.vulkan);
+        assert!(status.hdr);
+        assert_eq!(status.renderer(), "Vulkan capable");
+        assert_eq!(status.outputs, 2);
+        assert_eq!(status.hdr_outputs, 1);
+        assert_eq!(status.hdr_active, 1);
+        assert!(status.error.is_none());
+
+        let missing = compositor_status(&ScriptedRunner::new());
+        assert!(missing.error.as_ref().unwrap().contains("not installed"));
+        assert_eq!(missing.renderer(), "GLES (Vulkan not advertised)");
+    }
+
+    #[test]
+    fn reload_config_posts_the_compositor_action() {
+        let runner = ScriptedRunner::new().on(
+            "niri",
+            &["msg", "action", "reload-config"],
+            CommandResult::output("niri", ["msg", "action", "reload-config"], 0, "", ""),
+        );
+        reload_config(&runner).unwrap();
+        assert!(
+            runner
+                .calls()
+                .contains(&"niri msg action reload-config".to_owned())
+        );
+        assert!(reload_config(&ScriptedRunner::new()).is_err());
+    }
+
+    #[test]
+    fn session_history_and_capture_parse() {
+        let runner = ScriptedRunner::new()
+            .on(
+                "better-session",
+                &["history", "list"],
+                result(
+                    "better-session",
+                    &["history", "list"],
+                    &fixture("session-history.json"),
+                ),
+            )
+            .on(
+                "better-session",
+                &["capture", "work"],
+                result(
+                    "better-session",
+                    &["capture", "work"],
+                    &fixture("session-show.json"),
+                ),
+            );
+        let history = session_history(&runner).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].name, "work");
+        assert_eq!(history[0].windows, 7);
+        assert_eq!(history[0].trigger, "manual");
+        let captured = session_capture(&runner, "work").unwrap();
+        assert_eq!(captured.name, "work");
+        assert!(captured.workspaces > 0);
+        assert!(
+            runner
+                .calls()
+                .contains(&"better-session capture work".to_owned())
+        );
+    }
+
+    fn companion_automation_runner() -> ScriptedRunner {
+        ScriptedRunner::new()
+            .on(
+                "companionctl",
+                &["history", "20"],
+                result(
+                    "companionctl",
+                    &["history", "20"],
+                    &fixture("companion-history.json"),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["explain", "rules"],
+                result(
+                    "companionctl",
+                    &["explain", "rules"],
+                    &fixture("companion-explanation.json"),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["call", "rules", "run"],
+                result(
+                    "companionctl",
+                    &["call", "rules", "run"],
+                    &fixture("companion-explanation.json"),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["call", "idle", "status"],
+                result(
+                    "companionctl",
+                    &["call", "idle", "status"],
+                    &fixture("companion-idle-status.json"),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["call", "rotate", "status"],
+                result(
+                    "companionctl",
+                    &["call", "rotate", "status"],
+                    &fixture("companion-rotate-status.json"),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["call", "idle", "enable"],
+                result(
+                    "companionctl",
+                    &["call", "idle", "enable"],
+                    &json!({"enabled": true}),
+                ),
+            )
+            .on(
+                "companionctl",
+                &["call", "marks", "list"],
+                result(
+                    "companionctl",
+                    &["call", "marks", "list"],
+                    &fixture("companion-marks.json"),
+                ),
+            )
+    }
+
+    #[test]
+    fn companion_automation_reads_history_idle_rotate_and_marks() {
+        let runner = companion_automation_runner();
+        let history = companion_history(&runner, 20).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].name, "browser-on-dp1");
+        assert_eq!(history[0].steps, 1);
+        assert!(history[0].ok);
+        assert!(!history[1].ok);
+        assert_eq!(
+            history[1].error.as_deref(),
+            Some("rotate: sensor unavailable")
+        );
+
+        let idle = idle_status(&runner).unwrap();
+        assert!(idle.enabled);
+        assert_eq!(idle.namespace, "idle");
+        assert!(idle.lines.iter().any(|line| line.contains("idle for 120s")));
+        assert!(idle.lines.iter().any(|line| line.contains("next timeout")));
+
+        let rotate = rotate_status(&runner).unwrap();
+        assert!(rotate.enabled);
+        assert!(rotate.lines.iter().any(|line| line.contains("eDP-1")));
+        assert!(rotate.lines.iter().any(|line| line.contains("locked: no")));
+
+        let explanation = companion_explain(&runner, "rules").unwrap();
+        assert_eq!(explanation["count"], 1);
+        assert!(companion_explain(&runner, "nope").is_err());
+        let applied = companion_rules_apply(&runner, false).unwrap();
+        assert_eq!(applied["count"], 1);
+        assert!(
+            runner
+                .calls()
+                .contains(&"companionctl call rules run".to_owned())
+        );
+
+        let marks = companion_marks(&runner).unwrap();
+        assert_eq!(marks["count"], 2);
+    }
+
+    #[test]
+    fn companion_adapter_enable_is_explicit() {
+        let runner = companion_automation_runner();
+        let value = companion_adapter_set_enabled(&runner, "idle", true, false).unwrap();
+        assert_eq!(value["enabled"], true);
+        assert!(
+            runner
+                .calls()
+                .contains(&"companionctl call idle enable".to_owned())
+        );
+        assert!(companion_adapter_set_enabled(&runner, "nope", true, false).is_err());
+    }
+
+    #[test]
+    fn sidepanels_layouts_and_check() {
+        let path = Path::new("/tmp/panels.json");
+        let config = parse_sidepanels(
+            path,
+            &json!({
+                "version": 2,
+                "panels": [],
+                "layouts": {"work": {"panels": []}, "media": {"panels": []}}
+            }),
+        )
+        .unwrap();
+        assert_eq!(config.layouts, vec!["media", "work"]);
+
+        let path_text = path.display().to_string();
+        let runner = ScriptedRunner::new().on(
+            "better-sidepanels",
+            &["--check", "--profile", "work", "--config", &path_text],
+            CommandResult::output(
+                "better-sidepanels",
+                ["--check", "--profile", "work"],
+                0,
+                "layout work: 2 panels\n",
+                "",
+            ),
+        );
+        let text = check_sidepanels_layout(&runner, path, "work").unwrap();
+        assert!(text.contains("2 panels"));
+    }
+
+    #[test]
+    fn portal_status_reads_unit_and_selection() {
+        let dir = temp_dir("portal");
+        let conf = dir.join("portals.conf");
+        std::fs::write(
+            &conf,
+            "[preferred]\ndefault=gnome;gtk;\nscreenshot=org.freedesktop.impl.portal.desktop.better\n",
+        )
+        .unwrap();
+        let runner = ScriptedRunner::new()
+            .on(
+                "systemctl",
+                &["--user", "is-active", "better-portal"],
+                CommandResult::output(
+                    "systemctl",
+                    ["--user", "is-active", "better-portal"],
+                    0,
+                    "active\n",
+                    "",
+                ),
+            )
+            .on(
+                "systemctl",
+                &["--user", "is-enabled", "better-portal"],
+                CommandResult::output(
+                    "systemctl",
+                    ["--user", "is-enabled", "better-portal"],
+                    0,
+                    "enabled\n",
+                    "",
+                ),
+            );
+        let status = portal_status(&runner, &conf);
+        assert_eq!(status.active.as_deref(), Some("active"));
+        assert_eq!(status.enabled.as_deref(), Some("enabled"));
+        assert!(status.config_exists);
+        assert!(status.selected);
+        let view = portal_view(&runner, &conf);
+        assert_eq!(view.status, "running");
+        assert!(view.lines.iter().any(|line| line.contains("portals.conf")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn noctalia_source_lists_plugins() {
+        let dir = temp_dir("noctalia");
+        std::fs::create_dir_all(dir.join("better-audio")).unwrap();
+        std::fs::write(dir.join("better-audio/plugin.toml"), "id = \"audio\"\n").unwrap();
+        std::fs::create_dir_all(dir.join("better-sticky")).unwrap();
+        std::fs::write(dir.join("better-sticky/plugin.toml"), "id = \"sticky\"\n").unwrap();
+        std::fs::create_dir_all(dir.join("not-a-plugin")).unwrap();
+        std::fs::write(dir.join("verify.sh"), "#!/bin/sh\n").unwrap();
+        let source = read_noctalia_source(&dir);
+        assert!(source.exists);
+        assert!(source.verify_script);
+        assert_eq!(source.plugins, vec!["better-audio", "better-sticky"]);
+        let view = noctalia_view(&dir);
+        assert!(view.status.contains("2 plugin"));
+        let missing = noctalia_view(Path::new("/tmp/no-such-noctalia-source"));
+        assert_eq!(missing.status, "plugin source not installed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overview_status_counts_companions_without_failing() {
+        let runner = reference_runner()
+            .on(
+                "better-session",
+                &["history", "list"],
+                result(
+                    "better-session",
+                    &["history", "list"],
+                    &fixture("session-history.json"),
+                ),
+            )
+            .on(
+                "niri",
+                &["msg", "--json", "version"],
+                result(
+                    "niri",
+                    &["msg", "--json", "version"],
+                    &fixture("niri-version.json"),
+                ),
+            );
+        let conf = Path::new("/tmp/no-portals.conf");
+        let status = overview_status(&runner, conf);
+        assert_eq!(status.profiles, 2);
+        assert_eq!(status.contexts, 2);
+        assert_eq!(status.scenes, 2);
+        assert_eq!(status.sessions_history, 2);
+        assert_eq!(
+            status.compositor.compositor_version.as_deref(),
+            Some("better-niri 26.1")
+        );
+        assert_eq!(status.companion.status, "daemon running");
+        assert!(status.tools.status.contains("installed"));
+    }
+
+    #[test]
+    fn dispatch_exposes_the_new_sections_and_gates_mutations() {
+        let runner = niri_runner();
+        let call = |args: &[&str]| {
+            dispatch(
+                &runner,
+                &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+            )
+        };
+        assert!(
+            call(&["compositor", "status"])
+                .unwrap()
+                .contains("compositor")
+        );
+        assert!(call(&["compositor", "reload"]).is_err());
+        assert!(call(&["compositor", "reload", "--apply"]).is_ok());
+        assert!(is_section("compositor"));
+        assert!(is_section("portal"));
+        assert!(is_section("noctalia"));
+        assert!(is_section("overview"));
+        assert!(usage().contains("companion idle|rotate"));
     }
 }

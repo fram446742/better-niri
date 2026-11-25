@@ -1,0 +1,20 @@
+{
+  "DP-1": {
+    "name": "DP-1",
+    "make": "Dell",
+    "model": "U2723QE",
+    "hdr_supported": true,
+    "hdr_enabled": true,
+    "hdr_active": true,
+    "hdr_mode": "on"
+  },
+  "eDP-1": {
+    "name": "eDP-1",
+    "make": "Framework",
+    "model": "Panel",
+    "hdr_supported": false,
+    "hdr_enabled": false,
+    "hdr_active": false,
+    "hdr_mode": "auto"
+  }
+}

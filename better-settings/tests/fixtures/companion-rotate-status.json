@@ -1,0 +1,31 @@
+{
+  "enabled": true,
+  "dry_run": false,
+  "locked": false,
+  "output": "eDP-1",
+  "hysteresis_ms": 800,
+  "position": null,
+  "policy": {
+    "enabled": true,
+    "output": "eDP-1",
+    "hysteresis_ms": 800
+  },
+  "source": "iio-sensor-proxy",
+  "last_orientation": "normal",
+  "last_transform": "normal",
+  "current": {
+    "name": "eDP-1",
+    "transform": "normal"
+  },
+  "orientation": null,
+  "transform": null,
+  "candidate": {
+    "orientation": "normal",
+    "stable": true
+  },
+  "applied": false,
+  "would_apply": false,
+  "skipped": null,
+  "error": null,
+  "calls": []
+}
