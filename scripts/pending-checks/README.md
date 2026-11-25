@@ -27,6 +27,20 @@ clip probe, the full mpv log and a combined HDR summary
 (`/tmp/pending-hdr-summary.txt`, `/tmp/pending-hdr-mpv.log`). All scripts also
 tee to `/tmp/pending-<name>.log`, so the whole run can be analyzed afterwards.
 
+## hardware-validation.sh — automated DRM pass
+
+Run it from a free VT (not inside the desktop session). It starts the isolated
+compositor on the current DRM seat, checks the renderer, capabilities, VRR,
+scanout, explicit sync, HDR signalling and screenshot IPC, then prints the
+manual checklist. `--check` validates the prerequisites without starting niri.
+
+```sh
+HDR_OUTPUT=DP-1 ./scripts/pending-checks/hardware-validation.sh
+```
+
+Results: `/tmp/hardware-validation/summary.txt` and `niri.log`. Details in
+`docs/validation/hardware.md`.
+
 ## drive.sh — windows, clipping, workspaces, overview, screenshots
 
 ```sh

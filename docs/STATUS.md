@@ -348,7 +348,9 @@ picked up without re-auditing.
    (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are wired.
    The only remaining work is the hardware pass (VRR/tearing/explicit sync/
    multi-GPU/HDR mixed/commit-timing presentation) and DPMS VRAM/GTT cleanup,
-   which needs a reproduced leak before any mitigation. Noctalia widget load,
+   which needs a reproduced leak before any mitigation. The pass is scripted:
+   run `HDR_OUTPUT=DP-1 scripts/pending-checks/hardware-validation.sh` from a
+   free VT; see `docs/validation/hardware.md`. Noctalia widget load,
    update and click/right-click handlers were exercised both in the live shell
    and in an isolated headless niri session (see the validation note).
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
