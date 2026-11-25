@@ -45,5 +45,30 @@ These need eyes or a real client and are not asserted automatically:
 - closing/opening animations, popups, blur/xray in a live Vulkan session;
 - portal screenshot/screencast through a real client.
 
+## Recorded result (2026-11-25)
+
+`HDR_OUTPUT=DP-1` on DP-1 (RX 9070 XT, RADV):
+
+```
+PASS Vulkan renderer selected
+PASS renderer plan: preference=vulkan, path=Vulkan, render-tree-vulkan=true
+PASS capabilities (sticky, hdr, tearing, fifo, explicit sync, pointer warp,
+     commit-timing, surface barrier, capture)
+PASS output DP-1 enumerated
+PASS VRR toggled on and reported enabled
+PASS 10-bit scanout formats kept (AB30)
+PASS explicit sync enabled for the primary GPU
+SKIP HDR mode=auto at startup (signals only with HDR content)
+PASS multi-device setup: 2 DRM devices
+PASS runtime HDR overrides: auto -> off -> auto
+PASS screenshot captured through IPC (249160 bytes, PNG)
+PASS HDR clip entered and left HDR signalling (hdr=true -> hdr=false)
+```
+
+The first rerun exposed and fixed a real bug: reconnecting an output for an HDR
+mode change with an empty workspace panicked in `Monitor::new`. The layout now
+keeps the no-output state empty and drops empty placeholders on reconnect, with
+a dedicated test.
+
 After the run, the summary and log stay under `/tmp/hardware-validation` so the
 results can be reviewed without repeating the session.

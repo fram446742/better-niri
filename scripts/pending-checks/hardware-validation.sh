@@ -45,6 +45,8 @@ record() {
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+# tracing writes ANSI colours when the log is a terminal; strip them for matching.
+strip_ansi() { sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$1"; }
 
 prereqs() {
     [ -x "$NIRI_BIN" ] || { echo "missing $NIRI_BIN (build with: cargo build -p niri)" >&2; return 1; }
@@ -271,7 +273,7 @@ fi
 if [ -n "$HDR_OUTPUT" ] && [ -s "${HDR_CLIP:-/home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4}" ]; then
     echo "==> HDR clip"
     if HDR_SECONDS=${HDR_SECONDS:-10} NIRI_LOG="$LOG" "$ROOT/scripts/pending-checks/hdr.sh" >"$OUTDIR/hdr.log" 2>&1; then
-        if grep -q 'hdr=true' "$LOG" && grep -q 'hdr=false' "$LOG"; then
+        if strip_ansi "$LOG" | grep -q 'hdr=true' && strip_ansi "$LOG" | grep -q 'hdr=false'; then
             record PASS "HDR clip entered and left HDR signalling"
         else
             record FAIL "HDR clip ran but the connector did not enter/leave HDR (check $LOG)"

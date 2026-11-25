@@ -354,11 +354,17 @@ picked up without re-auditing.
    niri keeps the move-based fallback.
    On the compositor side all planned core protocol ports
    (`wp-commit-timing-v1` and SurfaceBarrier/atomic transactions) are wired.
-   The only remaining work is the hardware pass (VRR/tearing/explicit sync/
-   multi-GPU/HDR mixed/commit-timing presentation) and DPMS VRAM/GTT cleanup,
-   which needs a reproduced leak before any mitigation. The pass is scripted:
-   run `HDR_OUTPUT=DP-1 scripts/pending-checks/hardware-validation.sh` from a
-   free VT; see `docs/validation/hardware.md`. Noctalia widget load,
+   The automated hardware pass ran on the real DP-1/Vulkan session: Vulkan
+   renderer + plan, capability report, VRR on/read-back, 10-bit scanout,
+   explicit sync, two DRM devices, runtime HDR `auto → off → auto`, an IPC
+   screenshot and the HDR clip entering/leaving signalling (`hdr=true` then
+   `hdr=false`) all passed. The remaining items are the subjective/full-client
+   checks (tearing in a game, a commit-timing client, cross-GPU output,
+   rotated transitions, HDR mixed contrast, popups/animations, a real portal
+   client) and DPMS VRAM/GTT cleanup, which needs a reproduced leak before any
+   mitigation. The pass is scripted in
+   `scripts/pending-checks/hardware-validation.sh`; see
+   `docs/validation/hardware.md`. Noctalia widget load,
    update and click/right-click handlers were exercised both in the live shell
    and in an isolated headless niri session (see the validation note).
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY

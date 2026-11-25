@@ -62,8 +62,9 @@ RC=$?
   sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null \
     | grep -iE 'hdr=true|hdr=false|updated HDR signalling|connector color capabilities' | tail -10
   echo "--- niri HDR state ---"
-  if sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null | grep -q 'hdr=false'; then
-    echo "WARNING: niri created the DRM compositor with hdr=false (no hdr output node applied)"
+  if sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null \
+      | grep -q 'creating DRM compositor.*hdr=false'; then
+    echo "WARNING: niri created the DRM compositor with hdr=false (no HDR-capable output opted in)"
   fi
   sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$NIRI_LOG_FILE" 2>/dev/null | grep -q 'hdr=true' \
     && echo "niri: HDR signalling enabled (hdr=true)"
