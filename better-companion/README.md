@@ -306,6 +306,7 @@ companionctl call windows find '{"title":"Mozilla"}'
 companionctl call rules set '{
   "name":"browser",
   "match":{"app_id":"firefox"},
+  "priority":10,
   "steps":[{"namespace":"parker","action":"park","params":{}}]
 }'
 companionctl call rules explain '{"window":10}'
@@ -507,12 +508,12 @@ Every populated field in `match` is ANDed; strings are case-insensitive.
 `rules.set` rejects invalid regular expressions before storing anything, and
 older rule files keep loading because every new field is optional.
 
-`rules.explain` reports each matching rule with its `match` object and a
-`window_state` snapshot (including the resolved `workspace_name`,
+`rules.explain` reports each matching rule with its `match` object, `priority`
+and a `window_state` snapshot (including the resolved `workspace_name`,
 `workspace_idx` and `workspace_output`), plus the steps. Matches are ordered by
-numeric window id, then rule name, so repeated calls return stable results.
-`rules.apply` reports the same matcher/window state with a `step_count`
-instead of the steps:
+numeric window id, then higher `priority` first (default `0`), then rule name,
+so repeated calls return stable results. `rules.apply` reports the same
+matcher/window state with a `step_count` instead of the steps:
 
 ```sh
 companionctl call rules set '{

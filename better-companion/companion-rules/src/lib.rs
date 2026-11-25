@@ -101,6 +101,10 @@ pub struct Rule {
     /// `workspace-removed`, `workspace-moved`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
+    /// Evaluation order among rules matching the same window or workspace.
+    /// Higher runs first; equal priorities fall back to the rule name.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 /// Workspace events that can trigger a rule.
@@ -207,6 +211,7 @@ impl Rules {
                     matches.push(RuleMatch {
                         window: id,
                         name: name.clone(),
+                        priority: rule.priority,
                         matcher: rule.matcher.clone(),
                         steps: rule.steps.clone(),
                         window_state: window_state(&value, facts),
@@ -214,6 +219,13 @@ impl Rules {
                 }
             }
         }
+        // Same window: higher priority first, then a stable name tie-break.
+        matches.sort_by(|a, b| {
+            a.window
+                .cmp(&b.window)
+                .then(b.priority.cmp(&a.priority))
+                .then(a.name.cmp(&b.name))
+        });
         Ok(matches)
     }
 
@@ -252,6 +264,7 @@ impl Rules {
                     matches.push(WorkspaceRuleMatch {
                         workspace: id,
                         name: name.clone(),
+                        priority: rule.priority,
                         matcher: rule.matcher.clone(),
                         steps: rule.steps.clone(),
                         workspace_state: workspace_state(&value, &facts),
@@ -259,6 +272,12 @@ impl Rules {
                 }
             }
         }
+        matches.sort_by(|a, b| {
+            a.workspace
+                .cmp(&b.workspace)
+                .then(b.priority.cmp(&a.priority))
+                .then(a.name.cmp(&b.name))
+        });
         Ok(matches)
     }
 
@@ -274,6 +293,7 @@ impl Rules {
 struct RuleMatch {
     window: u64,
     name: String,
+    priority: i32,
     matcher: Match,
     steps: Vec<Step>,
     window_state: Value,
@@ -282,6 +302,7 @@ struct RuleMatch {
 struct WorkspaceRuleMatch {
     workspace: u64,
     name: String,
+    priority: i32,
     matcher: Match,
     steps: Vec<Step>,
     workspace_state: Value,
@@ -667,10 +688,20 @@ impl Context for Rules {
                     .and_then(Value::as_str)
                     .filter(|trigger| *trigger != "window")
                     .map(str::to_owned);
+                let priority = match params.get("priority") {
+                    None => 0,
+                    Some(value) => value
+                        .as_i64()
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or_else(|| {
+                            "rules.set needs an integer `priority` within i32".to_owned()
+                        })?,
+                };
                 let rule = Rule {
                     matcher,
                     steps: steps.clone(),
                     trigger,
+                    priority,
                 };
                 validate_rule(&rule)?;
                 state.rules.insert(name.clone(), rule);
@@ -698,6 +729,7 @@ impl Context for Rules {
                             json!({
                                 "workspace": matched.workspace,
                                 "rule": matched.name,
+                                "priority": matched.priority,
                                 "trigger": event,
                                 "match": matched.matcher,
                                 "workspace_state": matched.workspace_state,
@@ -715,6 +747,7 @@ impl Context for Rules {
                         json!({
                             "window": matched.window,
                             "rule": matched.name,
+                            "priority": matched.priority,
                             "match": matched.matcher,
                             "window_state": matched.window_state,
                             "steps": matched.steps,
@@ -734,6 +767,7 @@ impl Context for Rules {
                             json!({
                                 "workspace": matched.workspace,
                                 "rule": matched.name,
+                                "priority": matched.priority,
                                 "trigger": event,
                                 "match": matched.matcher,
                                 "workspace_state": matched.workspace_state,
@@ -751,6 +785,7 @@ impl Context for Rules {
                         json!({
                             "window": matched.window,
                             "rule": matched.name,
+                            "priority": matched.priority,
                             "match": matched.matcher,
                             "window_state": matched.window_state,
                             "step_count": matched.steps.len(),
@@ -1144,6 +1179,35 @@ mod tests {
         let explained = rules.call("explain", &Value::Null).unwrap();
         assert_eq!(explained["matches"][0]["window"], 2);
         assert_eq!(explained["matches"][1]["window"], 10);
+    }
+
+    #[test]
+    fn rules_run_in_priority_order() {
+        let parking = parking_with_windows("priority");
+        let rules = Rules::load(temp_dir("priority-rules").join("rules.json"), parking).unwrap();
+        for (name, priority) in [("low", -1), ("high", 10), ("mid", 0)] {
+            rules
+                .call(
+                    "set",
+                    &json!({
+                        "name": name,
+                        "priority": priority,
+                        "match": { "app_id": "firefox" },
+                        "steps": [{ "namespace": "system", "action": "ping" }]
+                    }),
+                )
+                .unwrap();
+        }
+
+        let explained = rules.call("explain", &json!({ "window": 10 })).unwrap();
+        let order: Vec<&str> = explained["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|matched| matched["rule"].as_str().unwrap())
+            .collect();
+        assert_eq!(order, ["high", "mid", "low"]);
+        assert_eq!(explained["matches"][0]["priority"], 10);
     }
 
     #[test]
