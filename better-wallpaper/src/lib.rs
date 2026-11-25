@@ -24,6 +24,7 @@ pub mod geom;
 pub mod images;
 pub mod native;
 pub mod schedule;
+pub mod video;
 
 use schedule::{Playlist, TimeRule, TransitionSpec};
 

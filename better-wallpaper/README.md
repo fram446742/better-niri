@@ -6,8 +6,12 @@ niri's Cargo workspace).
 
 ## Features
 
-- Named **scenes** mapping workspace names (plus an optional `default` image) to
-  image paths, with free-form `metadata` and JSON import/export.
+- Named **scenes** mapping workspace names (plus an optional `default` image or
+  video) to file paths, with free-form `metadata` and JSON import/export.
+- **Video wallpapers** on the native backend: `.mp4`, `.mkv`, `.webm`, `.mov`,
+  `.m4v` and `.avi` are decoded by `ffmpeg` at the output's buffer size and
+  committed through the same shm path as images. HDR video is tone-mapped to
+  SDR (zscale + Hable); the surface itself stays SDR.
 - Optional **playlists** (ordered or deterministically shuffled, with an
   interval), **time rules** (`HH:MM` day/night ranges, including ranges that
   wrap midnight) and **random** scene selection.
@@ -199,7 +203,11 @@ Limitations (native backend):
   restart `watch` to pick it up (same as the command backend).
 - Per-output images come from the scene of each output's active workspace; there
   is no per-output override file yet.
-- HDR output is not implemented: the surface is SDR sRGB (see above).
+- HDR output is not implemented: the surface is SDR sRGB. HDR *videos* are
+  tone-mapped to SDR; they are never scanned out as PQ/BT.2020.
+- Video wallpapers need `ffmpeg` (and `ffprobe` for HDR detection) in `PATH` or
+  `BETTER_WALLPAPER_FFMPEG`/`BETTER_WALLPAPER_FFPROBE`. Decoding is CPU-side at
+  30 fps; a 4K video costs more than a static image.
 - Wayland only. Under X11 or a compositor without layer-shell, use
   `--backend=command`.
 

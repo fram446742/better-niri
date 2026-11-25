@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use calloop::EventLoop;
@@ -41,6 +42,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use crate::geom::{Rotation, Size};
 use crate::images::{self, FileStamp, ImageCache, needs_reload};
 use crate::schedule::{FRAME_MS, TransitionState};
+use crate::video::{self, Video};
 use crate::{Scene, active_workspaces, resolve_at};
 
 /// Layer-shell namespace, visible in compositor debugging tools.
@@ -191,6 +193,10 @@ struct Surface {
     transition: Option<TransitionState>,
     /// A redraw was requested but could not commit yet.
     pending: bool,
+    /// Decoder for a video wallpaper on this output.
+    video: Option<Video>,
+    /// Last frame committed, so a 30 Hz timer does not recopy a slower video.
+    last_frame: Option<Arc<Vec<u8>>>,
 }
 
 enum NiriEvent {
@@ -276,7 +282,8 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
                 return;
             }
             state.step_transitions();
-            if state.has_transitions() {
+            state.step_videos();
+            if state.has_transitions() || state.has_videos() {
                 let sender = frame_sender.clone();
                 if let Err(err) = frame_loop.insert_source(
                     Timer::from_duration(Duration::from_millis(FRAME_MS)),
@@ -485,6 +492,8 @@ impl Wallpaper {
             last_pixels: None,
             transition: None,
             pending: false,
+            video: None,
+            last_frame: None,
         });
     }
 
@@ -533,6 +542,35 @@ impl Wallpaper {
         if buffer.is_empty() {
             return;
         }
+        if path.as_deref().is_some_and(video::is_video) {
+            let video_path = path.clone().expect("video path");
+            self.ensure_video(index, &video_path, buffer);
+            let frame = self.surfaces[index].video.as_ref().and_then(Video::frame);
+            let fallback;
+            let pixels: &[u8] = match frame.as_ref() {
+                Some(frame) => frame,
+                None => {
+                    fallback = images::render_solid(buffer, FALLBACK_COLOR);
+                    &fallback
+                }
+            };
+            self.commit(index, scale, buffer, pixels, path);
+            if let Some(surface) = self.surfaces.get_mut(index) {
+                surface.transition = None;
+                surface.last_pixels = None;
+                surface.last_frame = frame;
+                surface.current_buffer = buffer;
+                surface.current_scale = scale;
+                surface.pending = false;
+            }
+            self.schedule_frames();
+            return;
+        }
+        // Leaving a video workspace stops its decoder.
+        if let Some(surface) = self.surfaces.get_mut(index) {
+            surface.video = None;
+            surface.last_frame = None;
+        }
         let pixels = match path.as_deref() {
             Some(path) => match self.cache.get(path) {
                 Ok(image) => match images::render_cover(image, buffer) {
@@ -579,6 +617,54 @@ impl Wallpaper {
         if let Some(surface) = self.surfaces.get_mut(index) {
             surface.last_pixels = Some(pixels);
         }
+    }
+
+    fn ensure_video(&mut self, index: usize, path: &Path, size: Size) {
+        let Some(surface) = self.surfaces.get_mut(index) else {
+            return;
+        };
+        let matches = surface
+            .video
+            .as_ref()
+            .is_some_and(|video| video.path() == path && video.size() == size);
+        if !matches {
+            surface.video = Video::start(path, size);
+            surface.last_frame = None;
+            debug_log(format_args!(
+                "video wallpaper: {} at {}x{}",
+                path.display(),
+                size.width,
+                size.height
+            ));
+        }
+    }
+
+    fn has_videos(&self) -> bool {
+        self.surfaces.iter().any(|surface| surface.video.is_some())
+    }
+
+    fn step_videos(&mut self) {
+        if !self.has_videos() {
+            return;
+        }
+        for index in 0..self.surfaces.len() {
+            if self.surfaces[index].transition.is_some() {
+                continue;
+            }
+            let (buffer, scale, path) = {
+                let surface = &self.surfaces[index];
+                (
+                    surface.current_buffer,
+                    surface.current_scale,
+                    surface.current.clone(),
+                )
+            };
+            let Some(frame) = self.surfaces[index].video.as_ref().and_then(Video::frame) else {
+                continue;
+            };
+            self.commit(index, scale, buffer, &frame, path);
+        }
+        self.schedule_frames();
     }
 
     fn has_transitions(&self) -> bool {
@@ -712,6 +798,14 @@ impl Wallpaper {
     /// Periodic maintenance: redraw changed image files and retry deferred draws.
     fn tick(&mut self) {
         for index in 0..self.surfaces.len() {
+            if self.surfaces[index]
+                .video
+                .as_mut()
+                .is_some_and(|video| !video.alive())
+            {
+                self.surfaces[index].video = None;
+                self.surfaces[index].pending = true;
+            }
             let Some(path) = self.surfaces[index].current.clone() else {
                 continue;
             };
