@@ -103,6 +103,10 @@ if [ -z "$NIRI_SOCKET" ] || [ ! -S "$NIRI_SOCKET" ]; then
     exit 1
 fi
 export NIRI_SOCKET
+WAYLAND_DISPLAY=$(sed -n 's/.*listening on Wayland socket: //p' "$LOG" 2>/dev/null | tail -1)
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    export WAYLAND_DISPLAY
+fi
 
 echo "==> checking the renderer and capabilities"
 if grep -q 'using the Vulkan renderer' "$LOG"; then
@@ -205,12 +209,14 @@ else
 fi
 if grep -q 'updated HDR signalling' "$LOG"; then
     record PASS "HDR signalling updated: $(grep -o 'updated HDR signalling.*' "$LOG" | tail -1)"
-else
-    if [ -n "$HDR_OUTPUT" ]; then
-        record FAIL "HDR was requested but no signalling update was logged"
+elif [ -n "$HDR_OUTPUT" ]; then
+    if grep -RqsE 'hdr mode="on"' "$TEST_DIR" --include='*.kdl'; then
+        record FAIL "HDR mode=on was requested but no signalling update was logged"
     else
-        record SKIP "HDR not requested (set HDR_OUTPUT=DP-1)"
+        record SKIP "HDR mode=auto: signalling waits for fullscreen HDR content"
     fi
+else
+    record SKIP "HDR not requested (set HDR_OUTPUT=DP-1)"
 fi
 devices=$(grep -c 'adding device:' "$LOG" 2>/dev/null || true)
 if [ "${devices:-0}" -ge 2 ]; then
@@ -234,10 +240,11 @@ fi
 if [ -n "$HDR_OUTPUT" ] && [ -s "${HDR_CLIP:-/home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4}" ]; then
     echo "==> HDR clip"
     if HDR_SECONDS=${HDR_SECONDS:-10} NIRI_LOG="$LOG" "$ROOT/scripts/pending-checks/hdr.sh" >"$OUTDIR/hdr.log" 2>&1; then
-        if grep -q 'niri: HDR signalling enabled' "$OUTDIR/hdr.log"; then
+        if grep -q 'niri: HDR signalling enabled' "$OUTDIR/hdr.log" \
+            && grep -q 'updated HDR signalling' "$LOG"; then
             record PASS "HDR clip played with signalling enabled"
         else
-            record FAIL "HDR clip ran but the summary did not confirm signalling"
+            record FAIL "HDR clip ran but signalling was not confirmed (check $OUTDIR/hdr.log and $LOG)"
         fi
     else
         record FAIL "hdr.sh failed; see $OUTDIR/hdr.log"

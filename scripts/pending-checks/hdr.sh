@@ -34,7 +34,7 @@ if command -v ffprobe >/dev/null; then
   printf 'clip: %s\n' "$INFO" > /tmp/pending-hdr-clip.txt
 fi
 CONFIG=${NIRI_TEST_CONFIG:-$TEST_DIR/config.kdl}
-if ! grep -qE 'hdr([[:space:]]|$)' "$CONFIG" 2>/dev/null; then
+if ! grep -RqsE 'hdr([[:space:]]|$)' "$TEST_DIR" --include='*.kdl' 2>/dev/null; then
   cat <<'MSG'
 WARNING: no `hdr` entry in the active config, so niri does not
 advertise colour management and mpv will stay SDR. Regenerate the test copy with:
