@@ -845,6 +845,10 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         vrr_enabled,
         logical,
         max_bpc,
+        hdr_supported,
+        hdr_active,
+        hdr_mode,
+        ..
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -930,6 +934,17 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(max_bpc) = max_bpc {
         println!("  Max bits per channel: {max_bpc}");
+    }
+
+    let hdr_mode = match hdr_mode {
+        niri_ipc::HdrModeArg::Auto => "auto",
+        niri_ipc::HdrModeArg::On => "on",
+        niri_ipc::HdrModeArg::Off => "off",
+    };
+    if hdr_supported {
+        println!("  HDR: supported, mode: {hdr_mode}, active: {hdr_active}");
+    } else {
+        println!("  HDR: unsupported");
     }
 
     println!("  Available modes:");

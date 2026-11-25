@@ -8,8 +8,9 @@
 #   ./scripts/pending-checks/hardware-validation.sh
 #   NIRI_RENDERER=vulkan HDR_OUTPUT=DP-1 ./scripts/pending-checks/hardware-validation.sh
 #
-# HDR_OUTPUT additionally prepares the test config for HDR and runs the HDR
-# clip check. Tearing, explicit-sync client behaviour, commit-timing ordering
+# HDR_OUTPUT selects the output for the runtime HDR checks (default auto mode,
+# temporary off/on/auto) and the HDR clip. No config block is inserted: HDR
+# capable outputs default to auto. Tearing, explicit-sync client behaviour, commit-timing ordering
 # and multi-GPU cross-device rendering still need the visual checklist printed
 # at the end; this script records the capabilities, renderer, scanout formats,
 # VRR toggle, a screenshot and the renderer log evidence for them.
@@ -72,7 +73,7 @@ mkdir -p "$OUTDIR"
 : > "$SUMMARY"
 
 echo "==> isolated config"
-HDR_OUTPUT="$HDR_OUTPUT" "$ROOT/scripts/pending-checks/isolated-session.sh" "$TEST_DIR" >"$OUTDIR/isolated.log" 2>&1 || {
+"$ROOT/scripts/pending-checks/isolated-session.sh" "$TEST_DIR" >"$OUTDIR/isolated.log" 2>&1 || {
     echo "isolated-session.sh failed; see $OUTDIR/isolated.log" >&2
     exit 1
 }
@@ -225,6 +226,36 @@ else
     record SKIP "single DRM device in this machine/session"
 fi
 
+if [ -n "$HDR_OUTPUT" ]; then
+    echo "==> runtime HDR mode"
+    HDR_TARGET=${HW_OUTPUT:-${OUTPUT:-$HDR_OUTPUT}}
+    if "$NIRI_BIN" msg output "$HDR_TARGET" hdr auto >/dev/null 2>&1; then
+        sleep 0.5
+        "$NIRI_BIN" msg --json outputs >"$OUTDIR/outputs-hdr-auto.json" 2>/dev/null || true
+        "$NIRI_BIN" msg output "$HDR_TARGET" hdr off >/dev/null 2>&1 || true
+        sleep 0.5
+        "$NIRI_BIN" msg --json outputs >"$OUTDIR/outputs-hdr-off.json" 2>/dev/null || true
+        "$NIRI_BIN" msg output "$HDR_TARGET" hdr auto >/dev/null 2>&1 || true
+        sleep 0.5
+        "$NIRI_BIN" msg --json outputs >"$OUTDIR/outputs-hdr-restored.json" 2>/dev/null || true
+        if python3 - "$OUTDIR/outputs-hdr-off.json" "$OUTDIR/outputs-hdr-restored.json" "$HDR_TARGET" <<'PY'
+import json, sys
+off = json.load(open(sys.argv[1]))[sys.argv[3]]
+auto = json.load(open(sys.argv[2]))[sys.argv[3]]
+ok = off.get("hdr_mode") == "off" and not off.get("hdr_enabled")
+ok = ok and auto.get("hdr_mode") == "auto" and auto.get("hdr_enabled")
+sys.exit(0 if ok else 1)
+PY
+        then
+            record PASS "runtime HDR overrides: auto -> off -> auto"
+        else
+            record FAIL "runtime HDR override did not report the expected modes"
+        fi
+    else
+        record FAIL "runtime HDR command failed for $HDR_TARGET"
+    fi
+fi
+
 echo "==> screenshot capture"
 SHOT="$OUTDIR/screenshot.png"
 if "$NIRI_BIN" msg action screenshot-screen --stdout --write-to-disk=false >"$SHOT" 2>"$OUTDIR/screenshot.err"; then
@@ -240,11 +271,10 @@ fi
 if [ -n "$HDR_OUTPUT" ] && [ -s "${HDR_CLIP:-/home/franc/Downloads/hdr10+test_lake_2021_02_01.mp4}" ]; then
     echo "==> HDR clip"
     if HDR_SECONDS=${HDR_SECONDS:-10} NIRI_LOG="$LOG" "$ROOT/scripts/pending-checks/hdr.sh" >"$OUTDIR/hdr.log" 2>&1; then
-        if grep -q 'niri: HDR signalling enabled' "$OUTDIR/hdr.log" \
-            && grep -q 'updated HDR signalling' "$LOG"; then
-            record PASS "HDR clip played with signalling enabled"
+        if grep -q 'hdr=true' "$LOG" && grep -q 'hdr=false' "$LOG"; then
+            record PASS "HDR clip entered and left HDR signalling"
         else
-            record FAIL "HDR clip ran but signalling was not confirmed (check $OUTDIR/hdr.log and $LOG)"
+            record FAIL "HDR clip ran but the connector did not enter/leave HDR (check $LOG)"
         fi
     else
         record FAIL "hdr.sh failed; see $OUTDIR/hdr.log"

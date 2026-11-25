@@ -1636,6 +1636,12 @@ pub enum OutputAction {
         #[cfg_attr(feature = "clap", arg())]
         max_bpc: MaxBpc,
     },
+    /// Set the HDR mode and reference luminance for this output at runtime.
+    Hdr {
+        /// HDR mode to set.
+        #[cfg_attr(feature = "clap", command(flatten))]
+        hdr: HdrToSet,
+    },
 }
 
 /// Output mode to set.
@@ -1716,6 +1722,33 @@ pub struct ConfiguredPosition {
     pub y: i32,
 }
 
+/// HDR mode accepted by the runtime output action.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum HdrModeArg {
+    /// Enable HDR while fullscreen HDR content is shown, SDR otherwise.
+    #[default]
+    Auto,
+    /// Always keep the output in HDR.
+    On,
+    /// Never signal HDR on this output.
+    Off,
+}
+
+/// HDR settings accepted by the runtime output action.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::Args))]
+pub struct HdrToSet {
+    /// HDR mode to set.
+    #[cfg_attr(feature = "clap", arg(value_name = "AUTO|ON|OFF"))]
+    pub mode: HdrModeArg,
+    /// Reference luminance in cd/m² (nits); defaults to the configured/BT.2408 value.
+    #[serde(default)]
+    #[cfg_attr(feature = "clap", arg(long, value_name = "NITS"))]
+    pub reference_luminance: Option<f64>,
+}
+
 /// Output VRR to set.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::Args))]
@@ -1739,7 +1772,7 @@ pub struct VrrToSet {
 }
 
 /// Connected output.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct Output {
     /// Name of the output.
@@ -1770,6 +1803,18 @@ pub struct Output {
     pub logical: Option<LogicalOutput>,
     /// Maximum bits per channel (bit depth), if known.
     pub max_bpc: Option<u8>,
+    /// Whether this connector and sink can do HDR (BT.2020 + PQ metadata).
+    #[serde(default)]
+    pub hdr_supported: bool,
+    /// Whether HDR is enabled for this output (mode auto or on on a capable sink).
+    #[serde(default)]
+    pub hdr_enabled: bool,
+    /// Whether the connector is currently signalling HDR.
+    #[serde(default)]
+    pub hdr_active: bool,
+    /// Configured HDR mode: auto, on or off.
+    #[serde(default)]
+    pub hdr_mode: HdrModeArg,
 }
 
 /// Output mode.
@@ -2708,6 +2753,16 @@ impl OutputAction {
                 ensure!(0 < *vtotal, "vtotal {} must be > 0", vtotal);
                 Ok(())
             }
+            OutputAction::Hdr { hdr } => {
+                if let Some(luminance) = hdr.reference_luminance
+                    && !(0.0..=10000.0).contains(&luminance)
+                {
+                    return Err(format!(
+                        "reference luminance {luminance} must be between 0 and 10000 cd/m²"
+                    ));
+                }
+                Ok(())
+            }
             OutputAction::CustomMode {
                 mode: ConfiguredMode { refresh, .. },
             } => {
@@ -2781,6 +2836,48 @@ mod tests {
         assert!(back.sticky);
         assert!(back.vulkan);
         assert!(!back.agent_seat);
+    }
+
+    #[cfg(feature = "clap")]
+    #[test]
+    fn hdr_output_action_parses_validates_and_round_trips() {
+        use clap::Parser as _;
+
+        let action = OutputAction::try_parse_from(["niri-output", "hdr", "auto"]).unwrap();
+        let OutputAction::Hdr { hdr } = action else {
+            panic!("expected Hdr, got {action:?}");
+        };
+        assert_eq!(hdr.mode, HdrModeArg::Auto);
+        assert_eq!(hdr.reference_luminance, None);
+        action_validate(&OutputAction::Hdr { hdr });
+
+        let action = OutputAction::try_parse_from([
+            "niri-output",
+            "hdr",
+            "on",
+            "--reference-luminance",
+            "203",
+        ])
+        .unwrap();
+        let json = serde_json::to_string(&action).unwrap();
+        let back: OutputAction = serde_json::from_str(&json).unwrap();
+        let OutputAction::Hdr { hdr } = back else {
+            panic!("expected Hdr");
+        };
+        assert_eq!(hdr.mode, HdrModeArg::On);
+        assert_eq!(hdr.reference_luminance, Some(203.0));
+
+        let bad = OutputAction::Hdr {
+            hdr: HdrToSet {
+                mode: HdrModeArg::On,
+                reference_luminance: Some(20_000.0),
+            },
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    fn action_validate(action: &OutputAction) {
+        action.validate().unwrap();
     }
 
     #[test]

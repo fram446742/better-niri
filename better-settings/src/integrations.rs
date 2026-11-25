@@ -610,6 +610,86 @@ pub fn display_positions(runner: &dyn CommandRunner) -> Result<Arrangement, Inte
     Arrangement::from_monitor_json(&value).map_err(|err| IntegrationError::new(Tool::Monitor, err))
 }
 
+/// One output's HDR state, read from `niri msg --json outputs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HdrOutput {
+    pub name: String,
+    pub supported: bool,
+    pub enabled: bool,
+    pub active: bool,
+    /// Configured mode: `auto`, `on` or `off`.
+    pub mode: String,
+}
+
+fn niri_program() -> String {
+    std::env::var("BETTER_SETTINGS_NIRI")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "niri".to_owned())
+}
+
+fn niri_json(runner: &dyn CommandRunner, args: &[&str]) -> Result<Value, IntegrationError> {
+    let program = niri_program();
+    let result = runner.run(&program, args);
+    ensure_success(&result, Tool::Monitor)?;
+    serde_json::from_str(&result.stdout).map_err(|err| {
+        IntegrationError::new(
+            Tool::Monitor,
+            format!("cannot parse `{}` output as JSON: {err}", result.describe()),
+        )
+    })
+}
+
+/// Reads every output's HDR capability and current mode for the Displays section.
+pub fn display_hdr_outputs(runner: &dyn CommandRunner) -> Result<Vec<HdrOutput>, IntegrationError> {
+    let value = niri_json(runner, &["msg", "--json", "outputs"])?;
+    let outputs = value.as_object().ok_or_else(|| {
+        IntegrationError::new(Tool::Monitor, "niri outputs JSON is not an object")
+    })?;
+    let mut result = Vec::new();
+    for (name, output) in outputs {
+        result.push(HdrOutput {
+            name: name.clone(),
+            supported: output
+                .get("hdr_supported")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            enabled: output
+                .get("hdr_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            active: output
+                .get("hdr_active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            mode: output
+                .get("hdr_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("auto")
+                .to_owned(),
+        });
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
+}
+
+/// Applies a runtime HDR mode through `niri msg output <output> hdr <mode>`.
+pub fn display_hdr_set(
+    runner: &dyn CommandRunner,
+    output: &str,
+    mode: &str,
+) -> Result<(), IntegrationError> {
+    if !matches!(mode, "auto" | "on" | "off") {
+        return Err(IntegrationError::new(
+            Tool::Monitor,
+            format!("invalid HDR mode `{mode}`"),
+        ));
+    }
+    let program = niri_program();
+    let result = runner.run(&program, &["msg", "output", output, "hdr", mode]);
+    ensure_success(&result, Tool::Monitor)
+}
+
 fn display_arrange_plan(
     runner: &dyn CommandRunner,
     plan: &str,
@@ -2902,6 +2982,42 @@ mod tests {
         );
         let error = display_profiles(&runner).unwrap_err();
         assert!(error.message.contains("cannot parse"));
+    }
+
+    #[test]
+    fn parses_hdr_outputs_and_maps_the_runtime_command() {
+        let runner = ScriptedRunner::new().on(
+            "niri",
+            &["msg", "--json", "outputs"],
+            CommandResult::output(
+                "niri",
+                vec!["msg", "--json", "outputs"],
+                0,
+                r#"{"DP-1":{"hdr_supported":true,"hdr_enabled":true,"hdr_active":false,"hdr_mode":"auto"}}"#,
+                "",
+            ),
+        );
+        let outputs = display_hdr_outputs(&runner).unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].name, "DP-1");
+        assert!(outputs[0].supported);
+        assert!(outputs[0].enabled);
+        assert!(!outputs[0].active);
+        assert_eq!(outputs[0].mode, "auto");
+
+        let runner = ScriptedRunner::new().on(
+            "niri",
+            &["msg", "output", "DP-1", "hdr", "on"],
+            CommandResult::output(
+                "niri",
+                vec!["msg", "output", "DP-1", "hdr", "on"],
+                0,
+                "{\"Ok\":\"Handled\"}",
+                "",
+            ),
+        );
+        display_hdr_set(&runner, "DP-1", "on").unwrap();
+        assert!(display_hdr_set(&runner, "DP-1", "sometimes").is_err());
     }
 
     #[test]

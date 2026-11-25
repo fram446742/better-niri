@@ -35,13 +35,7 @@ if command -v ffprobe >/dev/null; then
 fi
 CONFIG=${NIRI_TEST_CONFIG:-$TEST_DIR/config.kdl}
 if ! grep -RqsE 'hdr([[:space:]]|$)' "$TEST_DIR" --include='*.kdl' 2>/dev/null; then
-  cat <<'MSG'
-WARNING: no `hdr` entry in the active config, so niri does not
-advertise colour management and mpv will stay SDR. Regenerate the test copy with:
-  HDR_OUTPUT=DP-1 ./scripts/pending-checks/isolated-session.sh
-then restart niri. The script writes `hdr mode="auto"` by default; set
-HDR_MODE=on to force the whole desktop into HDR (colours will look different).
-MSG
+  echo "no explicit hdr block: HDR-capable outputs default to mode=auto"
 fi
 echo "playing $CLIP; expect the HDR badge in mpv and a visibly different brightness range"
 cat <<'MSG'

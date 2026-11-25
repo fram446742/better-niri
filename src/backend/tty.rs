@@ -555,6 +555,9 @@ struct Surface {
     hdr_supported: bool,
     /// HDR capabilities parsed from the sink's EDID.
     edid_hdr: EdidHdrInfo,
+    /// Whether HDR was enabled when this surface was created. Changing it requires recreating
+    /// the surface so the 10-bit scanout formats are re-probed.
+    hdr_enabled: bool,
     /// Valid range of the connector's `max bpc` property, if it has one.
     max_bpc_range: Option<RangeInclusive<u32>>,
     /// The last color state we tried to stage and the driver rejected. Tracked so a rejected
@@ -1673,6 +1676,7 @@ impl Tty {
             ?max_bpc_range,
             "connector color capabilities"
         );
+        let hdr_enabled = is_hdr_enabled(&config, hdr_supported);
         if config.hdr.is_some() && !hdr_supported {
             warn!(
                 "output {connector_name}: hdr is enabled in the config, but the driver or \
@@ -1800,7 +1804,7 @@ impl Tty {
         // driver that hangs on 10-bit scanout (set the var -> boots fine) from one that hangs on
         // the HDR infoframe commit itself (still hangs). Remove once HDR on nvidia is understood.
         let force_8bit = std::env::var_os("NIRI_HDR_FORCE_8BIT").is_some();
-        let mut using_10bit_formats = config.hdr.is_some() && hdr_supported && !force_8bit;
+        let mut using_10bit_formats = hdr_enabled && !force_8bit;
         let mut hdr_color_formats = Vec::new();
 
         if using_10bit_formats {
@@ -1904,7 +1908,7 @@ impl Tty {
         debug!(
             ?color_formats,
             force_8bit,
-            hdr = config.hdr.is_some(),
+            hdr = hdr_enabled,
             "creating DRM compositor"
         );
         let mut res = DrmCompositor::new(
@@ -2045,7 +2049,7 @@ impl Tty {
 
         // Stage the initial connector color state (SDR, with the configured max bpc) so it
         // rides the initial modeset as part of the same atomic commit.
-        let max_bpc = effective_max_bpc(&config, &max_bpc_range);
+        let max_bpc = effective_max_bpc(&config, &max_bpc_range, hdr_enabled);
         if let Err(err) = compositor.use_color_state(ConnectorColorState {
             colorspace: Colorspace::Default,
             hdr_metadata: None,
@@ -2107,6 +2111,7 @@ impl Tty {
             connector: connector.handle(),
             hdr_supported,
             edid_hdr,
+            hdr_enabled,
             max_bpc_range,
             failed_color_state: None,
             last_blend: None,
@@ -2543,11 +2548,12 @@ impl Tty {
             let config = self.config.borrow();
             let output_config = config.outputs.find(&surface.name);
             let hdr_config = output_config.and_then(|o| o.hdr.clone());
-            let hdr_allowed = hdr_config.is_some() && surface.hdr_supported;
+            let hdr_mode = hdr_config.as_ref().map(|h| h.mode).unwrap_or(HdrMode::Auto);
+            let hdr_allowed = surface.hdr_supported && hdr_mode != HdrMode::Off;
             let max_bpc = output_config
-                .map(|o| effective_max_bpc(o, &surface.max_bpc_range))
+                .map(|o| effective_max_bpc(o, &surface.max_bpc_range, hdr_allowed))
                 .unwrap_or(None);
-            let always_on = hdr_config.as_ref().is_some_and(|h| h.mode == HdrMode::On);
+            let always_on = hdr_allowed && hdr_mode == HdrMode::On;
             let reference_luminance = hdr_config
                 .as_ref()
                 .and_then(|h| h.reference_luminance)
@@ -2985,6 +2991,21 @@ impl Tty {
                         is_vrr_capable(&device.drm, connector.handle()) == Some(true)
                     });
                 let vrr_enabled = surface.is_some_and(|surface| surface.compositor.vrr_enabled());
+                let hdr_supported = surface.is_some_and(|surface| surface.hdr_supported);
+                let hdr_config = self
+                    .config
+                    .borrow()
+                    .outputs
+                    .find(&output_name)
+                    .and_then(|output| output.hdr.clone());
+                let hdr_mode = hdr_config
+                    .as_ref()
+                    .map(|hdr| hdr.mode)
+                    .unwrap_or(HdrMode::Auto);
+                let hdr_enabled = hdr_supported && hdr_mode != HdrMode::Off;
+                let hdr_active = surface
+                    .and_then(|surface| surface.last_blend)
+                    .is_some_and(|blend| blend.is_some());
 
                 let logical = niri
                     .global_space
@@ -3026,6 +3047,14 @@ impl Tty {
                     vrr_enabled,
                     logical,
                     max_bpc,
+                    hdr_supported,
+                    hdr_enabled,
+                    hdr_active,
+                    hdr_mode: match hdr_mode {
+                        HdrMode::Auto => niri_ipc::HdrModeArg::Auto,
+                        HdrMode::On => niri_ipc::HdrModeArg::On,
+                        HdrMode::Off => niri_ipc::HdrModeArg::Off,
+                    },
                 };
 
                 ipc_outputs.insert(id, ipc_output);
@@ -3067,6 +3096,7 @@ impl Tty {
                 vrr_enabled: false,
                 logical,
                 max_bpc: None,
+                ..Default::default()
             };
 
             ipc_outputs.insert(*output_id, ipc_output);
@@ -3391,6 +3421,17 @@ impl Tty {
                 if config.drm_lease {
                     debug!(
                         "output {:?}: drm-lease enabled, reinitializing for leasing",
+                        surface.name.connector
+                    );
+                    to_disconnect.push((node, crtc));
+                    to_connect.push((node, connector.clone(), crtc, surface.name.clone()));
+                    continue;
+                }
+
+                let hdr_desired = is_hdr_enabled(&config, surface.hdr_supported);
+                if surface.hdr_enabled != hdr_desired {
+                    debug!(
+                        "output {:?}: HDR mode changed, reinitializing for the new scanout formats",
                         surface.name.connector
                     );
                     to_disconnect.push((node, crtc));
@@ -4519,6 +4560,17 @@ impl ConnectorProperties {
     }
 }
 
+/// The HDR mode for an output: an explicit config block wins, otherwise HDR-capable outputs
+/// default to `auto` (HDR only while fullscreen HDR content is shown).
+fn output_hdr_mode(output: &niri_config::Output) -> HdrMode {
+    output.hdr.as_ref().map(|h| h.mode).unwrap_or(HdrMode::Auto)
+}
+
+/// Whether HDR should be enabled for this output at all (10-bit scanout, colour management).
+fn is_hdr_enabled(output: &niri_config::Output, hdr_supported: bool) -> bool {
+    hdr_supported && output_hdr_mode(output) != HdrMode::Off
+}
+
 /// The `max bpc` to request for an output: the configured value, or 10 when HDR is enabled but no
 /// explicit value was given (HDR needs at least 10 bits per channel so the PQ signal isn't
 /// crushed). Clamped to the connector's supported range; `None` when the connector has no
@@ -4526,12 +4578,13 @@ impl ConnectorProperties {
 fn effective_max_bpc(
     output: &niri_config::Output,
     range: &Option<RangeInclusive<u32>>,
+    hdr_enabled: bool,
 ) -> Option<u32> {
     let range = range.as_ref()?;
     let requested = output
         .max_bpc
         .map(|max_bpc| max_bpc.0 as u32)
-        .or_else(|| output.hdr.is_some().then_some(10))?;
+        .or_else(|| hdr_enabled.then_some(10))?;
     Some(requested.clamp(*range.start(), *range.end()))
 }
 
@@ -4610,13 +4663,36 @@ fn make_output_name(
 #[cfg(test)]
 mod tests {
     use insta::assert_debug_snapshot;
-    use niri_config::output::Modeline;
+    use niri_config::output::{HdrMode, Modeline};
     use niri_ipc::{HSyncPolarity, VSyncPolarity};
     use smithay::wayland::color::management::ImageDescription;
 
     use crate::backend::tty::{
         EdidHdrInfo, build_hdr_metadata, calculate_drm_mode_from_modeline, calculate_mode_cvt,
+        is_hdr_enabled,
     };
+
+    #[test]
+    fn hdr_defaults_to_auto_and_off_disables_it() {
+        let mut output = niri_config::Output::default();
+        assert!(
+            is_hdr_enabled(&output, true),
+            "absence of a block means auto"
+        );
+        assert!(!is_hdr_enabled(&output, false), "the sink must support HDR");
+
+        output.hdr = Some(niri_config::output::Hdr {
+            mode: HdrMode::Off,
+            reference_luminance: None,
+        });
+        assert!(!is_hdr_enabled(&output, true), "off disables HDR");
+
+        output.hdr = Some(niri_config::output::Hdr {
+            mode: HdrMode::On,
+            reference_luminance: None,
+        });
+        assert!(is_hdr_enabled(&output, true));
+    }
 
     #[test]
     fn hdr_metadata_luminance_priorities() {

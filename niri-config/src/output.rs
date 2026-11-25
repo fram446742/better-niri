@@ -185,6 +185,9 @@ pub enum HdrMode {
     /// PQ/BT.2020 content — so applications that only probe HDR support once at startup (e.g.
     /// many SDL games) detect it.
     On,
+    /// Never advertise or signal HDR on this output, even when it supports it. This is the
+    /// permanent override for a display whose HDR mode is undesirable.
+    Off,
 }
 
 impl std::str::FromStr for HdrMode {
@@ -194,8 +197,9 @@ impl std::str::FromStr for HdrMode {
         match s {
             "auto" => Ok(Self::Auto),
             "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
             _ => Err(miette::miette!(
-                r#"invalid HDR mode, can be "auto" or "on""#
+                r#"invalid HDR mode, can be "auto", "on" or "off""#
             )),
         }
     }
@@ -601,6 +605,14 @@ mod tests {
     use insta::assert_debug_snapshot;
 
     use super::*;
+
+    #[test]
+    fn parses_hdr_modes() {
+        assert_eq!("auto".parse::<HdrMode>().unwrap(), HdrMode::Auto);
+        assert_eq!("on".parse::<HdrMode>().unwrap(), HdrMode::On);
+        assert_eq!("off".parse::<HdrMode>().unwrap(), HdrMode::Off);
+        assert!("sometimes".parse::<HdrMode>().is_err());
+    }
 
     #[test]
     fn parse_mode() {

@@ -3016,6 +3016,17 @@ impl State {
                 }
             }
             niri_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
+            niri_ipc::OutputAction::Hdr { hdr } => {
+                let mode = match hdr.mode {
+                    niri_ipc::HdrModeArg::Auto => HdrMode::Auto,
+                    niri_ipc::HdrModeArg::On => HdrMode::On,
+                    niri_ipc::HdrModeArg::Off => HdrMode::Off,
+                };
+                config.hdr = Some(niri_config::output::Hdr {
+                    mode,
+                    reference_luminance: hdr.reference_luminance.map(FloatOrInt),
+                });
+            }
         });
 
         self.reload_output_config();
@@ -4261,7 +4272,21 @@ impl Niri {
             return None;
         }
         let name = output.user_data().get::<OutputName>()?;
-        let hdr = self.config.borrow().outputs.find(name)?.hdr.clone()?;
+        let output_config = self.config.borrow().outputs.find(name).cloned();
+        let mode = output_config
+            .as_ref()
+            .and_then(|output| output.hdr.as_ref())
+            .map(|hdr| hdr.mode)
+            .unwrap_or(HdrMode::Auto);
+        if mode == HdrMode::Off {
+            return None;
+        }
+        let hdr = output_config
+            .and_then(|output| output.hdr)
+            .unwrap_or(niri_config::output::Hdr {
+                mode: HdrMode::Auto,
+                reference_luminance: None,
+            });
         Some((hdr, caps))
     }
 
@@ -4318,6 +4343,7 @@ impl Niri {
                     ImageDescription::SRGB
                 }
             }
+            HdrMode::Off => ImageDescription::SRGB,
         }
     }
 
@@ -4358,6 +4384,7 @@ impl Niri {
                     ImageDescription::SRGB
                 }
             }
+            HdrMode::Off => ImageDescription::SRGB,
         }
     }
 

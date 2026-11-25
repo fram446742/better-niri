@@ -1137,6 +1137,7 @@ mod tests {
             vrr_enabled: false,
             max_bpc: None,
             logical: None,
+            ..Default::default()
         }
     }
 

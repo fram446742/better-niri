@@ -388,7 +388,8 @@ output "HDMI-A-1" {
 > There is no color-managed compositing yet, so HDR will only look correct when one HDR
 > application is fullscreen and alone on the output.
 
-Opts this output into HDR. When present, niri:
+HDR is enabled by default in `auto` mode on outputs whose driver and display expose the HDR
+connector properties (amdgpu, recent Intel, and nvidia do). No `hdr` node is required: niri:
 
 - advertises the `wp-color-management-v1` protocol to clients (so an HDR app, e.g. `mpv --vo=gpu-next`
   or gamescope, can tell niri its content is HDR);
@@ -397,13 +398,23 @@ Opts this output into HDR. When present, niri:
   mode (sets the connector to BT.2020 and attaches a PQ `HDR_OUTPUT_METADATA` infoframe), and reverts
   to SDR when it stops.
 
-With no `hdr` node on any output, color management is not advertised at all and behavior is unchanged.
-HDR signalling only works on the TTY backend, and requires a GPU/display that exposes the HDR
-connector properties (amdgpu, recent Intel, and nvidia do).
+HDR signalling only works on the TTY backend. Use the optional `hdr` node to override the default
+permanently; `mode="off"` disables HDR on that output, `mode="on"` keeps it always on.
+
+The runtime override is temporary and is not written to the config:
+
+```sh
+niri msg output DP-1 hdr auto   # default: HDR only while fullscreen HDR content plays
+niri msg output DP-1 hdr on     # always HDR
+niri msg output DP-1 hdr off    # never signal HDR
+niri msg output DP-1 hdr auto --reference-luminance 203
+```
+
+better-settings exposes the same selector in its Displays section.
 
 The optional `mode` property controls when the output is in HDR:
 
-- `mode="auto"` (the default): the output stays SDR and switches into HDR while a fullscreen
+- `mode="auto"` (the default, also used when the `hdr` node is absent): the output stays SDR and switches into HDR while a fullscreen
   application shows HDR content (passthrough). Applications are told to prefer HDR (PQ / BT.2020)
   once they are the active fullscreen window, so clients that listen for preference changes (SDL3
   games, mpv with `--target-colorspace-hint`) switch to HDR when they go fullscreen. Entering and
@@ -423,7 +434,7 @@ Screenshots and screencasts of HDR outputs are rendered in SDR; HDR application 
 washed out in them.
 
 ```kdl
-// Enable HDR on the internal display.
+// Keep the default auto mode on the internal display.
 output "eDP-1" {
     hdr
 }
@@ -433,6 +444,11 @@ output "DP-1" {
     hdr mode="on" {
         reference-luminance 203
     }
+}
+
+// A display whose HDR mode is undesirable: turn it off permanently.
+output "HDMI-A-1" {
+    hdr mode="off"
 }
 ```
 

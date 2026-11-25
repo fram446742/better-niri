@@ -453,6 +453,83 @@ fn add_display_actions(section: &gtk::Box, runner: &Rc<dyn CommandRunner>, statu
         confirm.upcast_ref(),
         cancel.upcast_ref(),
     ]));
+
+    add_hdr_controls(section, runner, status);
+}
+
+/// Runtime HDR selector backed by `niri msg output <output> hdr <mode>`.
+fn add_hdr_controls(section: &gtk::Box, runner: &Rc<dyn CommandRunner>, status: &gtk::Label) {
+    let outputs: Vec<integrations::HdrOutput> = integrations::display_hdr_outputs(runner.as_ref())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|output| output.supported)
+        .collect();
+    if outputs.is_empty() {
+        return;
+    }
+
+    let names: Vec<String> = outputs.iter().map(|output| output.name.clone()).collect();
+    let output_dd = dropdown(&names);
+    let modes = vec!["auto".to_owned(), "on".to_owned(), "off".to_owned()];
+    let mode_dd = dropdown(&modes);
+    let outputs = Rc::new(outputs);
+
+    {
+        let outputs = outputs.clone();
+        let mode_dd = mode_dd.clone();
+        output_dd.connect_selected_notify(move |dd| {
+            let Some(output) = outputs.get(dd.selected() as usize) else {
+                return;
+            };
+            let index = match output.mode.as_str() {
+                "on" => 1,
+                "off" => 2,
+                _ => 0,
+            };
+            mode_dd.set_selected(index);
+        });
+    }
+    if let Some(first) = outputs.first() {
+        let index = match first.mode.as_str() {
+            "on" => 1,
+            "off" => 2,
+            _ => 0,
+        };
+        mode_dd.set_selected(index);
+    }
+
+    let apply = gtk::Button::with_label("Apply HDR");
+    {
+        let outputs = outputs.clone();
+        let runner = runner.clone();
+        let status = status.clone();
+        let output_dd_click = output_dd.clone();
+        let mode_dd_click = mode_dd.clone();
+        apply.connect_clicked(move |_| {
+            let Some(output) = outputs.get(output_dd_click.selected() as usize) else {
+                return;
+            };
+            let mode = match mode_dd_click.selected() {
+                1 => "on",
+                2 => "off",
+                _ => "auto",
+            };
+            let text = match integrations::display_hdr_set(runner.as_ref(), &output.name, mode) {
+                Ok(()) => format!("HDR mode {mode} applied to {}", output.name),
+                Err(err) => err.to_string(),
+            };
+            status.set_text(&text);
+        });
+    }
+
+    section.append(&note_label(
+        "HDR (runtime; keeps the config file untouched)",
+    ));
+    section.append(&action_row(&[
+        output_dd.upcast_ref(),
+        mode_dd.upcast_ref(),
+        apply.upcast_ref(),
+    ]));
 }
 
 fn add_display_arrangement(
