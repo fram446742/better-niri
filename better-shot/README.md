@@ -34,12 +34,12 @@ with `--backend`:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `wf-recorder` | wlr-screencopy | `-o NAME` | `-g x,y WxH` | ✗ | `-a` / `--audio=DEV` | ✗ | Preferred when installed. |
 | `command` | user template | placeholders | placeholders | placeholders | placeholder | placeholder | Escape hatch for portal recorders. |
-| `portal` | xdg-desktop-portal ScreenCast | — | — | — | — | — | Probed via `gdbus`; **not implemented** (needs PipeWire fd negotiation). |
+| `portal` | xdg-desktop-portal ScreenCast | picker | ✗ | picker | ✗ | ✗ | Negotiates the stream through the portal and encodes it with `gst-launch-1.0` (x264/x265/av1). Source selection happens in the portal dialog. |
 
 `auto` picks `wf-recorder` when it is in `PATH` (or `BETTER_SHOT_WF_RECORDER`
-points at it), otherwise a configured command template. If neither is usable,
-the error lists every backend and why it is unavailable. `--backend=portal`
-always explains that better-shot does not hand-roll a PipeWire client.
+points at it), then `portal` when `gst-launch-1.0` is available, otherwise a
+configured command template. If none is usable, the error lists every backend
+and why it is unavailable.
 
 ### Targets
 
@@ -482,9 +482,10 @@ recorder command instead of starting it.
 
 ## Limitations
 
-- The xdg-desktop-portal `ScreenCast` backend is detected and reported but not
-  implemented. Consuming its PipeWire stream needs file-descriptor negotiation;
-  use `wf-recorder` or a `--command` template for portal-capable recorders.
+- The portal backend records monitors and windows only; ScreenCast has no
+  region source and carries no audio. It also does not tone-map HDR. The
+  stream is encoded by `gst-launch-1.0`, so the GStreamer plugins for the
+  selected codec must be installed (`x264enc`, `x265enc` or `av1enc`).
 - `wf-recorder` cannot record a single window and has no HDR tone-map option.
   better-shot rejects those combinations rather than silently changing them.
 - HDR recording is compositor-defined. There is no recording-side tone map and

@@ -5,9 +5,9 @@
 //!
 //! * `wf-recorder` (wlr-screencopy) is preferred when it is installed. It records outputs and
 //!   regions.
-//! * the xdg-desktop-portal `ScreenCast` route is probed and reported, but not implemented:
-//!   consuming its PipeWire stream requires file-descriptor negotiation that this CLI does not
-//!   hand-roll.
+//! * the xdg-desktop-portal `ScreenCast` route negotiates a stream through the portal and hands its
+//!   PipeWire node to `gst-launch-1.0` (x264/x265/av1), so no encoder or PipeWire client is linked
+//!   in.
 //! * a generic command template runs any recorder through `sh -c`. It is the escape hatch for
 //!   portal-capable recorders, window capture and HDR tone-mapping filters.
 //!
@@ -66,8 +66,9 @@ pub const USAGE: &str = r#"better-shot record [options]
     wf-recorder  Outputs and regions only. No window capture and no HDR
                  tone-map switch (wlr-screencopy has neither).
     command      Any recorder, run through sh -c with the placeholders above.
-    portal       Detected via gdbus, but not implemented: ScreenCast needs
-                 PipeWire file-descriptor negotiation.
+    portal       xdg-desktop-portal ScreenCast for outputs or windows. Source
+                 selection happens in the portal dialog; the stream is encoded
+                 with gst-launch-1.0 (x264/x265/av1). No audio.
 
   `--stop` accepts only --json, --dry-run and --socket.
 "#;
@@ -389,6 +390,7 @@ pub struct BackendProbe {
 pub struct Env {
     pub path: Option<OsString>,
     pub wf_recorder: Option<PathBuf>,
+    pub gst_launch: Option<PathBuf>,
     pub command: Option<String>,
     pub state_home: Option<PathBuf>,
     pub videos_dir: Option<PathBuf>,
@@ -401,6 +403,7 @@ impl Env {
         Self {
             path: std::env::var_os("PATH"),
             wf_recorder: std::env::var_os("BETTER_SHOT_WF_RECORDER").map(PathBuf::from),
+            gst_launch: std::env::var_os("BETTER_SHOT_GST_LAUNCH").map(PathBuf::from),
             command: std::env::var("BETTER_SHOT_RECORD_COMMAND")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
@@ -773,24 +776,45 @@ fn probe_wf_recorder(env: &Env) -> BackendProbe {
 }
 
 fn probe_portal(env: &Env) -> BackendProbe {
-    let gdbus = find_in_path("gdbus", env);
-    let detail = match &gdbus {
-        Some(path) => format!(
-            "gdbus was found at {}, but xdg-desktop-portal ScreenCast returns a PipeWire \
-             stream over a file descriptor; better-shot does not implement the PipeWire \
-             client, so use wf-recorder or --command with a portal-capable recorder",
-            path.display()
-        ),
-        None => "gdbus not found in PATH, and xdg-desktop-portal ScreenCast needs PipeWire \
-                 file-descriptor negotiation that better-shot does not implement; use \
-                 wf-recorder or --command"
-            .to_owned(),
-    };
-    BackendProbe {
-        kind: BackendKind::Portal,
-        available: false,
-        detail,
-        path: gdbus,
+    if let Some(path) = &env.gst_launch {
+        return if is_executable(path) {
+            BackendProbe {
+                kind: BackendKind::Portal,
+                available: true,
+                detail: format!("found via BETTER_SHOT_GST_LAUNCH at {}", path.display()),
+                path: Some(path.clone()),
+            }
+        } else {
+            BackendProbe {
+                kind: BackendKind::Portal,
+                available: false,
+                detail: format!(
+                    "BETTER_SHOT_GST_LAUNCH points at {}, which is not an executable file",
+                    path.display()
+                ),
+                path: None,
+            }
+        };
+    }
+    match find_in_path("gst-launch-1.0", env) {
+        Some(path) => BackendProbe {
+            kind: BackendKind::Portal,
+            available: true,
+            detail: format!(
+                "gst-launch-1.0 found at {}; xdg-desktop-portal ScreenCast is negotiated at \
+                 record time and needs a running portal and PipeWire",
+                path.display()
+            ),
+            path: Some(path),
+        },
+        None => BackendProbe {
+            kind: BackendKind::Portal,
+            available: false,
+            detail: "gst-launch-1.0 not found in PATH; the portal backend uses it to encode \
+                     the portal's PipeWire stream (install gstreamer and its plugins)"
+                .to_owned(),
+            path: None,
+        },
     }
 }
 
@@ -861,6 +885,11 @@ fn select_backend(
                     BackendKind::WfRecorder,
                     wf.path.clone().expect("available wf-recorder has a path"),
                 ))
+            } else if portal.available {
+                Ok((
+                    BackendKind::Portal,
+                    portal.path.clone().expect("available portal has a path"),
+                ))
             } else if command.available {
                 Ok((BackendKind::Command, shell_path(env)?))
             } else {
@@ -881,10 +910,20 @@ fn select_backend(
                 Err(format!("wf-recorder is unavailable: {}", wf.detail))
             }
         }
-        BackendChoice::Portal => Err(format!(
-            "the portal backend is not available: {}\nUse wf-recorder or --backend=command",
-            portal.detail
-        )),
+        BackendChoice::Portal => {
+            if portal.available {
+                Ok((
+                    BackendKind::Portal,
+                    portal.path.clone().expect("available portal has a path"),
+                ))
+            } else {
+                Err(format!(
+                    "the portal backend is not available: {}\nInstall gst-launch-1.0 or use \
+                     --backend=wf-recorder/--backend=command",
+                    portal.detail
+                ))
+            }
+        }
         BackendChoice::Command => {
             if command_template(options, env).is_none() {
                 return Err("the command backend needs --command TEMPLATE or \
@@ -969,6 +1008,8 @@ pub struct Plan {
     pub audio: Audio,
     pub hdr: RecordHdr,
     pub resolved_output: Option<String>,
+    /// Portal source kind when the backend is `portal`.
+    pub portal_source: Option<crate::portal::Source>,
     pub state_dir: PathBuf,
     pub log_path: PathBuf,
 }
@@ -1036,9 +1077,34 @@ pub fn build_plan(
                 .to_owned(),
         );
     }
+    if backend == BackendKind::Portal {
+        if matches!(options.target, Target::Region(_)) {
+            return Err(
+                "the portal ScreenCast backend has no region source: the portal offers outputs \
+                 and windows only. Use wf-recorder or --backend=command for regions"
+                    .to_owned(),
+            );
+        }
+        if options.audio != Audio::None {
+            return Err(
+                "the portal ScreenCast backend does not record audio: xdg-desktop-portal \
+                 ScreenCast carries video only. Use wf-recorder for an output monitor source, or \
+                 --backend=command with a recorder that handles audio"
+                    .to_owned(),
+            );
+        }
+        if options.hdr == RecordHdr::Tonemap {
+            return Err(
+                "the portal gst pipeline does not tone-map: record with --hdr=keep, or use \
+                 --backend=command with an ffmpeg tone-mapping filter"
+                    .to_owned(),
+            );
+        }
+    }
 
     let socket = options.socket.clone().or_else(|| env.niri_socket.clone());
     let mut resolved_output = None;
+    let mut portal_source = None;
     let mut resolved_window = match &options.target {
         Target::Window(id) => Some(*id),
         _ => None,
@@ -1140,7 +1206,20 @@ pub fn build_plan(
             args.push("-c".to_owned());
             args.push(render_template(template, &values)?);
         }
-        BackendKind::Portal => unreachable!("portal is never selected"),
+        BackendKind::Portal => {
+            portal_source = Some(match &options.target {
+                Target::FocusedOutput | Target::Output(_) => crate::portal::Source::Monitor,
+                Target::FocusedWindow | Target::Window(_) => crate::portal::Source::Window,
+                Target::Region(_) => unreachable!("rejected above"),
+            });
+            args = crate::portal::pipeline_args(
+                &crate::portal::Stream::placeholder(),
+                codec,
+                container,
+                options.fps,
+                &path,
+            );
+        }
     }
 
     let state_dir = state_dir(env);
@@ -1159,6 +1238,7 @@ pub fn build_plan(
         audio: options.audio.clone(),
         hdr: options.hdr,
         resolved_output,
+        portal_source,
         state_dir,
         log_path,
     })
@@ -1483,7 +1563,7 @@ pub fn run(env: &Env, options: &RecordOptions) -> Result<RecordOutcome, String> 
     execute(options, plan)
 }
 
-fn execute(options: &RecordOptions, plan: Plan) -> Result<RecordOutcome, String> {
+fn execute(options: &RecordOptions, mut plan: Plan) -> Result<RecordOutcome, String> {
     if let Some(parent) = plan.path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
@@ -1491,6 +1571,24 @@ fn execute(options: &RecordOptions, plan: Plan) -> Result<RecordOutcome, String>
     std::fs::create_dir_all(&plan.state_dir)
         .map_err(|err| format!("cannot create {}: {err}", plan.state_dir.display()))?;
     prune_stale(&plan.state_dir);
+
+    let mut portal_session = None;
+    if plan.backend == BackendKind::Portal {
+        let source = plan
+            .portal_source
+            .ok_or_else(|| "the portal backend has no source kind".to_owned())?;
+        let session = crate::portal::open(source)?;
+        plan.args = crate::portal::pipeline_args(
+            &session.stream,
+            plan.codec,
+            plan.container,
+            plan.fps,
+            &plan.path,
+        );
+        // Keep the portal session (and its PipeWire node) alive until the
+        // recorder has been supervised and stopped.
+        portal_session = Some(session);
+    }
 
     let log = File::create(&plan.log_path)
         .map_err(|err| format!("cannot create {}: {err}", plan.log_path.display()))?;
@@ -1567,6 +1665,7 @@ fn execute(options: &RecordOptions, plan: Plan) -> Result<RecordOutcome, String>
             }
         }
     };
+    drop(portal_session);
     let _ = std::fs::remove_file(&plan.log_path);
     Ok(RecordOutcome::Recorded(plan.report(
         Some(pid),
@@ -2039,6 +2138,7 @@ mod tests {
             Env {
                 path: Some(self.bin.as_os_str().to_os_string()),
                 wf_recorder: None,
+                gst_launch: None,
                 command: None,
                 state_home: Some(self.state.clone()),
                 videos_dir: Some(self.videos.clone()),
@@ -2049,6 +2149,10 @@ mod tests {
 
         fn wf_recorder(&self, body: &str) -> PathBuf {
             write_exe(&self.bin, "wf-recorder", body)
+        }
+
+        fn gst_launch(&self, body: &str) -> PathBuf {
+            write_exe(&self.bin, "gst-launch-1.0", body)
         }
 
         fn state_dir(&self) -> PathBuf {
@@ -2317,7 +2421,11 @@ mod tests {
             .find(|probe| probe.kind == BackendKind::Portal)
             .unwrap();
         assert!(!portal.available);
-        assert!(portal.detail.contains("PipeWire"), "{}", portal.detail);
+        assert!(
+            portal.detail.contains("gst-launch-1.0"),
+            "{}",
+            portal.detail
+        );
         let command = probes
             .iter()
             .find(|probe| probe.kind == BackendKind::Command)
@@ -2395,7 +2503,89 @@ mod tests {
         };
         let error = build_plan(&fixture.env(), &portal, 1, false).unwrap_err();
         assert!(error.contains("portal backend is not available"), "{error}");
-        assert!(error.contains("PipeWire"), "{error}");
+        assert!(error.contains("gst-launch-1.0"), "{error}");
+
+        let gst = fixture.gst_launch("#!/bin/sh\nexit 0\n");
+        let plan = build_plan(&fixture.env(), &portal, 1, false).unwrap();
+        assert_eq!(plan.backend, BackendKind::Portal);
+        assert_eq!(plan.program, gst);
+        assert!(
+            plan.args.join(" ").contains("pipewiresrc path=PORTAL"),
+            "{:?}",
+            plan.args
+        );
+        let probe = probe_backends(&fixture.env(), None)
+            .into_iter()
+            .find(|probe| probe.kind == BackendKind::Portal)
+            .unwrap();
+        assert!(probe.available);
+        assert!(probe.detail.contains(&gst.display().to_string()));
+    }
+
+    #[test]
+    fn portal_rejects_region_audio_and_tonemap() {
+        let fixture = fixture("portal-limits");
+        fixture.gst_launch("#!/bin/sh\nexit 0\n");
+        let env = fixture.env();
+        let base = RecordOptions {
+            path: Some(fixture.dir.join("a.mp4")),
+            backend: BackendChoice::Portal,
+            dry_run: true,
+            ..RecordOptions::default()
+        };
+
+        let region = RecordOptions {
+            target: Target::Region(Region {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }),
+            ..base.clone()
+        };
+        assert!(
+            build_plan(&env, &region, 1, false)
+                .unwrap_err()
+                .contains("no region source")
+        );
+
+        let audio = RecordOptions {
+            audio: Audio::Device("sink.monitor".to_owned()),
+            ..base.clone()
+        };
+        assert!(
+            build_plan(&env, &audio, 1, false)
+                .unwrap_err()
+                .contains("does not record audio")
+        );
+
+        let tonemap = RecordOptions {
+            hdr: RecordHdr::Tonemap,
+            ..base
+        };
+        assert!(
+            build_plan(&env, &tonemap, 1, false)
+                .unwrap_err()
+                .contains("does not tone-map")
+        );
+    }
+
+    #[test]
+    fn auto_prefers_portal_over_a_command_template() {
+        let fixture = fixture("auto-portal");
+        fixture.gst_launch("#!/bin/sh\nexit 0\n");
+        let env = Env {
+            command: Some("rec {path}".to_owned()),
+            ..fixture.env()
+        };
+        let options = RecordOptions {
+            path: Some(fixture.dir.join("a.mp4")),
+            target: Target::Output("DP-1".to_owned()),
+            dry_run: true,
+            ..RecordOptions::default()
+        };
+        let plan = build_plan(&env, &options, 1, false).unwrap();
+        assert_eq!(plan.backend, BackendKind::Portal);
     }
 
     #[test]

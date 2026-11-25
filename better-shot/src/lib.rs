@@ -24,6 +24,7 @@ pub mod metadata;
 pub mod ocr;
 pub mod output;
 pub mod pin;
+pub mod portal;
 pub mod record;
 pub mod script;
 pub mod stitch;
