@@ -73,6 +73,9 @@ fn usage() -> &'static str {
        import <file|->              Apply a JSON model (`-` reads stdin)\n\n\
      Companion app integrations (read-only unless --apply is given):\n\
        integrations                 Which companion CLIs are installed and their versions\n\
+       overview                     Aggregate compositor, tool, portal and saved-state JSON\n\
+       compositor status|reload [--apply]\n\
+                                    niri version/capabilities and config reload\n\
        displays list|show|preview   better-monitor profiles and dry-run plans\n\
        displays apply|restore [--apply]\n\
                                     Preview, then apply or restore with --apply\n\
@@ -80,14 +83,21 @@ fn usage() -> &'static str {
                                     Resolve a pending safe apply\n\
        sessions list|show|explain|activate [--apply]\n\
                                     better-session contexts and restores\n\
+       sessions history|capture     Recorded snapshots; capture needs --apply\n\
        wallpaper status|scenes|use|apply [--apply]\n\
                                     better-wallpaper scenes and applies\n\
        audio status|sinks|rules|default|apply|restore [--apply]\n\
                                     better-audio state, routing and restore\n\
-       sidepanels status|validate|path|open [--config PATH]\n\
-                                    Read, validate or open the JSON config\n\
-       companion describe|status|list|run [--apply]\n\
-                                    companionctl registry, status and dry-run calls\n\n\
+       sidepanels status|validate|layouts|check|path|open [--config PATH]\n\
+                                    Read, validate, preview or open the JSON config\n\
+       companion describe|status|list|marks|history|explain\n\
+                                    companionctl registry, status, marks and matches\n\
+       companion rules|idle|rotate [--apply]\n\
+                                    Run rules or change an automation policy\n\
+       companion run <ns> <action> [--apply]\n\
+                                    Dry-run an action; --apply calls it\n\
+       portal status                better-portal unit and portals.conf hint\n\
+       noctalia status              Noctalia plugin source status\n\n\
      Mutating commands print a preview and refuse to run without --apply.\n\
      Every command accepts --dry-run; mutations also include a unified diff in\n\
      their JSON output. Config defaults to $BETTER_SETTINGS_CONFIG, then\n\
@@ -701,11 +711,15 @@ mod tests {
             "export",
             "import",
             "integrations",
+            "overview",
+            "compositor",
             "displays",
             "sessions",
             "wallpaper",
             "audio",
             "sidepanels",
+            "portal",
+            "noctalia",
             "companion",
         ] {
             assert!(output.stdout.contains(command), "missing {command}");

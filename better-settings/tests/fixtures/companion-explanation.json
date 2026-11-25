@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "name": "browser-on-dp1",
+      "matches": 2,
+      "steps": 1
+    }
+  ],
+  "count": 1
+}

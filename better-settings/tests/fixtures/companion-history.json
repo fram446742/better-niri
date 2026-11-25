@@ -1,0 +1,48 @@
+{
+  "records": [
+    {
+      "timestamp_ms": 1764072000000,
+      "source": "rules.run",
+      "name": "browser-on-dp1",
+      "steps": [
+        {
+          "namespace": "windows",
+          "action": "move-to-output",
+          "params": {
+            "output": "DP-1"
+          }
+        }
+      ],
+      "result": {
+        "ok": true,
+        "value": {
+          "moved": 1
+        }
+      }
+    },
+    {
+      "timestamp_ms": 1764071000000,
+      "source": "automation.run",
+      "name": "morning",
+      "steps": [
+        {
+          "namespace": "idle",
+          "action": "reset",
+          "params": {}
+        },
+        {
+          "namespace": "rotate",
+          "action": "tick",
+          "params": {}
+        }
+      ],
+      "result": {
+        "ok": false,
+        "error": "rotate: sensor unavailable"
+      }
+    }
+  ],
+  "count": 2,
+  "total": 2,
+  "capacity": 256
+}

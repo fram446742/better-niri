@@ -1,0 +1,49 @@
+{
+  "idle_millis": 120000,
+  "idle_secs": 120,
+  "source": "logind",
+  "enabled": true,
+  "dry_run": false,
+  "inhibited": false,
+  "inhibitors": {
+    "user": {
+      "active": false
+    },
+    "audio": {
+      "active": false
+    },
+    "fullscreen": {
+      "active": false
+    }
+  },
+  "policy": {
+    "enabled": true,
+    "timeouts": [
+      {
+        "after_secs": 300,
+        "action": "lock"
+      },
+      {
+        "after_secs": 900,
+        "action": "dpms-off"
+      }
+    ]
+  },
+  "timeouts": [
+    {
+      "after_secs": 300,
+      "action": "lock",
+      "state": "pending"
+    }
+  ],
+  "due": [],
+  "next": {
+    "after_secs": 300,
+    "action": "lock",
+    "remaining_millis": 180000
+  },
+  "fired": [],
+  "dpms_off": false,
+  "executed": [],
+  "skipped": null
+}

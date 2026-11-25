@@ -1,8 +1,8 @@
 # better-settings
 
-A GTK4 frontend and a scriptable CLI for niri's KDL config. Part of the Better
-Desktop ecosystem; lives inside this repository so no new repository is created
-(excluded from niri's Cargo workspace).
+A GTK4/libadwaita control center and a scriptable CLI for niri's KDL config.
+Part of the Better Desktop ecosystem; lives inside this repository so no new
+repository is created (excluded from niri's Cargo workspace).
 
 ## Why it edits text
 
@@ -56,16 +56,62 @@ cargo build --features gui      # or just `cargo build` (gui is the default)
 ./target/debug/better-settings
 ```
 
-The window groups settings into sections (layout, input, output, animations,
-gestures, overview, cursor, clipboard, miscellaneous), one section per output
-found in the file, and shows read-only summaries for binds, window/layer rules,
-startup commands, environment variables and column widths. Values present in
-the config are loaded; changing a row and pressing **Save** patches only those
-lines. **Reload** re-reads the file, rebuilds the output sections, and reports
-structural/round-trip validation errors. Below the niri sections, the same
-window lists the other apps (displays, sessions, wallpaper, audio, side panels,
-automation) with explicit preview/apply buttons; see [Other apps
-(integrations)](#other-apps-integrations).
+The window is a libadwaita control center: an `AdwApplicationWindow` with a
+collapsible `AdwNavigationSplitView`, a `navigation-sidebar` page list, a header
+bar (preview / reload / save), toast feedback and a scrollable
+`AdwPreferencesPage` per section. Light and dark follow the system through
+`AdwStyleManager`; the minimum window is 760×540. `F1` opens About from any
+page, and the sidebar has a search field.
+
+No screenshots are checked in (the widget tree is built at run time from the
+catalog, so a bitmap would go stale). The layout is:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Better Settings                          Preview  Reload  [ Save ] │
+├──────────────────┬──────────────────────────────────────────────────┤
+│ Search pages     │ Compositor                                       │
+│ ◉ Overview       │ Layout                                           │
+│   Compositor     │  Gaps                    12                      │
+│   Displays       │  Center focused column   never                   │
+│   Sessions       │ Input                                            │
+│   Wallpaper      │  Tap                     (switch)                │
+│   Audio          │ Outputs                                          │
+│   Side panels    │  eDP-1: Scale            1.50                    │
+│   Automation     │ Binds (42)                                       │
+│   Services       │  Mod+Return · spawn "foot"                       │
+│   About          │                                                  │
+└──────────────────┴──────────────────────────────────────────────────┘
+```
+
+### Pages
+
+| Page | What it controls |
+| --- | --- |
+| Overview | compositor version and renderer capability, output/HDR counts, validation result, saved profile/context/scene counts, portal and companion status, config path; quick actions to validate, open and reload the config |
+| Compositor | the complete catalog in Layout, Input, Outputs, Animations, Cursor and Misc groups, plus searchable read-only Binds, window/layer rules, Startup, Environment and column-width groups; Preview shows the unified diff, Save patches only changed lines |
+| Displays | better-monitor profile selection with preview/apply/restore/confirm/cancel, the drag-and-snap arrangement editor, runtime HDR through `niri msg`, and permanent HDR mode/reference luminance in the catalog |
+| Sessions | context list with Explain/Activate (preview first), capture-current-as-context with confirmation, and better-session history |
+| Wallpaper | active scene and backend, scene selection/use, preview/apply, and workspace/session bindings from the scene map |
+| Audio | backend status, per-sink/source volume and mute with preview/apply, default sink, routing rules and stream apply/restore |
+| Side panels | config summary, validation, config path and open action, named layouts with a read-only `--check` preview, and panel details |
+| Automation | companion daemon/status and registry, rules explain/apply, idle and rotation policy status plus enable/disable, window marks, run history, and a custom dry-run/apply action |
+| Services | installed companion CLIs and versions, better-portal unit and `portals.conf` selection hint, Noctalia plugin source status, and a copyable diagnostics report |
+| About | versions, docs links, the editing/safety model, F1 and colour-scheme notes |
+
+### Dependencies
+
+The `gui` feature links GTK 4 and libadwaita. The crate is `libadwaita 0.9.2`
+with the `v1_5` and `gtk_v4_10` features; it targets a system libadwaita 1.10
+(`pkg-config --modversion libadwaita-1`). `cargo build --no-default-features`
+builds the CLI only and needs neither GUI library.
+
+Values present in the config are loaded; changing a row and pressing **Save**
+patches only those lines. **Preview** shows the diff without writing. **Reload**
+re-reads the file, rebuilds every page, and reports structural/round-trip
+validation errors. Companion pages use the same explicit split: their own dry
+run where the CLI supports one, otherwise a confirmation dialog. Another app's
+config is never rewritten; see [Other apps (integrations)](#other-apps-integrations).
 
 Config path: `$BETTER_SETTINGS_CONFIG`, then `$NIRI_CONFIG`, then
 `$XDG_CONFIG_HOME/niri/config.kdl`, then `~/.config/niri/config.kdl`.
@@ -181,16 +227,22 @@ companion settings are copied into niri's config.
 
 | App | Read | Safe actions |
 | --- | --- | --- |
+| `niri` | `msg --json version`, `capabilities`, `outputs` | runtime HDR mode; reload config |
 | `better-monitor` | `list`/`show` profiles, `position` geometry | dry-run preview, apply, restore, confirm/cancel a pending apply; drag/reposition the arrangement editor and apply it |
-| `better-session` | `list`/`show` contexts (workspaces, windows, outputs) | `explain` preview, restore/activate |
+| `better-session` | `list`/`show` contexts (workspaces, windows, outputs), `history list` | `explain` preview, restore/activate, explicit capture |
 | `better-wallpaper` | `status` (active scene, scenes, backend) and `scene list` | use a scene, dry-run and real apply |
 | `better-audio` | `status`, `sinks`, `sources`, `rules` | set the default sink; mixer volume/mute with preview/apply; dry-run and real apply/restore |
-| `better-sidepanels` | `config.json` (`--config`, `$XDG_CONFIG_HOME`) | `--validate`, open in `$VISUAL`/`$EDITOR` (never rewritten) |
-| `better-companion` | `companionctl describe`/`status`/`list` | dry-run an action with `--dry-run`; a real call requires `--apply` |
+| `better-sidepanels` | `config.json` (`--config`, `$XDG_CONFIG_HOME`), named layouts | `--validate`, read-only `--check --profile <layout>`, open in `$VISUAL`/`$EDITOR` (never rewritten) |
+| `better-companion` | `companionctl describe`/`status`/`list`/`history`, `explain rules|windows`, `call idle|rotate status`, `call marks list` | dry-run an action with `--dry-run`; rules run, idle/rotate enable/disable and real calls require confirmation/`--apply` |
+| `better-portal` | `systemctl --user is-active/is-enabled better-portal`, `portals.conf` selection hint | none (read-only) |
+| Noctalia plugins | plugin source directory and manifests (or `--version`) | none (read-only) |
 | all | tool discovery | lists which CLIs are installed; missing tools render a note instead of failing |
 
 ```sh
 better-settingsctl integrations                 # installed CLIs and versions
+better-settingsctl overview                     # aggregate status JSON
+better-settingsctl compositor status            # niri version, renderer capability, HDR
+better-settingsctl compositor reload --apply
 better-settingsctl displays list
 better-settingsctl displays preview desk        # always a dry run
 better-settingsctl displays apply desk          # preview only
@@ -200,7 +252,9 @@ better-settingsctl displays arrange '{"eDP-1":[0,0],"DP-1":[1920,0]}' --apply
 better-settingsctl displays restore --apply
 better-settingsctl displays confirm --apply
 better-settingsctl sessions list
+better-settingsctl sessions history
 better-settingsctl sessions explain work
+better-settingsctl sessions capture work --apply
 better-settingsctl sessions activate work --apply
 better-settingsctl wallpaper status
 better-settingsctl wallpaper use night --apply
@@ -211,27 +265,43 @@ better-settingsctl audio volume sink alsa_output.speakers 0.5 --apply
 better-settingsctl audio mute source alsa_input.usb-mic on --apply
 better-settingsctl audio apply --apply
 better-settingsctl sidepanels status
+better-settingsctl sidepanels layouts
+better-settingsctl sidepanels check work
 better-settingsctl sidepanels validate --config ~/.config/better-sidepanels/config.json
 better-settingsctl sidepanels open
 better-settingsctl companion describe
+better-settingsctl companion history 20
+better-settingsctl companion explain rules
+better-settingsctl companion rules --apply
+better-settingsctl companion idle status
+better-settingsctl companion idle enable --apply
+better-settingsctl companion rotate status
+better-settingsctl companion marks
 better-settingsctl companion run parking park              # dry run
 better-settingsctl companion run parking park --apply      # real call
+better-settingsctl portal status
+better-settingsctl noctalia status
 ```
 
 Mutating commands print the tool's own preview and refuse to act without
-`--apply`. The GTK window has the same split: read-only sections plus explicit
-buttons (`Preview apply` / `Apply`, `Explain` / `Activate`, `Validate` / `Open
-config`, `Dry-run action` / `Call action`). `Reload` re-reads everything.
+`--apply`. The GTK window has the same split: read-only groups plus explicit
+buttons, with previews shown in a scrollable report dialog. Header **Preview**
+shows the config diff, **Reload** re-reads everything and **Save** patches only
+changed rows. Sidebar pages are the CLI sections; the CLI remains the scriptable
+surface for everything the window can do.
 
 Tool paths can be redirected for wrappers or tests:
 `BETTER_SETTINGS_BETTER_MONITOR`, `BETTER_SETTINGS_BETTER_SESSION`,
 `BETTER_SETTINGS_BETTER_WALLPAPER`, `BETTER_SETTINGS_BETTER_AUDIO`,
 `BETTER_SETTINGS_BETTER_SIDEPANELS` and `BETTER_SETTINGS_COMPANIONCTL`. The
-sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`.
+sidepanels path follows `BETTER_SIDEPANELS_CONFIG` and `--config`; `niri` can be
+redirected with `BETTER_SETTINGS_NIRI`, the portal selection file with
+`BETTER_SETTINGS_PORTALS_CONF`, and the Noctalia plugin source with
+`BETTER_SETTINGS_NOCTALIA_PLUGINS`.
 
 ### Displays arrangement editor
 
-The Displays section reads `better-monitor position` and draws every enabled
+The Displays page reads `better-monitor position` and draws every enabled
 output as a rectangle proportional to its logical size. Drag a rectangle to
 move it; the editor snaps its edges/centre to other outputs and then to a 10 px
 grid, and shows the candidate logical coordinates. The X/Y spin buttons edit
@@ -245,12 +315,12 @@ applies. `Reset` re-reads the live positions. The plan is
 
 ### Audio mixer
 
-The Audio section lists sinks and sources with their current volume and mute
-state. Sliders and mute checkboxes only change local state until `Apply mixer`
+The Audio page lists sinks and sources with their current volume and mute
+state. Sliders and mute switches only change local state until `Apply mixer`
 is pressed; `Preview mixer` sends the same changes with `--dry-run`. Every
 change is a `better-audio volume|mute <kind> <device> <value>` command, and the
-section shows the active backend. If `better-audio` is missing, the section
-renders a note and no controls.
+page shows the active backend. If `better-audio` is missing, the page renders a
+note and no controls.
 
 ## Supported syntax
 
@@ -281,14 +351,16 @@ renders a note and no controls.
 ## Test
 
 ```sh
-cargo test                     # model, CLI and integration fixtures; the GTK
-                               # window test skips itself without a display
-cargo test --no-default-features
+cargo test                     # model, CLI, integrations and widget tests
+cargo test --no-default-features   # CLI only, no GTK/libadwaita
 cargo fmt --check
 cargo clippy --all-targets
+xvfb-run -a cargo test         # runs the headless GTK construction test
 ```
 
 Integration tests use JSON fixtures captured from the real CLIs
 (`tests/fixtures/`) and an in-memory `ScriptedRunner`, so they need neither the
-apps installed nor a compositor. `cargo test` also builds the GTK binary and
-runs a widget-construction smoke test when `gtk::init()` succeeds.
+apps installed nor a compositor. The widget test builds the whole libadwaita
+window (all ten pages, sidebar and catalog rows) when a display is available;
+without `DISPLAY`/`WAYLAND_DISPLAY` it skips itself and the model/integration
+tests still cover the data path.

@@ -1,0 +1,9 @@
+{
+  "sticky": true,
+  "virtual_outputs": true,
+  "hdr": true,
+  "vulkan": true,
+  "screencopy": true,
+  "screenshot": true,
+  "portal_screencast_selection": true
+}
