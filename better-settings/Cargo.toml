@@ -7,12 +7,16 @@ rust-version = "1.95"
 
 [features]
 default = ["gui"]
-gui = ["dep:gtk4"]
+gui = ["dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 gtk4 = { version = "0.11", optional = true }
+# 0.9.2 matches the cached gtk4 0.11 bindings. `v1_5` exposes the modern
+# NavigationSplitView, ToolbarView and Dialog widgets; `gtk_v4_10` is needed
+# for `adw::SpinRow`. The system libadwaita is 1.10, so all of them are present.
+libadwaita = { version = "0.9.2", optional = true, features = ["v1_5", "gtk_v4_10"] }
 
 [[bin]]
 name = "better-settings"
