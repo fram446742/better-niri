@@ -265,14 +265,17 @@ Resolved:
 5. **Navigation/minimise**: minimise core; grid/carousel/magnifier in the
    `navigation` module.
 6. **Repositories**: companion repositories after Phase 1.
-7. **Piri**: fork preserving history and attribution.
+7. **Piri**: architecture reference only; better-companion is an in-tree
+   implementation that vendors no Piri code (§26.11 of the expansion plan).
 8. **Shell**: Noctalia plugins only; no native shell.
 
 More resolved:
 
 - **better-companion shape**: one daemon with internal `sticky`, `stage`,
-  `scratchpad`, `rules` modules, forked from Piri with nsticky's history
-  absorbed. First delivery is the IPC/state base plus nsticky's workflows.
+  `scratchpad`, `rules` modules, modelled on Piri's compiled-plugin idea and
+  absorbing nsticky's workflows. It does not vendor Piri code: the daemon's
+  core is the JSON/UDS protocol and per-namespace crates, which Piri does not
+  provide (see `EXPANSION_PLAN.m` §26.11 for the deviation and rationale).
 - **nsticky compatibility**: better-companion accepts `nsticky` CLI/config as
   aliases. The nsticky repository is **not modified or deprecated**; it remains
   a standalone option for users who want only sticky/staged windows.

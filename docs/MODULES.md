@@ -295,7 +295,8 @@ Resolved:
   the compositor;
 - minimise: core; grid/carousel/magnifier: `navigation` module;
 - companion repositories: after Phase 1;
-- Piri: fork preserving history and attribution.
+- Piri: architecture reference only; better-companion is implemented in-tree
+  with no Piri code (see the expansion plan's delivery update).
 
 Remaining: the exact way better-companion absorbs nsticky (module layout,
 compatibility CLI) and whether the portal picker starts external or gets a

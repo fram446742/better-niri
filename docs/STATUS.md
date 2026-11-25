@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-11-23.
+Last updated: 2026-11-25.
 
 ## Safe baseline (`main`)
 
@@ -14,7 +14,10 @@ This is now the main integration line. It keeps niri upstream history as its
 base and merges niri-elite as the feature base, then reconciles with current
 upstream.
 
-### better-smithay `integration/elite-base` @ `2e8e9edb`
+### better-smithay `integration/elite-base` @ `c7614890`
+
+The branch starts from the merged `66b0670` + losnoco lineage (`2e8e9edb`) and
+is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
 
 - First parent: `MEKCCK/smithay` `66b0670` (`elite-color-management`):
   stabilised `wp-color-management-v1`, connector colour state, GLES colour
@@ -102,25 +105,28 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `scripts/test-all.sh` | **48/48 PASS** (compositor, feature matrix, visual-test build, 9 workspaces, packaging, completions, plugins, nsticky) |
-| `cargo test --workspace` | pass, 890 tests, 0 failed |
-| `cargo test -p niri --no-default-features` | pass, 420 tests, 0 failed |
+| `cargo test --workspace` | pass, 892 tests, 0 failed |
+| `cargo test -p niri --no-default-features` | pass, 423 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |
 | `cargo test -p niri-ipc --features clap` | pass |
 | `cargo build -p niri-visual-tests` | pass |
 | `niri --check-vulkan` | pass, probes two RADV devices; `NIRI_RENDERER=vulkan` resolves to `path: Vulkan` |
 | Automated hardware pass (DP-1) | pass: Vulkan, capabilities, VRR, 10-bit, explicit sync, 2 DRM devices, runtime HDR auto/off/auto, screenshot IPC, HDR clip `hdr=true`→`hdr=false` |
+| Renderer cache cleanup (DPMS) | pass: `cargo test -p niri --lib renderer_cleanup` (EGL, no outputs and monitors off; dead imports reclaimed, live ones kept) |
 | `cargo clippy --workspace --all-targets` | pass (no errors; pre-existing style warnings in elite code) |
 | `cargo fmt --check` (niri + 9 workspaces) | pass |
 | `cargo build --release` | not re-run in this pass; packaging verifies all profiles with debug `cargo check` |
 
 **Manual/remaining:** subjective full-client checks (tearing in a game, a
 commit-timing client, an output on the second GPU, rotated transitions, HDR
-mixed contrast, popups/animations, a real portal client) and DPMS VRAM/GTT
-profiling. See `docs/validation/hardware.md` and `docs/TESTING.md`.
+mixed contrast, popups/animations, a real portal client) and hardware
+VRAM/GTT profiling across DPMS cycles (the renderer cache cleanup is
+implemented and unit-tested; measuring the driver-side counters still needs a
+DRM seat). See `docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published
 
-- `fram446742/better-smithay` branch `integration/elite-base` (`2e8e9edb`).
+- `fram446742/better-smithay` branch `integration/elite-base` (`c7614890`).
 - `fram446742/better-smithay` branch `integration/hdr-color` (`344be37b`, the
   previous losnoco-base experiment; kept for comparison).
 - `fram446742/better-niri` `main` remains the safe baseline; the elite branch is

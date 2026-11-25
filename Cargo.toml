@@ -170,9 +170,8 @@ cursor = ["dep:resvg", "dep:usvg"]
 # Enables the effects module: the post-processing shader engine (global, region,
 # per-output and window-scoped passes) and decoration light.
 effects = []
-# Enables the navigation module. Currently gates the screen magnifier (toggle,
-# zoom, locked center drag and move binds); grid overview and carousel gating is
-# still to come.
+# Enables the navigation module: screen magnifier, grid overview (model, renderer and
+# gestures) and the consolidated carousel, including their input/action entry points.
 navigation = []
 # Enables Vulkan renderer support: better-smithay's Vulkan backend/renderer is
 # compiled in, niri probes physical devices at startup, applies NIRI_RENDERER

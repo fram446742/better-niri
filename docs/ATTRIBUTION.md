@@ -32,6 +32,7 @@ licences behind the code. It is updated whenever a feature series is integrated.
 | https://github.com/zaroutt/Niri-glass | zaroutt | GPL-3.0-or-later | Liquid glass shader and parameters |
 | https://github.com/reverb256/smithay | reverb256 | MIT | `hdr-modern` reference for HDR colour handling (audited) |
 | https://github.com/AmmoniumX/niri-qol | AmmoniumX | GPL-3.0-or-later | Hidden-workspace and QoL work folded into biri |
+| https://github.com/Asthestarsfalll/piri | Asthestarsfalll and contributors | MIT | Automation architecture reference (compiled plugins, rules, run-or-raise, swallow); better-companion is an in-tree implementation and vendors no Piri code |
 | https://github.com/lonerOrz/nsticky | lonerOrz | BSD-3-Clause | Sticky-window daemon that better-nsticky extends |
 | better-nsticky | fram446742 and contributors | BSD-3-Clause | Staging, scratchpads, rules, persistence, selector, compatibility integration |
 
@@ -54,7 +55,8 @@ willybarret, Yuzhou Nie, Zakaria Habri.
 | niri #4001 pointer warp | — | closed unmerged | urayde implementation |
 | niri #4062 `float-above-fullscreen` | bczhc | open | biri implementation |
 | niri #4459 per-keyboard config | arthur-ba1 | open | biri implementation |
-| niri #4750 texture cache cleanup | trevarj | open | under investigation, not adopted |
+| niri #4550 renderer cache cleanup | RiversJin | closed (policy), backported | Dead imports reclaimed on the fallback timer; `4da66421` |
+| niri #4750 texture cache cleanup | trevarj | open | Same diagnosis; not adopted (superseded by the #4550 backport) |
 
 Protocol and specification authors whose work underpins the colour and
 presentation features include the Wayland colour-management, tearing-control,
