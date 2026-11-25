@@ -15,6 +15,7 @@ pub mod modules;
 pub mod niri;
 pub mod session;
 pub mod system;
+pub mod tray;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ pub use action::ActionSpec;
 use behavior::{AppRule, Context as BehaviorContext};
 pub use behavior::{PeekState, ReloadSignal};
 use cairo::{Context, FontSlant, FontWeight, Format, ImageSurface};
-pub use modules::{ModuleKind, ModuleOutput, ModuleSpec, ModuleState, OutputItem};
+pub use modules::{ModuleKind, ModuleOutput, ModuleSpec, ModuleState, OutputItem, Pixmap};
 pub use niri::NiriAction;
 use serde::{Deserialize, Serialize};
 pub use session::SessionState;
@@ -1416,6 +1417,27 @@ impl Panel {
                         .map_err(|err| format!("cairo: {err}"))?;
                 }
                 for item in &part.items {
+                    if let Some(pixmap) = &item.pixmap {
+                        let size = item.width.max(1.);
+                        let top = part.rect.y as f64 + (part.rect.height as f64 - size) / 2.;
+                        let stride = pixmap.width as i32 * 4;
+                        if let Ok(surface) = ImageSurface::create_for_data(
+                            pixmap.data.clone(),
+                            Format::ARgb32,
+                            pixmap.width as i32,
+                            pixmap.height as i32,
+                            stride,
+                        ) {
+                            ctx.save().map_err(|err| format!("cairo: {err}"))?;
+                            ctx.translate(item.x, top);
+                            ctx.scale(size / pixmap.width as f64, size / pixmap.height as f64);
+                            ctx.set_source_surface(&surface, 0., 0.)
+                                .map_err(|err| format!("cairo: {err}"))?;
+                            ctx.paint().map_err(|err| format!("cairo: {err}"))?;
+                            ctx.restore().map_err(|err| format!("cairo: {err}"))?;
+                        }
+                        continue;
+                    }
                     let color = if item.active {
                         colors.accent
                     } else if item.dim {
@@ -1537,6 +1559,7 @@ impl Panel {
                         occupied: false,
                         dim: true,
                         action: None,
+                        pixmap: None,
                     }],
                     None => Vec::new(),
                 }
@@ -1553,6 +1576,7 @@ impl Panel {
                         occupied: item.occupied,
                         dim: false,
                         action: item.action.clone(),
+                        pixmap: item.pixmap.clone(),
                     })
                     .collect()
             };
@@ -1561,9 +1585,13 @@ impl Panel {
             let module_budget = (row_width * if horizontal { 0.6 } else { 0.55 })
                 .max(20.)
                 .min(row_width - padding * 2. - 4.);
+            let icon_size = if horizontal { 14. } else { 16. };
             let mut widths = Vec::with_capacity(runs.len());
             for run in &runs {
-                widths.push(measure(ctx, &run.text)?);
+                widths.push(match run.pixmap {
+                    Some(_) => icon_size,
+                    None => measure(ctx, &run.text)?,
+                });
             }
             let total = widths.iter().sum::<f64>() + gap * runs.len().saturating_sub(1) as f64;
             if total > module_budget && !runs.is_empty() {
@@ -1571,6 +1599,9 @@ impl Panel {
                     / runs.len() as f64)
                     .max(16.);
                 for (run, width) in runs.iter_mut().zip(widths.iter_mut()) {
+                    if run.pixmap.is_some() {
+                        continue;
+                    }
                     run.text = truncate(ctx, &run.text, per)?;
                     *width = measure(ctx, &run.text)?;
                 }
@@ -1618,6 +1649,7 @@ impl Panel {
                     occupied: false,
                     dim: false,
                     action: None,
+                    pixmap: None,
                 })
             };
 
@@ -1651,6 +1683,7 @@ struct TextPart {
     occupied: bool,
     dim: bool,
     action: Option<ActionSpec>,
+    pixmap: Option<Pixmap>,
 }
 
 fn measure(ctx: &Context, text: &str) -> Result<f64, String> {
@@ -2157,6 +2190,35 @@ mod tests {
         };
         let filled = panel.render(260, 120).unwrap();
         assert_ne!(blank.data, filled.data);
+    }
+
+    #[test]
+    fn tray_pixmap_is_drawn_and_clickable() {
+        let mut panel = Panel::new(PanelConfig {
+            rows: vec![Row::label("Tray").with_kind(ModuleKind::Tray, 1)],
+            ..PanelConfig::default()
+        });
+        panel.items[0] = vec![OutputItem {
+            label: String::new(),
+            action: Some(ActionSpec::command("true")),
+            active: false,
+            occupied: false,
+            pixmap: Some(Pixmap {
+                width: 2,
+                height: 2,
+                data: vec![255; 16],
+            }),
+        }];
+
+        let image = panel.render(260, 120).unwrap();
+        assert!(!image.is_solid(260, 120));
+        let map = panel.interaction_map(260, 120).unwrap();
+        assert!(
+            map.regions
+                .iter()
+                .any(|region| region.action == Some(ActionSpec::command("true"))),
+            "tray icon is not clickable"
+        );
     }
 
     #[test]

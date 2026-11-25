@@ -87,6 +87,33 @@ fn usage() -> &'static str {
 }
 
 fn main() -> Result<()> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("tray-list") {
+        let items: Vec<_> = better_sidepanels::tray::snapshot()
+            .into_iter()
+            .map(|item| {
+                serde_json::json!({
+                    "service": item.service,
+                    "path": item.path,
+                    "title": item.title,
+                    "status": item.status,
+                    "icon": item.pixmap.as_ref().map(|pixmap| [pixmap.width, pixmap.height]),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+    if argv.first().map(String::as_str) == Some("tray-click") {
+        let (_, service, path, button) = match argv.as_slice() {
+            [_, service, path, button] => ("tray-click", service, path, button),
+            [_, service, path] => ("tray-click", service, path, &"left".to_owned()),
+            _ => anyhow::bail!("tray-click needs SERVICE PATH [left|right|middle]"),
+        };
+        better_sidepanels::tray::click(service, path, button).map_err(anyhow::Error::msg)?;
+        return Ok(());
+    }
+
     let mut path = std::env::var_os("BETTER_SIDEPANELS_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(config_path);
@@ -94,7 +121,7 @@ fn main() -> Result<()> {
     let mut validate = false;
     let mut init = false;
     let mut profile = None;
-    let mut args = std::env::args().skip(1);
+    let mut args = argv.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => {

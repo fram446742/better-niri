@@ -64,6 +64,7 @@ rows stay blank; every other module still works.
 | `memory`       | Used/total GiB and percentage                           | `/proc/meminfo`                                               |
 | `network`      | Interface state and rx/tx rates                         | `/sys/class/net/<if>/…`                                       |
 | `volume`       | Sink volume and mute state                              | `pactl`, falling back to `wpctl`                              |
+| `tray`         | StatusNotifierItem icons, left-click activates          | `org.kde.StatusNotifierWatcher` + item icons                  |
 | `custom`       | First line of a shell command                           | `sh -c`                                                       |
 
 Module fields:
@@ -78,6 +79,7 @@ Module fields:
 { "kind": "memory", "interval_secs": 5 }
 { "kind": "network", "interval_secs": 2, "interface": "wlan0" }
 { "kind": "volume", "interval_secs": 5 }
+{ "kind": "tray", "interval_secs": 1 }
 { "kind": "custom", "command": "date +%s", "interval_secs": 10 }
 ```
 
@@ -100,11 +102,12 @@ Module fields:
   collected.
 - A module that fails, or a missing tool, renders blank rather than an error.
 
-**Tray / status-notifier is not implemented.** Hosting SNI icons requires a
-D-Bus client, `org.kde.StatusNotifierWatcher` registration and icon pixmap
-handling — a new protocol stack this crate deliberately does not take on. A
-`custom` module can query a specific notifier CLI, but it cannot enumerate
-arbitrary tray icons.
+`tray` registers a background host with `org.kde.StatusNotifierWatcher` and
+renders each item's `IconPixmap` (or a themed PNG/SVG resolved through
+`rsvg-convert`). Its left-click calls `Activate` on the item. Items without a
+usable icon fall back to their title. The watcher is polled every 30 s and
+woken by registration signals. `better-sidepanels tray-list` prints the current
+items as JSON for diagnostics.
 
 ## Configuration
 
@@ -412,7 +415,6 @@ pkill -HUP better-sidepanels
 ## Limitations
 
 - JSON only; no TOML parser.
-- No tray/status-notifier host (see Modules).
 - `playerctl`, `pactl`/`wpctl` are optional; their rows simply stay blank.
 - Top/bottom panels have no header title.
 - Module polling is per panel: several identical panels on many outputs repeat

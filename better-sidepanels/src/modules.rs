@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::action::ActionSpec;
 use crate::niri::{self, NiriAction, Window, Workspace};
 use crate::system::Env;
+pub use crate::tray::Pixmap;
 
 /// Maximum characters kept from a module value.
 pub const DEFAULT_MAX_CHARS: usize = 64;
@@ -29,6 +30,8 @@ pub enum ModuleKind {
     Memory,
     Network,
     Volume,
+    /// StatusNotifierItem tray icons.
+    Tray,
     /// A shell command whose first output line is shown.
     #[default]
     Custom,
@@ -46,6 +49,7 @@ impl ModuleKind {
             Self::Memory,
             Self::Network,
             Self::Volume,
+            Self::Tray,
             Self::Custom,
         ]
     }
@@ -66,6 +70,7 @@ impl ModuleKind {
             Self::Memory => "memory",
             Self::Network => "network",
             Self::Volume => "volume",
+            Self::Tray => "tray",
             Self::Custom => "custom",
         }
     }
@@ -165,6 +170,8 @@ pub struct OutputItem {
     pub action: Option<ActionSpec>,
     pub active: bool,
     pub occupied: bool,
+    /// Tray icon; when set it is drawn instead of `label`.
+    pub pixmap: Option<Pixmap>,
 }
 
 impl OutputItem {
@@ -174,6 +181,7 @@ impl OutputItem {
             action: None,
             active: false,
             occupied: false,
+            pixmap: None,
         }
     }
 }
@@ -322,11 +330,54 @@ pub fn evaluate(
             Some(volume) => ModuleOutput::text(clip(&volume.format(), max)),
             None => ModuleOutput::default(),
         },
+        ModuleKind::Tray => tray_output(),
         ModuleKind::Custom => match env.command_line(&spec.command) {
             Some(line) if !line.is_empty() => ModuleOutput::text(clip(&line, max)),
             _ => ModuleOutput::default(),
         },
     }
+}
+
+fn tray_output() -> ModuleOutput {
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "better-sidepanels".to_owned());
+    let exe = shell_quote(&exe);
+    let items = crate::tray::snapshot()
+        .into_iter()
+        .map(|item| {
+            let label = if item.title.trim().is_empty() {
+                item.service.clone()
+            } else {
+                item.title.clone()
+            };
+            let action = ActionSpec::command(format!(
+                "{exe} tray-click {} {} left",
+                shell_quote(&item.service),
+                shell_quote(&item.path)
+            ));
+            let active = matches!(item.status.as_str(), "Active" | "NeedsAttention");
+            OutputItem {
+                label: if item.pixmap.is_some() {
+                    String::new()
+                } else {
+                    label
+                },
+                action: Some(action),
+                active,
+                occupied: false,
+                pixmap: item.pixmap,
+            }
+        })
+        .collect();
+    ModuleOutput {
+        text: String::new(),
+        items,
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -479,6 +530,7 @@ pub fn workspaces_output(workspaces: &[Workspace], output: Option<&str>) -> Modu
             action: Some(ActionSpec::Niri(NiriAction::focus_id(workspace.id))),
             active: workspace.is_active || workspace.is_focused,
             occupied: workspace.is_occupied(),
+            pixmap: None,
         })
         .collect();
     ModuleOutput {
