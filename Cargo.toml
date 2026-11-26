@@ -162,9 +162,10 @@ pkg-config = "0.3.34"
 default = ["agent", "dbus", "systemd", "xdp-gnome-screencast", "kde", "cursor", "effects", "navigation", "vulkan"]
 # Enables the agent seat, a second input seat for automation over IPC.
 agent = []
-# Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1 and the KDE
-# colour-picker D-Bus interface.
-kde = ["dep:wayland-protocols-plasma"]
+# Enables KDE interop: org_kde_kwin_blur, kde-output-order-v1, and the KDE
+# colour-picker and ScreenShot2 D-Bus interfaces. Those interfaces use the dbus
+# module, so the feature pulls it in.
+kde = ["dbus", "dep:wayland-protocols-plasma"]
 # Enables the cursor module: SVG/scalable cursor rendering and shake-to-enlarge.
 cursor = ["dep:resvg", "dep:usvg"]
 # Enables the effects module: the post-processing shader engine (global, region,
