@@ -312,8 +312,13 @@ names: `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
 
 | Package base | Source | Version |
 | --- | --- | --- |
-| `niri-better` | pinned commit `35c0e54b` | fixed `26.4.0.elite` |
+| `niri-better` | pinned commit `644e0281` | fixed `26.4.0.elite-r3` |
 | `niri-better-git` | `integration/elite-base` | `pkgver()` from git |
+
+Only one package base can be published: AUR rejects a second repository that
+would overwrite the same split package names. `niri-better` is the published
+base; `niri-better-git` stays in the tree for local builds and would need
+`-git`-suffixed package names before it could be uploaded alongside it.
 
 Build locally before publishing:
 
@@ -341,9 +346,10 @@ Regenerate `.SRCINFO` after changing any recipe:
 packaging/scripts/update-srcinfo.sh
 ```
 
-Publishing is manual and out of scope for this tree: copy `PKGBUILD`,
-`.SRCINFO` and the three local recipe files into the AUR repository and push
-from there. Never force-push an AUR history.
+Publishing is a manual release step: copy `PKGBUILD`, `.SRCINFO` and the three
+local recipe files into the AUR repository and push from there. Never force-push
+an AUR history. The current `niri-better` base is published at
+`ssh://aur@aur.archlinux.org/niri-better.git`.
 
 ## Verification
 
