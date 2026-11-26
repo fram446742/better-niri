@@ -24,7 +24,7 @@ state.
 | --- | --- | --- | --- | --- | --- |
 | HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Integrated | Default auto on HDR-capable outputs; `off`/`on` and runtime `niri msg output <out> hdr …` overrides; hardware pass entered/left HDR on DP-1. |
 | `wp_color_management_v1` | Absent | niri-spicy | niri-spicy | Integrated | Windows scRGB, BT.2100, extended target volume, custom primaries. |
-| Tone mapping | Absent | niri-spicy | niri-spicy | Integrated | Peak-luminance override, cursor-plane/LUT acceleration. |
+| Tone mapping | Absent | niri-spicy | niri-spicy | Integrated | `hdr { peak-luminance N }` overrides EDID peak in metadata/tone map/advertised luminance; cursor-plane/LUT acceleration on the HDR path. |
 | scRGB / Windows HDR | Absent | niri-spicy | niri-spicy | Integrated | Wine/Proton detection fixes included. |
 | HDR metadata and transitions | Absent | niri-spicy | niri-spicy | Integrated | Connector colour state is staged and switched with the frame; HDR mode changes reconnect the output to re-probe 10-bit formats. |
 | Custom primaries | Absent | niri-spicy | niri-spicy | Integrated | Smithay side required. |
@@ -42,7 +42,7 @@ state.
 | KDE blur protocol | Absent | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
 | Liquid glass / refraction / lens / edge light | Absent | zaroutt/Niri-glass via niri-elite | niri-elite port | Integrated | Implement as a background-effect shader, not a second engine. |
 | VRR | Upstream | upstream | upstream | Upstream | On-demand and per-window rules. |
-| Tearing control | Absent | urayde | urayde | Integrated | Upstream Smithay has no `wp_tearing_control_v1`; better-smithay must add it. |
+| Tearing control | Absent | urayde | urayde | Integrated | Upstream Smithay has no `wp_tearing_control_v1`; better-smithay must add it. Per-output gate: `allow-tearing always|never|fullscreen` (focused fullscreen by default). |
 
 ## Presentation and DRM
 
@@ -86,7 +86,7 @@ state.
 | Grid overview | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Per-monitor, tab cells, gestures, IPC focus report. |
 | Window minimisation | Absent | niri-spicy, niri-elite | niri-spicy base + elite UX | Integrated | Real state, actions, rule, grid placeholder, strip. |
 | Magnifier | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Movement actions/binds; pick-colour overlay. |
-| Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Upstream | Do not reimplement tabbed columns; evaluate Naxdy's auto-group refinements later. |
+| Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Partial | Upstream tabbed-column display only; Naxdy’s tile groups (auto-group, expel, tab titles) remain deferred — see `UNIMPLEMENTED.md`. |
 | Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Integrated | Extend to arbitrary actions (`grid-overview`, etc.). |
 | Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Second seat over IPC; needs Smithay per-client seat filter. |
 | Focus-ring shaders | Absent | biri | biri | Integrated | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload, and decoration light spill. |
@@ -129,6 +129,25 @@ state.
 | DMA-BUF → SHM fallback | Upstream | upstream | upstream | Upstream | niri-elite's fallback was merged upstream. |
 | HDR capture conversion | Absent | niri-spicy | niri-spicy | Integrated | Must not blow out SDR output. |
 | Privacy in captures | Partial (`block-out-from`) | demoji `block-out-blur` | demoji | Integrated | Blocked-out windows can be blurred instead of black; popups still hidden. |
+
+## Reference-fork refinements
+
+| Feature | Source | Status |
+| --- | --- | --- |
+| `hdr peak-luminance` | niri-spicy | Integrated |
+| Per-output `allow-tearing` | niri-spicy | Integrated |
+| Initial `xdg_toplevel` Suspended while locked/off | niri-spicy | Integrated |
+| Async NVIDIA frame-fence wait before KMS queue | niri-spicy | Integrated (hardware pending) |
+| Active decorations only on focused workspace | demoji | Integrated |
+| `overview { focus-ring; shadow }` overrides | demoji | Integrated |
+| Sticky focus switching/centering | biri | Integrated |
+| Pointer warp on carousel confirm | biri | Integrated |
+| Hidden-workspace child placement | biri | Integrated |
+| Spawn floating relative to cursor | Naxdy | Integrated |
+| Blur brightness/contrast | Naxdy | Integrated |
+| Layer fade in/out | Naxdy | Deferred — see `UNIMPLEMENTED.md` |
+| HDR scanout colour pipelines, post-blend encode, HDR cursor plane | niri-spicy | Deferred — see `UNIMPLEMENTED.md` |
+| Screenshot2 `CaptureWorkspace` | Naxdy | Deferred — old interface captures all outputs; see `UNIMPLEMENTED.md` |
 
 ## Architecture, configuration, tooling
 

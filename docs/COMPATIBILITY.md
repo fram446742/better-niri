@@ -21,7 +21,7 @@
 | Rust | toolchain | MSRV 1.95 (edition 2024) | |
 
 Verified at this pin: `cargo check --workspace`, `cargo test --workspace`
-(892 tests), `cargo test -p niri --no-default-features` (423 tests),
+(894 tests), `cargo test -p niri --no-default-features` (425 tests),
 `cargo clippy --workspace --all-targets` (no errors) and `cargo fmt --check`.
 Hardware: DP-1 on RADV passed Vulkan, VRR, 10-bit, explicit sync, multi-device
 and HDR signalling; other GPUs/panels are still untested.

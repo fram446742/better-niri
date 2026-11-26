@@ -1,7 +1,7 @@
 //! Command-line parsing, kept in the library so it can be tested without a
 //! display or a running niri.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::annotate::Annotation;
 use crate::editor::{self, AnnotateOptions};
@@ -77,6 +77,14 @@ where
     S: Into<String>,
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
+    // Hidden layer-overlay worker spawned by `pin add --layer`.
+    if args.first().map(String::as_str) == Some("pin-view") {
+        let path = args
+            .get(1)
+            .ok_or_else(|| "`pin-view` needs an image path".to_owned())?;
+        crate::pin_view::run(Path::new(path)).map_err(|err| format!("{err:#}"))?;
+        std::process::exit(0);
+    }
     if let Some((index, word)) = subcommand_index(&args) {
         let remaining = args
             .iter()

@@ -1,16 +1,12 @@
-//! File-backed pins without a compositor UI.
+//! File-backed pins, with an optional layer-shell overlay.
 //!
-//! A real always-on-top pin needs a Wayland layer-shell surface. niri's IPC has
-//! no request to create one, and better-shot deliberately does not ship a
-//! layer-shell client just to fake it. Instead, `pin` copies the image to a
-//! stable path under `$XDG_STATE_HOME/better-shot/pins/` and opens that copy in
-//! an external viewer (`$BETTER_SHOT_VIEWER`, then `xdg-open`).
-//!
-//! That is a **documented approximation**, not a floating compositor pin: the
-//! viewer window is managed normally, can be covered, and does not survive
-//! viewer restarts unless it is re-opened. `pin list` / `pin unpin` manage the
-//! stable copies. The alternative, a layer-shell pin, would require a GUI
-//! toolkit and is out of scope for this CLI.
+//! Every pin copies the image to a stable path under
+//! `$XDG_STATE_HOME/better-shot/pins/`. By default the copy is opened in an
+//! external viewer (`$BETTER_SHOT_VIEWER`, then `xdg-open`); that window is
+//! managed normally and can be covered. `pin add --layer` instead spawns a
+//! detached `better-shot pin-view PATH` child that renders the copy on a
+//! click-through `zwlr_layer_shell_v1` overlay. `pin list` / `pin unpin` manage
+//! the stable copies and terminate overlay children.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -32,11 +28,12 @@ better-shot pin unpin ID [--json]
   --id ID               Pin id (default: pin-<epoch>-<pid>)
   --no-open             Register the pin without launching a viewer
   --viewer CMD          Viewer program (default: $BETTER_SHOT_VIEWER, then xdg-open)
+  --layer               Pin on a click-through layer-shell overlay instead of a viewer
   --json                Print a JSON report
 
-  A pin is a stable copy plus an external viewer window, not a Wayland
-  layer-shell surface: niri's IPC cannot create floating pins and better-shot
-  does not fake one. `pin unpin` removes the registry entry and the copy.
+  Without --layer a pin is a stable copy plus an external viewer window.
+  `pin unpin` removes the registry entry and the copy, and terminates a layer
+  overlay child if one is running.
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +43,8 @@ pub struct Pin {
     pub source: Option<PathBuf>,
     pub created_unix: u64,
     pub viewer: Option<String>,
+    /// PID of the layer overlay child, if the pin was added with `--layer`.
+    pub pid: Option<u64>,
 }
 
 impl Pin {
@@ -56,6 +55,8 @@ impl Pin {
             "source": self.source.as_ref().map(|path| path.display().to_string()),
             "created_unix": self.created_unix,
             "viewer": self.viewer,
+            "pid": self.pid,
+            "pid_alive": self.pid.is_some_and(pid_alive),
         })
     }
 
@@ -86,6 +87,7 @@ impl Pin {
                 .get("viewer")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            pid: object.get("pid").and_then(Value::as_u64),
         })
     }
 }
@@ -104,6 +106,7 @@ pub struct PinOptions {
     pub id: Option<String>,
     pub no_open: bool,
     pub viewer: Option<String>,
+    pub layer: bool,
     pub json: bool,
 }
 
@@ -115,6 +118,7 @@ impl Default for PinOptions {
             id: None,
             no_open: false,
             viewer: None,
+            layer: false,
             json: false,
         }
     }
@@ -150,6 +154,14 @@ where
                 no_value(&flag, inline)?;
                 options.no_open = true;
             }
+            "--layer" => {
+                no_value(&flag, inline)?;
+                options.layer = true;
+            }
+            "--no-layer" => {
+                no_value(&flag, inline)?;
+                options.layer = false;
+            }
             "--id" => options.id = Some(value(&flag, inline, &mut args)?),
             "--viewer" => options.viewer = Some(value(&flag, inline, &mut args)?),
             other if other.starts_with('-') => {
@@ -173,7 +185,11 @@ where
                 return Err("`pin unpin` takes the id as its argument, not --id".to_owned());
             }
             options.id = Some(words[1].clone());
-            if options.path.is_some() || options.no_open || options.viewer.is_some() {
+            if options.path.is_some()
+                || options.no_open
+                || options.viewer.is_some()
+                || options.layer
+            {
                 return Err("`pin unpin` only accepts --json".to_owned());
             }
         }
@@ -197,7 +213,11 @@ fn require_words(words: &[String], expected: usize, usage: &str) -> Result<(), S
 }
 
 fn reject_add_only(options: &PinOptions, command: &str) -> Result<(), String> {
-    if options.path.is_some() || options.id.is_some() || options.no_open || options.viewer.is_some()
+    if options.path.is_some()
+        || options.id.is_some()
+        || options.no_open
+        || options.viewer.is_some()
+        || options.layer
     {
         return Err(format!("{command} only accepts --json"));
     }
@@ -315,12 +335,15 @@ pub fn run_with_state(state: &Path, options: &PinOptions) -> Result<String, Stri
                 Ok(pins
                     .iter()
                     .map(|pin| {
-                        format!(
-                            "{:<24}  {}  {}",
-                            pin.id,
-                            pin.path.display(),
-                            pin.viewer.as_deref().unwrap_or("not opened")
-                        )
+                        let state = match (pin.pid, &pin.viewer) {
+                            (Some(pid), _) => match pid_alive(pid) {
+                                true => format!("layer pid {pid}"),
+                                false => format!("layer pid {pid} (not running)"),
+                            },
+                            (None, Some(viewer)) => viewer.clone(),
+                            (None, None) => "not opened".to_owned(),
+                        };
+                        format!("{:<24}  {}  {state}", pin.id, pin.path.display())
                     })
                     .collect::<Vec<_>>()
                     .join("\n"))
@@ -337,6 +360,9 @@ pub fn run_with_state(state: &Path, options: &PinOptions) -> Result<String, Stri
                 .position(|pin| pin.id == id)
                 .ok_or_else(|| format!("no pin with id `{id}`"))?;
             let pin = pins.remove(index);
+            if let Some(pid) = pin.pid {
+                terminate(pid);
+            }
             save(state, &pins)?;
             remove_pinned_copy(&pin.path);
             let value = json!({
@@ -394,6 +420,7 @@ fn add(state: &Path, options: &PinOptions) -> Result<String, String> {
         source: Some(source.clone()),
         created_unix: now_unix(),
         viewer: None,
+        pid: None,
     };
     pins.push(pin);
     let index = pins.len() - 1;
@@ -402,7 +429,25 @@ fn add(state: &Path, options: &PinOptions) -> Result<String, String> {
         return Err(err);
     }
 
-    if !options.no_open {
+    if options.layer {
+        let pid = match spawn_overlay(&stable) {
+            Ok(pid) => pid,
+            Err(err) => {
+                pins.remove(index);
+                save(state, &pins)?;
+                remove_pinned_copy(&stable);
+                return Err(err);
+            }
+        };
+        pins[index].pid = Some(pid);
+        if let Err(err) = save(state, &pins) {
+            terminate(pid);
+            pins.remove(index);
+            let _ = save(state, &pins);
+            remove_pinned_copy(&stable);
+            return Err(err);
+        }
+    } else if !options.no_open {
         let viewer = options
             .viewer
             .clone()
@@ -436,6 +481,12 @@ fn add(state: &Path, options: &PinOptions) -> Result<String, String> {
     let value = pin.to_json();
     Ok(if options.json {
         pretty(&value)
+    } else if let Some(pid) = pin.pid {
+        format!(
+            "pinned {} as {} on the layer overlay (pid {pid})",
+            pin.path.display(),
+            pin.id
+        )
     } else {
         match &pin.viewer {
             Some(viewer) => format!(
@@ -455,6 +506,46 @@ fn add(state: &Path, options: &PinOptions) -> Result<String, String> {
             ),
         }
     })
+}
+
+fn spawn_overlay(path: &Path) -> Result<u64, String> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return Err(
+            "cannot launch layer pin: WAYLAND_DISPLAY is unset; run inside a Wayland \
+             session or drop --layer"
+                .to_owned(),
+        );
+    }
+    let executable = std::env::current_exe()
+        .map_err(|err| format!("cannot locate the better-shot executable: {err}"))?;
+    let child = Command::new(executable)
+        .arg("pin-view")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("cannot launch layer pin overlay: {err}"))?;
+    Ok(u64::from(child.id()))
+}
+
+fn pid_arg(pid: u64) -> Option<i32> {
+    // Never pass 0 or -1: those signal a process group or every process.
+    i32::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+fn pid_alive(pid: u64) -> bool {
+    // Signal 0 only checks whether the process exists.
+    pid_arg(pid).is_some_and(|pid| unsafe { libc::kill(pid, 0) == 0 })
+}
+
+fn terminate(pid: u64) {
+    // Best effort: an already-dead (ESRCH) child is not an error.
+    if let Some(pid) = pid_arg(pid) {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
 }
 
 fn unique_id(pins: &[Pin]) -> String {
@@ -535,6 +626,80 @@ mod tests {
         assert_eq!(options.id.as_deref(), Some("one"));
 
         assert_eq!(parse_cli(["--help"]).unwrap(), PinCli::Help);
+    }
+
+    #[test]
+    fn parses_layer_flags() {
+        let PinCli::Run(options) = parse_cli(["a.png", "--layer"]).unwrap() else {
+            panic!("expected run");
+        };
+        assert!(options.layer);
+        let PinCli::Run(options) = parse_cli(["a.png", "--layer", "--no-layer"]).unwrap() else {
+            panic!("expected run");
+        };
+        assert!(!options.layer);
+        for args in [
+            vec!["list", "--layer"],
+            vec!["unpin", "one", "--layer"],
+            vec!["a.png", "--layer=1"],
+        ] {
+            assert!(parse_cli(args.clone()).is_err(), "accepted {args:?}");
+        }
+    }
+
+    #[test]
+    fn registry_roundtrips_pid_and_tolerates_missing() {
+        let state = temp_state("pid");
+        let path = state.join("shot.png");
+        std::fs::write(&path, b"x").unwrap();
+        let registry = json!({
+            "version": VERSION,
+            "pins": [{"id": "old", "path": path.display().to_string(), "created_unix": 1}],
+        });
+        std::fs::write(
+            registry_path(&state),
+            serde_json::to_string(&registry).unwrap(),
+        )
+        .unwrap();
+        let pins = load(&state).unwrap();
+        assert_eq!(pins[0].pid, None);
+        assert_eq!(pins[0].to_json()["pid"], Value::Null);
+        assert_eq!(pins[0].to_json()["pid_alive"], false);
+
+        let live = Pin {
+            id: "new".to_owned(),
+            path,
+            source: None,
+            created_unix: 2,
+            viewer: None,
+            pid: Some(u64::from(std::process::id())),
+        };
+        save(&state, std::slice::from_ref(&live)).unwrap();
+        let pins = load(&state).unwrap();
+        assert_eq!(pins, vec![live]);
+        assert_eq!(pins[0].to_json()["pid_alive"], true);
+    }
+
+    #[test]
+    fn unpin_tolerates_a_dead_pid() {
+        let state = temp_state("dead-pid");
+        let image = temp_image("dead-pid");
+        let options = PinOptions {
+            path: Some(image),
+            no_open: true,
+            ..PinOptions::default()
+        };
+        run_with_state(&state, &options).unwrap();
+        let mut pins = load(&state).unwrap();
+        pins[0].pid = Some(0x7fff_ffff);
+        save(&state, &pins).unwrap();
+        let unpin = PinOptions {
+            command: PinCommand::Unpin,
+            id: Some(pins[0].id.clone()),
+            ..PinOptions::default()
+        };
+        run_with_state(&state, &unpin).unwrap();
+        assert!(load(&state).unwrap().is_empty());
     }
 
     #[test]

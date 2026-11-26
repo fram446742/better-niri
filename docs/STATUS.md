@@ -105,8 +105,8 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `scripts/test-all.sh` | **48/48 PASS** (compositor, feature matrix, visual-test build, 9 workspaces, packaging, completions, plugins, nsticky) |
-| `cargo test --workspace` | pass, 892 tests, 0 failed |
-| `cargo test -p niri --no-default-features` | pass, 423 tests, 0 failed |
+| `cargo test --workspace` | pass, 894 tests, 0 failed |
+| `cargo test -p niri --no-default-features` | pass, 425 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |
 | `cargo test -p niri-ipc --features clap` | pass |
 | `cargo build -p niri-visual-tests` | pass |
@@ -119,10 +119,10 @@ Verified on this branch:
 
 **Manual/remaining:** subjective full-client checks (tearing in a game, a
 commit-timing client, an output on the second GPU, rotated transitions, HDR
-mixed contrast, popups/animations, a real portal client) and hardware
-VRAM/GTT profiling across DPMS cycles (the renderer cache cleanup is
-implemented and unit-tested; measuring the driver-side counters still needs a
-DRM seat). See `docs/validation/hardware.md` and `docs/TESTING.md`.
+mixed contrast, popups/animations, a real portal client), hardware profiling
+across DPMS cycles, and the deferred ports in `docs/UNIMPLEMENTED.md` (window
+groups, layer fades, HDR scan-out colour pipelines/post-blend/HDR cursor,
+Screenshot2). See `docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published
 
