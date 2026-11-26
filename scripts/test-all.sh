@@ -107,6 +107,13 @@ for app in "${apps[@]}"; do
     fi
 done
 
+# Stack manager ported from zgavin/niri-sidepanels (own workspace).
+run_in "better-sidepanels/stack" "sidepanels-stack-fmt" cargo fmt --check
+run_in "better-sidepanels/stack" "sidepanels-stack-tests" cargo test
+if [ "$QUICK" = 0 ]; then
+    run_in "better-sidepanels/stack" "sidepanels-stack-clippy" cargo clippy --all-targets
+fi
+
 # --- packaging, completions, plugins, external nsticky -------------------
 
 run packaging-verify bash "$ROOT/packaging/scripts/verify.sh"

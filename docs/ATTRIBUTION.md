@@ -35,6 +35,7 @@ licences behind the code. It is updated whenever a feature series is integrated.
 | https://github.com/Asthestarsfalll/piri | Asthestarsfalll and contributors | MIT | Automation architecture reference (compiled plugins, rules, run-or-raise, swallow); better-companion is an in-tree implementation and vendors no Piri code |
 | https://github.com/lonerOrz/nsticky | lonerOrz | BSD-3-Clause | Sticky-window daemon that better-nsticky extends |
 | better-nsticky | fram446742 and contributors | BSD-3-Clause | Staging, scratchpads, rules, persistence, selector, compatibility integration |
+| https://github.com/zgavin/niri-sidepanels | zgavin and contributors | MIT | Floating sidepanel stacks (`toggle-window`/`send`/`flip`/`focus`/`reorder`/struts), ported into `better-sidepanels/stack` |
 
 Individual contributors visible in the audited histories include (non-exhaustive):
 alter, andriyDev, arthur-ba1, barrulus, bczhc, Carlos Ferrabone, cmeissl,

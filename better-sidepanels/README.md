@@ -1,5 +1,16 @@
 # better-sidepanels
 
+This workspace contains two binaries:
+
+- `better-sidepanels` — the layer-shell panel/bar described below.
+- `better-sidepanels-stack` (in `stack/`) — the floating left/right window-stack
+  manager adapted from [zgavin/niri-sidepanels](https://github.com/zgavin/niri-sidepanels)
+  (MIT). It provides `toggle-window`, `send`, `toggle-visibility`, `flip`,
+  `focus`, `reorder`, `close`, `move-from`, `init` and `listen`, with the
+  reference's TOML config and managed struts. Build/run it from `stack/`; it owns
+  its own `~/.config/better-sidepanels-stack/config.toml` so it does not clash
+  with the bar's JSON config.
+
 Persistent layer-shell panels for niri: a side dock, a top/bottom bar, or several
 of them on every output. Part of the Better Desktop ecosystem; lives inside this
 repository so no new repository is created (excluded from niri's Cargo
