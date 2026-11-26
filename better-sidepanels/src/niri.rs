@@ -118,6 +118,7 @@ pub struct Window {
     pub id: u64,
     pub title: Option<String>,
     pub app_id: Option<String>,
+    pub is_focused: bool,
 }
 
 impl Window {
@@ -132,6 +133,10 @@ impl Window {
                 .get("app_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            is_focused: value
+                .get("is_focused")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 }
@@ -141,11 +146,20 @@ pub fn parse_focused_window(reply: &Value) -> Option<Window> {
     ok_field(reply, "FocusedWindow").and_then(Window::from_json)
 }
 
+/// Parses `{"Ok": {"Windows": [...]}}`.
+pub fn parse_windows(reply: &Value) -> Vec<Window> {
+    ok_field(reply, "Windows")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Window::from_json).collect())
+        .unwrap_or_default()
+}
+
 /// niri actions a panel row can trigger without invoking the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NiriVerb {
     FocusWorkspace,
+    FocusWindow,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
     FocusWorkspacePrevious,
@@ -155,6 +169,7 @@ impl NiriVerb {
     pub fn describe(self) -> &'static str {
         match self {
             Self::FocusWorkspace => "focus-workspace",
+            Self::FocusWindow => "focus-window",
             Self::FocusWorkspaceUp => "focus-workspace-up",
             Self::FocusWorkspaceDown => "focus-workspace-down",
             Self::FocusWorkspacePrevious => "focus-workspace-previous",
@@ -192,6 +207,15 @@ impl NiriAction {
     pub fn focus_id(id: u64) -> Self {
         Self {
             niri: NiriVerb::FocusWorkspace,
+            index: None,
+            name: None,
+            id: Some(id),
+        }
+    }
+
+    pub fn focus_window(id: u64) -> Self {
+        Self {
+            niri: NiriVerb::FocusWindow,
             index: None,
             name: None,
             id: Some(id),
@@ -239,6 +263,12 @@ impl NiriAction {
                     return Err("niri focus-workspace needs `index`, `name` or `id`".to_owned());
                 };
                 Ok(json!({ "Action": { "FocusWorkspace": { "reference": reference } } }))
+            }
+            NiriVerb::FocusWindow => {
+                let id = self
+                    .id
+                    .ok_or_else(|| "focus-window needs a window id".to_owned())?;
+                Ok(json!({ "Action": { "FocusWindow": { "id": id } } }))
             }
             NiriVerb::FocusWorkspaceUp => Ok(json!({ "Action": { "FocusWorkspaceUp": {} } })),
             NiriVerb::FocusWorkspaceDown => Ok(json!({ "Action": { "FocusWorkspaceDown": {} } })),

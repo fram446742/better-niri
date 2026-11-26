@@ -204,6 +204,9 @@ pub fn build_runtime(
         activity,
     )?);
     registry.register(companion_rotate::Rotate::from_state_dir()?);
+    registry.register(companion_niri::ScreenTime::from_state_dir(
+        companion_niri::Compositor::from_env(),
+    )?);
     let adapters = companion_adapters::Adapters::from_state_dir()?;
     let bus = EventBus::new();
     adapters.set_event_bus(bus.clone());
@@ -531,6 +534,7 @@ mod tests {
                 "rotate",
                 "rules",
                 "scratchpad",
+                "screentime",
                 "session",
                 "stage",
                 "swallow",

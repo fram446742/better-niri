@@ -23,8 +23,9 @@ is excluded from the niri Cargo workspace and keeps its own lockfile/build.
 | `companion-adapters` | `session.*`, `monitor.*`, `audio.*`, `wallpaper.*`, `adapters.*` | Optional ecosystem adapters: event subscriptions, command templates, timeouts, dedup and failure policy |
 | `companion-idle` | `idle.*` | Activity clock, idle/suspend policy, inhibitors, logind and DPMS actions |
 | `companion-rotate` | `rotate.*` | Orientation source, hysteresis and niri output transform/position |
+| `companion-niri` | `screentime.*` | Per-app usage time sampled from the focused window, persisted as seconds |
 | `companion-niri` | `swallow.*` | Terminal swallowing: minimize a terminal while its launched child is open |
-| `companion-niri` | `compositor.*`, `parker.*`, `windows.*`, `marks.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement, native sticky and persistent window marks |
+| `companion-niri` | `compositor.*`, `parker.*`, `windows.*`, `marks.*` | niri IPC bridge, event tracker, park/restore, run-or-raise/singleton, placement, focused-window cwd, native sticky and persistent window marks |
 | `companion-niri` | `stage.*`, `scratchpad.*` | Staged windows and named scratchpads on the shared parking store |
 | `companion-niri` | `nsticky.*` | Compatibility aliases for the standalone nsticky CLI verbs |
 | `companion-daemon` | — | `better-companion` Unix-socket server |

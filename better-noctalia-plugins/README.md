@@ -19,6 +19,7 @@ does not add a runtime dependency to the compositor or the companions.
 | `better-audio` | default sink | cycle default sink | re-apply routing rules | cycle default sink |
 | `better-wallpaper` | active scene | reapply the active scene | print the scene mapping in a terminal | cycle scenes |
 | `better-sidepanels` | — | validate the config | send `SIGHUP` to reload | reload |
+| `better-screentime` | total tracked time | open the per-app ranking | companion command reference | — |
 
 Each plugin declares `plugin_api = 24` (argument-array `noctalia.runAsync`), so
 it needs a Noctalia release that supports API 24 or newer. The widgets degrade

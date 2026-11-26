@@ -126,6 +126,12 @@ fn run(
     // probing, so these loops stay cheap.
     spawn_ticker(registry.clone(), "idle", "tick", Duration::from_secs(5));
     spawn_ticker(registry.clone(), "rotate", "tick", Duration::from_secs(1));
+    spawn_ticker(
+        registry.clone(),
+        "screentime",
+        "tick",
+        Duration::from_secs(1),
+    );
 
     for stream in listener.incoming() {
         match stream {

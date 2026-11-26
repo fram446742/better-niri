@@ -76,6 +76,7 @@ rows stay blank; every other module still works.
 | `network`      | Interface state and rx/tx rates                         | `/sys/class/net/<if>/…`                                       |
 | `volume`       | Sink volume and mute state                              | `pactl`, falling back to `wpctl`                              |
 | `tray`         | StatusNotifierItem icons, left-click activates          | `org.kde.StatusNotifierWatcher` + item icons                  |
+| `taskbar`      | Open windows, focused highlighted; click focuses        | niri IPC `Windows`                                            |
 | `custom`       | First line of a shell command                           | `sh -c`                                                       |
 
 Module fields:
@@ -91,6 +92,7 @@ Module fields:
 { "kind": "network", "interval_secs": 2, "interface": "wlan0" }
 { "kind": "volume", "interval_secs": 5 }
 { "kind": "tray", "interval_secs": 1 }
+{ "kind": "taskbar", "interval_secs": 1, "max_chars": 32 }
 { "kind": "custom", "command": "date +%s", "interval_secs": 10 }
 ```
 

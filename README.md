@@ -26,6 +26,23 @@ Every monitor has an independent set of workspaces, and there's always one empty
 The workspace arrangement is preserved across disconnecting and connecting monitors where it makes sense.
 When a monitor disconnects, its workspaces will move to another monitor, but upon reconnection they will move back to the original monitor.
 
+## Better Desktop
+
+This tree is the Better Desktop fork of niri. Alongside the compositor it ships
+a set of small, independent tools that share niri's IPC and configuration
+conventions: companion (automation, scratchpads, sticky workflow), session,
+monitor, settings, shot, audio, wallpaper, sidepanels and the Noctalia plugin
+source. They live here as separate workspaces so each can be built, tested and
+released on its own.
+
+The compositor is built from niri and the work of its community: niri-elite,
+biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
+Smithay forks. The companion tools follow ideas from Piri, nsticky,
+niri-sidepanels, nirinit, niri-session-manager, NiriMod, niri_display_manager,
+PWSW, Nirisnap, niri-shot, hyprlax and Noctalia. Documentation, provenance and
+the status of every reference project are in `docs/ECOSYSTEM_RESEARCH.md` and
+`docs/ATTRIBUTION.md`.
+
 ## Features
 
 - Built from the ground up for scrollable tiling

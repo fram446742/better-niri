@@ -341,6 +341,33 @@ impl Windows {
     }
 }
 
+impl Windows {
+    fn cwd(&self, params: &Value) -> Result<Value, String> {
+        let id = params.get("window").and_then(Value::as_u64);
+        let window = self
+            .windows()?
+            .into_iter()
+            .find(|window| match id {
+                Some(id) => window.id == id,
+                None => window.is_focused,
+            })
+            .ok_or_else(|| match id {
+                Some(id) => format!("window {id} is not mapped"),
+                None => "no focused window".to_owned(),
+            })?;
+        let pid = window
+            .pid
+            .ok_or_else(|| format!("window {} has no known pid", window.id))?;
+        let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .map_err(|err| format!("cannot read the working directory of pid {pid}: {err}"))?;
+        Ok(json!({
+            "window": window.id,
+            "pid": pid,
+            "cwd": cwd.to_string_lossy(),
+        }))
+    }
+}
+
 impl Context for Windows {
     fn namespace(&self) -> &'static str {
         "windows"
@@ -464,6 +491,16 @@ impl Context for Windows {
             ])
             .with_permissions(&["niri"]),
             ActionInfo::new(
+                "cwd",
+                "Working directory of `window` (or the focused window), read from /proc",
+            )
+            .with_params([ParamInfo::integer(
+                "window",
+                false,
+                "window id, defaults to the focused window",
+            )])
+            .with_permissions(&["niri"]),
+            ActionInfo::new(
                 "list-sticky",
                 "List windows with the native sticky flag in numeric id order",
             )
@@ -526,6 +563,7 @@ impl Context for Windows {
             "move-to-output" => self.move_to_output(params),
             "toggle-sticky" => self.toggle_sticky(params),
             "set-sticky" => self.set_sticky(params),
+            "cwd" => self.cwd(params),
             "list-sticky" => self.list_sticky(),
             "focus-output" => {
                 let output = params
@@ -1087,6 +1125,42 @@ mod tests {
             requests[1],
             Request::Action(Action::ToggleWindowSticky { id: Some(10) })
         ));
+    }
+
+    #[test]
+    fn reports_the_focused_window_working_directory() {
+        let dir = temp_dir("cwd");
+        let socket = dir.join("niri.sock");
+        let pid = std::process::id() as i32;
+        let server = fake_sequence(
+            &socket,
+            vec![json!({ "Ok": { "Windows": [{
+                "id": 10,
+                "title": "shell",
+                "app_id": "Alacritty",
+                "pid": pid,
+                "workspace_id": 1,
+                "is_focused": true,
+                "is_floating": false,
+                "is_sticky": false,
+                "is_urgent": false,
+                "is_minimized": false,
+                "layout": {
+                    "pos_in_scrolling_layout": [1, 1],
+                    "tile_size": [100.0, 100.0],
+                    "window_size": [100, 100],
+                    "tile_pos_in_workspace_view": [0.0, 0.0],
+                    "window_offset_in_tile": [0.0, 0.0]
+                },
+                "focus_timestamp": null
+            }] } })],
+        );
+        let windows = Windows::new(Compositor::at(&socket));
+        let value = windows.call("cwd", &Value::Null).unwrap();
+        assert_eq!(value["window"], 10);
+        assert_eq!(value["pid"], pid);
+        assert!(std::path::Path::new(value["cwd"].as_str().unwrap()).is_dir());
+        server.join().unwrap();
     }
 
     #[test]

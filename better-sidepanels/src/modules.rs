@@ -32,6 +32,8 @@ pub enum ModuleKind {
     Volume,
     /// StatusNotifierItem tray icons.
     Tray,
+    /// Open windows, focused one highlighted; click focuses the window.
+    Taskbar,
     /// A shell command whose first output line is shown.
     #[default]
     Custom,
@@ -50,6 +52,7 @@ impl ModuleKind {
             Self::Network,
             Self::Volume,
             Self::Tray,
+            Self::Taskbar,
             Self::Custom,
         ]
     }
@@ -71,6 +74,7 @@ impl ModuleKind {
             Self::Network => "network",
             Self::Volume => "volume",
             Self::Tray => "tray",
+            Self::Taskbar => "taskbar",
             Self::Custom => "custom",
         }
     }
@@ -331,10 +335,40 @@ pub fn evaluate(
             None => ModuleOutput::default(),
         },
         ModuleKind::Tray => tray_output(),
+        ModuleKind::Taskbar => taskbar_output(env, spec),
         ModuleKind::Custom => match env.command_line(&spec.command) {
             Some(line) if !line.is_empty() => ModuleOutput::text(clip(&line, max)),
             _ => ModuleOutput::default(),
         },
+    }
+}
+
+fn taskbar_output(env: &mut dyn Env, spec: &ModuleSpec) -> ModuleOutput {
+    let reply = env.niri(&Value::String("Windows".to_owned()));
+    let Some(reply) = reply else {
+        return ModuleOutput::default();
+    };
+    let max = spec.max_chars();
+    let mut items = Vec::new();
+    for window in niri::parse_windows(&reply) {
+        let app = window.app_id.as_deref().unwrap_or("");
+        let title = window.title.as_deref().unwrap_or("untitled");
+        let label = if app.is_empty() {
+            title.to_owned()
+        } else {
+            format!("{app}: {title}")
+        };
+        items.push(OutputItem {
+            label: clip(&label, max),
+            action: Some(ActionSpec::Niri(NiriAction::focus_window(window.id))),
+            active: window.is_focused,
+            occupied: false,
+            pixmap: None,
+        });
+    }
+    ModuleOutput {
+        text: String::new(),
+        items,
     }
 }
 
@@ -1097,11 +1131,35 @@ mod tests {
     }
 
     #[test]
+    fn taskbar_lists_windows_and_focuses_them() {
+        let mut env = MockEnv::new(0).reply(
+            "Windows",
+            serde_json::json!({
+                "Ok": { "Windows": [
+                    { "id": 1, "title": "Terminal", "app_id": "Alacritty", "is_focused": true },
+                    { "id": 2, "title": "Browser", "app_id": "firefox", "is_focused": false }
+                ]}
+            }),
+        );
+        let spec = ModuleSpec::of(ModuleKind::Taskbar, 1);
+        let out = evaluate(&spec, &mut env, &mut ModuleState::Idle, None);
+        assert_eq!(out.items.len(), 2);
+        assert_eq!(out.items[0].label, "Alacritty: Terminal");
+        assert!(out.items[0].active);
+        assert_eq!(
+            out.items[1].action,
+            Some(ActionSpec::Niri(NiriAction::focus_window(2)))
+        );
+        assert!(!out.items[1].active);
+    }
+
+    #[test]
     fn formats_and_truncates_window_titles() {
         let window = Window {
             id: 1,
             title: Some("A very long document title that keeps going".into()),
             app_id: Some("org.example.Notes".into()),
+            is_focused: false,
         };
         assert_eq!(
             format_window_title(Some(&window), "{app}: {title}"),
@@ -1113,6 +1171,7 @@ mod tests {
                     id: 2,
                     title: Some("Title".into()),
                     app_id: None,
+                    is_focused: false,
                 }),
                 "{app} - {title}"
             ),
