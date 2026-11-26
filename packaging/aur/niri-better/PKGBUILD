@@ -417,6 +417,8 @@ package_better-noctalia-plugins() {
   install -d "${pkgdir}/usr/share/better-desktop/noctalia-plugins"
   cp -a "${srcdir}/${_pkgname}/better-noctalia-plugins/." \
     "${pkgdir}/usr/share/better-desktop/noctalia-plugins/"
+  rm -f "${pkgdir}/usr/share/better-desktop/noctalia-plugins/.gitignore" \
+    "${pkgdir}/usr/share/better-desktop/noctalia-plugins/LICENSE"
   find "${pkgdir}/usr/share/better-desktop/noctalia-plugins" -name verify.sh \
     -exec chmod 755 {} +
   _install_doc better-noctalia-plugins better-noctalia-plugins/README.md
