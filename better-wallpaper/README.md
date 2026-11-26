@@ -1,8 +1,9 @@
 # better-wallpaper
 
-Per-workspace wallpaper scenes for niri. Part of the Better Desktop ecosystem;
-lives inside this repository so no new repository is created (excluded from
-niri's Cargo workspace).
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
+Per-workspace wallpaper scenes for niri. It is its own Cargo workspace with its
+own lockfile and build.
 
 ## Features
 

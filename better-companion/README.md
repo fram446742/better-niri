@@ -1,12 +1,13 @@
 # better-companion
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 One daemon with bounded-context crates, reachable over a Unix socket. This is
 the first slice of the Better Desktop companion plan: the shared protocol, the
 parking/automation/hooks/system/idle/rotate contexts, the daemon and
 `companionctl`.
 
-The workspace lives inside `better-niri` so no new repositories are created; it
-is excluded from the niri Cargo workspace and keeps its own lockfile/build.
+It is its own Cargo workspace with its own lockfile and build.
 
 ## Crates
 

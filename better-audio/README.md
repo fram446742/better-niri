@@ -1,8 +1,10 @@
 # better-audio
 
-Rule-based audio routing for PipeWire. Part of the Better Desktop ecosystem;
-lives inside this repository so no new repository is created (excluded from
-niri's Cargo workspace).
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
+Rule-based audio routing for PipeWire. It is its own Cargo workspace; the
+[Better Desktop](https://github.com/fram446742/better-desktop) repository
+documents the whole set and the `better` selector.
 
 ## How it works
 

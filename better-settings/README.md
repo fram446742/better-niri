@@ -1,8 +1,9 @@
 # better-settings
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 A GTK4/libadwaita control center and a scriptable CLI for niri's KDL config.
-Part of the Better Desktop ecosystem; lives inside this repository so no new
-repository is created (excluded from niri's Cargo workspace).
+It is its own Cargo workspace with its own lockfile and build.
 
 ## Why it edits text
 

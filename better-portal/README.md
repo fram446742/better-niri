@@ -1,5 +1,7 @@
 # better-portal
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 A standalone portal backend for **Screenshot**, **PickColor**, and
 **ScreenCast**. The compositor already serves the capture interfaces and its
 own ScreenCast backend; this daemon exposes the standard
@@ -13,9 +15,7 @@ unchanged while re-exporting Session/Request objects so the portal frontend can
 close them. The PipeWire node ids remain valid because the frontend connects to
 the same PipeWire daemon.
 
-better-portal lives inside this repository so no new repository is created. It
-is excluded from niri's Cargo workspace and keeps its own lockfile
-(`better-portal/Cargo.lock`).
+It is its own Cargo workspace with its own lockfile and build.
 
 ## Standalone build
 

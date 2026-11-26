@@ -1,10 +1,10 @@
 # better-session
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 Named **contexts** for niri: capture workspaces, windows, output configuration,
 hooks and optional links to the other Better Desktop apps, then restore them
-predictably. Part of the Better Desktop ecosystem; it lives inside this
-repository so no new repository is created (excluded from niri's Cargo
-workspace).
+predictably. It is its own Cargo workspace with its own lockfile and build.
 
 ## Features
 

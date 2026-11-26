@@ -1,5 +1,7 @@
 # Better Desktop — Noctalia plugins
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 Luau plugins that expose the Better Desktop companions in the Noctalia bar. They
 are thin presentation layers: every action runs the companion CLI with an
 argument array (no shell parsing), and every read uses its JSON output.

@@ -1,5 +1,7 @@
 # better-sidepanels
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 This workspace contains two binaries:
 
 - `better-sidepanels` — the layer-shell panel/bar described below.
@@ -12,9 +14,8 @@ This workspace contains two binaries:
   with the bar's JSON config.
 
 Persistent layer-shell panels for niri: a side dock, a top/bottom bar, or several
-of them on every output. Part of the Better Desktop ecosystem; lives inside this
-repository so no new repository is created (excluded from niri's Cargo
-workspace).
+of them on every output. It is its own Cargo workspace with its own lockfile and
+build.
 
 ## What it does
 

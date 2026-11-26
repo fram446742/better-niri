@@ -1,10 +1,11 @@
 # better-shot
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 Screenshot capture, a display-free annotation editor, capture history, pins,
 optional OCR and screen recording for niri. Supports clipboard output, HDR
 handling, multiple output formats, multi-output stitching and JSON metadata.
-Part of the Better Desktop ecosystem; lives inside this repository so no new
-repository is created (excluded from niri's Cargo workspace).
+It is its own Cargo workspace with its own lockfile and build.
 
 ## Modes and commands
 

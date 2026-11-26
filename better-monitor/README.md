@@ -1,8 +1,9 @@
 # better-monitor
 
+> Part of [Better Desktop](https://github.com/fram446742/better-desktop).
+
 Output profiles, rules and watch mode for niri, with validation, safe apply and
-rollback. Part of the Better Desktop ecosystem; it lives inside this repository
-so no new repository is created (excluded from niri's Cargo workspace).
+rollback. It is its own Cargo workspace with its own lockfile and build.
 
 `better-monitor` talks to niri through the IPC socket only. Fields that niri
 does not expose over IPC (HDR, startup focus, isolation, mirroring) are stored,
