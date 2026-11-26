@@ -128,3 +128,13 @@ When creating pull requests, please keep the following in mind.
 [cosmic-comp]: https://github.com/pop-os/cosmic-comp
 [anvil]: https://github.com/Smithay/smithay/tree/master/anvil
 [xwayland-satellite]: https://github.com/Supreeeme/xwayland-satellite
+
+
+## Rejected references and features
+
+When a reference project, fork or feature is not adopted, add a detailed entry
+to `docs/ECOSYSTEM_RESEARCH.md` under "Rejected and deferred ideas — permanent
+record". The entry must explain what it does, why it is not integrated, what
+would make us reconsider, and the alternative used. A one-line "rejected" is not
+enough, and the entry stays in the file permanently so future work does not
+re-audit the same idea without context.

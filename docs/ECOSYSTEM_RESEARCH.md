@@ -109,7 +109,13 @@ Noctalia plugin source is our integration layer.
 | official-plugins, community-plugins | reference |
 | better-noctalia-plugins | integrated (in-repo plugin source) |
 
-## Rejected and deferred ideas, in detail
+## Rejected and deferred ideas — permanent record
+
+This section is the permanent record for every reference project or feature we
+do not adopt. A rejection is only valid when it is written here with what the
+project does, why it is not integrated, what would make us reconsider, and the
+alternative we use. Do not remove entries when the ecosystem changes; update
+them instead.
 
 A one-line status is not enough to know whether a decision should be revisited.
 Each entry below explains what the project does, why it is not integrated, what

@@ -39,9 +39,10 @@ The compositor is built from niri and the work of its community: niri-elite,
 biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
 Smithay forks. The companion tools follow ideas from Piri, nsticky,
 niri-sidepanels, nirinit, niri-session-manager, NiriMod, niri_display_manager,
-PWSW, Nirisnap, niri-shot, hyprlax and Noctalia. Documentation, provenance and
-the status of every reference project are in `docs/ECOSYSTEM_RESEARCH.md` and
-`docs/ATTRIBUTION.md`.
+PWSW, Nirisnap, niri-shot, hyprlax and Noctalia. Documentation, provenance and the status of every reference project are in
+`docs/ECOSYSTEM_RESEARCH.md` and `docs/ATTRIBUTION.md`. The research file also
+holds the permanent record of rejected ideas: nothing is dropped without a
+written reason and the conditions that would make us revisit it.
 
 ## Features
 
