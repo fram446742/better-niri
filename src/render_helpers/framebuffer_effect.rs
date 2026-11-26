@@ -1009,7 +1009,9 @@ mod vulkan_tests {
             );
 
             let differing = plain
-                .as_chunks::<4>().0.iter()
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .zip(glass.chunks_exact(4))
                 .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
                 .count();

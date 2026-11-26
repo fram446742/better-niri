@@ -7944,11 +7944,10 @@ impl Niri {
         if let Some((zoom, pivot)) = magnifier_params {
             let scale_cursor = self.config.borrow().magnifier.scale_cursor;
             let mut magnifier_push = |elem| {
-                if !scale_cursor
-                    && let OutputRenderElements::Pointer(_) = &elem {
-                        push(elem);
-                        return;
-                    }
+                if !scale_cursor && let OutputRenderElements::Pointer(_) = &elem {
+                    push(elem);
+                    return;
+                }
                 let rescaled = RescaleRenderElement::from_element(Box::new(elem), pivot, zoom);
                 push(OutputRenderElements::Magnified(rescaled))
             };

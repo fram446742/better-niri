@@ -466,7 +466,9 @@ mod vulkan_tests {
                 .expect("copy the readback framebuffer");
             let pixels = renderer.map_texture(&mapping).expect("map the framebuffer");
             let lit = pixels
-                .as_chunks::<4>().0.iter()
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[2] > 0 || p[1] > 0 || p[0] > 0)
                 .count();
             assert!(

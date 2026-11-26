@@ -718,7 +718,9 @@ mod tests {
                 "far content stays unchanged"
             );
             assert!(
-                base.as_chunks::<4>().0.iter()
+                base.as_chunks::<4>()
+                    .0
+                    .iter()
                     .zip(lit.chunks_exact(4))
                     .all(|(b, l)| (0..3).all(|c| l[c] >= b[c])),
                 "light must never darken or replace underlying content"
@@ -1058,7 +1060,15 @@ mod tests {
                 0,
                 "hollow centre"
             );
-            assert!(first.as_chunks::<4>().0.iter().filter(|p| p[3] > 128).count() > 1000);
+            assert!(
+                first
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] > 128)
+                    .count()
+                    > 1000
+            );
             // Sample the straight top section: BOTH contours must wander, and the
             // band must have distinct thin necks and broad pools rather than a tube.
             let mut contours = Vec::new();
@@ -1086,7 +1096,9 @@ mod tests {
             let steady_next = frame(0.25, 0.);
             assert!(
                 steady
-                    .as_chunks::<4>().0.iter()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .zip(steady_next.chunks_exact(4))
                     .all(|(a, b)| a[3] == b[3]),
                 "zero strength keeps both contours still"
@@ -1102,22 +1114,23 @@ mod tests {
             }
             // Optional frames for visual review using the actual compositor shader.
             if scale == 1.
-                && let Some(dir) = std::env::var_os("NIRI_RAINBOW_PREVIEW_DIR") {
-                    std::fs::create_dir_all(&dir).unwrap();
-                    for i in 0..120 {
-                        let pixels = frame(f64::from(i) / 30., 0.75);
-                        let path = std::path::Path::new(&dir).join(format!("frame-{i:03}.png"));
-                        let file = std::fs::File::create(path).unwrap();
-                        let mut encoder = png::Encoder::new(file, size.w as u32, size.h as u32);
-                        encoder.set_color(png::ColorType::Rgba);
-                        encoder.set_depth(png::BitDepth::Eight);
-                        encoder
-                            .write_header()
-                            .unwrap()
-                            .write_image_data(&pixels)
-                            .unwrap();
-                    }
+                && let Some(dir) = std::env::var_os("NIRI_RAINBOW_PREVIEW_DIR")
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                for i in 0..120 {
+                    let pixels = frame(f64::from(i) / 30., 0.75);
+                    let path = std::path::Path::new(&dir).join(format!("frame-{i:03}.png"));
+                    let file = std::fs::File::create(path).unwrap();
+                    let mut encoder = png::Encoder::new(file, size.w as u32, size.h as u32);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder
+                        .write_header()
+                        .unwrap()
+                        .write_image_data(&pixels)
+                        .unwrap();
                 }
+            }
         }
     }
 }

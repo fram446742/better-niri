@@ -6829,12 +6829,13 @@ impl<W: LayoutElement> Column<W> {
 
         let tile_count = self.tiles.len();
         if tile_count == 1
-            && let WindowHeight::Auto { weight } = self.data[0].height {
-                assert_eq!(
-                    weight, 1.,
-                    "auto height weight must reset to 1 for a single window"
-                );
-            }
+            && let WindowHeight::Auto { weight } = self.data[0].height
+        {
+            assert_eq!(
+                weight, 1.,
+                "auto height weight must reset to 1 for a single window"
+            );
+        }
 
         let working_size = self.working_area.size;
         let extra_size = self.extra_size();

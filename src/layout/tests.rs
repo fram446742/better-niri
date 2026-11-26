@@ -1024,9 +1024,10 @@ impl Op {
                     return;
                 }
                 if let Some(parent_id) = params.parent_id
-                    && parent_id_causes_loop(layout, params.id, parent_id) {
-                        params.parent_id = None;
-                    }
+                    && parent_id_causes_loop(layout, params.id, parent_id)
+                {
+                    params.parent_id = None;
+                }
 
                 let is_floating = params.is_floating;
                 let win = TestWindow::new(params);
@@ -1113,9 +1114,10 @@ impl Op {
                 }
 
                 if let Some(parent_id) = params.parent_id
-                    && parent_id_causes_loop(layout, params.id, parent_id) {
-                        params.parent_id = None;
-                    }
+                    && parent_id_causes_loop(layout, params.id, parent_id)
+                {
+                    params.parent_id = None;
+                }
 
                 let is_floating = params.is_floating;
                 let win = TestWindow::new(params);
@@ -1137,9 +1139,10 @@ impl Op {
                 let mut ws_id = None;
 
                 if let Some(InteractiveMoveState::Moving(move_)) = &layout.interactive_move
-                    && move_.tile.window().0.id == params.id {
-                        return;
-                    }
+                    && move_.tile.window().0.id == params.id
+                {
+                    return;
+                }
 
                 match &mut layout.monitor_set {
                     MonitorSet::Normal { monitors, .. } => {
@@ -1185,9 +1188,10 @@ impl Op {
                 };
 
                 if let Some(parent_id) = params.parent_id
-                    && parent_id_causes_loop(layout, params.id, parent_id) {
-                        params.parent_id = None;
-                    }
+                    && parent_id_causes_loop(layout, params.id, parent_id)
+                {
+                    params.parent_id = None;
+                }
 
                 let is_floating = params.is_floating;
                 let win = TestWindow::new(params);
@@ -1562,17 +1566,19 @@ impl Op {
                 }
 
                 if let Some(parent_id) = new_parent_id
-                    && parent_id_causes_loop(layout, id, parent_id) {
-                        new_parent_id = None;
-                    }
+                    && parent_id_causes_loop(layout, id, parent_id)
+                {
+                    new_parent_id = None;
+                }
 
                 let mut update = false;
 
                 if let Some(InteractiveMoveState::Moving(move_)) = &layout.interactive_move
-                    && move_.tile.window().0.id == id {
-                        move_.tile.window().0.parent_id.set(new_parent_id);
-                        update = true;
-                    }
+                    && move_.tile.window().0.id == id
+                {
+                    move_.tile.window().0.parent_id.set(new_parent_id);
+                    update = true;
+                }
 
                 match &mut layout.monitor_set {
                     MonitorSet::Normal { monitors, .. } => {
@@ -1601,10 +1607,9 @@ impl Op {
                     }
                 }
 
-                if update
-                    && let Some(new_parent_id) = new_parent_id {
-                        layout.descendants_added(&new_parent_id);
-                    }
+                if update && let Some(new_parent_id) = new_parent_id {
+                    layout.descendants_added(&new_parent_id);
+                }
             }
             Op::SetForcedSize { id, size } => {
                 for (_mon, win) in layout.windows() {
@@ -1618,17 +1623,18 @@ impl Op {
                 let mut update = false;
 
                 if let Some(InteractiveMoveState::Moving(move_)) = &layout.interactive_move
-                    && move_.tile.window().0.id == id {
-                        if move_.tile.window().communicate() {
-                            update = true;
-                        }
-
-                        if update {
-                            // FIXME: serial.
-                            layout.update_window(&id, None);
-                        }
-                        return;
+                    && move_.tile.window().0.id == id
+                {
+                    if move_.tile.window().communicate() {
+                        update = true;
                     }
+
+                    if update {
+                        // FIXME: serial.
+                        layout.update_window(&id, None);
+                    }
+                    return;
+                }
 
                 match &mut layout.monitor_set {
                     MonitorSet::Normal { monitors, .. } => {
