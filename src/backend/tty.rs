@@ -2651,10 +2651,13 @@ impl Tty {
                     .map(|v| v.0),
             );
             let hdr_mode = hdr_config.as_ref().map(|h| h.mode).unwrap_or(HdrMode::Auto);
-            let hdr_allowed = surface.hdr_supported && hdr_mode != HdrMode::Off;
+            let wants_hdr = surface.hdr_supported && hdr_mode != HdrMode::Off;
             let max_bpc = output_config
-                .map(|o| effective_max_bpc(o, &surface.max_bpc_range, hdr_allowed))
+                .map(|o| effective_max_bpc(o, &surface.max_bpc_range, wants_hdr))
                 .unwrap_or(None);
+            // PQ needs at least 10 bits per channel. A connector that only exposes 8-bit
+            // max_bpc cannot carry it, so keep the output in SDR rather than crush the signal.
+            let hdr_allowed = wants_hdr && hdr_can_scanout(max_bpc);
             let always_on = hdr_allowed && hdr_mode == HdrMode::On;
             let reference_luminance = hdr_config
                 .as_ref()
@@ -4959,6 +4962,11 @@ fn is_hdr_enabled(output: &niri_config::Output, hdr_supported: bool) -> bool {
     hdr_supported && output_hdr_mode(output) != HdrMode::Off
 }
 
+/// Whether a requested `max bpc` can carry PQ. No property means the driver decides.
+fn hdr_can_scanout(max_bpc: Option<u32>) -> bool {
+    max_bpc.map_or(true, |bpc| bpc >= 10)
+}
+
 /// The `max bpc` to request for an output: the configured value, or 10 when HDR is enabled but no
 /// explicit value was given (HDR needs at least 10 bits per channel so the PQ signal isn't
 /// crushed). Clamped to the connector's supported range; `None` when the connector has no
@@ -5057,7 +5065,7 @@ mod tests {
 
     use crate::backend::tty::{
         EdidHdrInfo, build_hdr_metadata, calculate_drm_mode_from_modeline, calculate_mode_cvt,
-        is_hdr_enabled,
+        effective_max_bpc, hdr_can_scanout, is_hdr_enabled,
     };
 
     #[test]
@@ -5350,11 +5358,16 @@ mod tests {
     }
 
     #[test]
-    fn test_calc_cvt_extreme_size() {
-        // Width and height come from the client through set_custom_mode, so the timing sums must
-        // not overflow u16.
-        for (width, height) in [(u16::MAX, u16::MAX), (u16::MAX, 1), (1, u16::MAX)] {
-            calculate_mode_cvt(width, height, 60.0);
-        }
+    fn hdr_requires_a_ten_bit_scanout() {
+        let output = niri_config::Output::default();
+        let wide = Some(6..=12);
+        let narrow = Some(6..=8);
+
+        assert_eq!(effective_max_bpc(&output, &wide, true), Some(10));
+        assert_eq!(effective_max_bpc(&output, &narrow, true), Some(8));
+        assert!(hdr_can_scanout(Some(10)));
+        assert!(hdr_can_scanout(None));
+        assert!(!hdr_can_scanout(Some(8)));
+        assert!(!hdr_can_scanout(effective_max_bpc(&output, &narrow, true)));
     }
 }

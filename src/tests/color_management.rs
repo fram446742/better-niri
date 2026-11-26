@@ -70,6 +70,19 @@ fn probe_output_image_description_like_wayland_info() {
 }
 
 #[test]
+fn hdr_output_description_reports_mastering_volume() {
+    let mut f = fixture_with_hdr_mode_on();
+    f.add_output(1, (1920, 1080));
+
+    let output = f.niri_output(1);
+    let desc = f.niri().output_blend_description(&output);
+    assert!(desc.is_hdr(), "{desc:?}");
+    assert_eq!(desc.luminances, Some((100, 800, 203)));
+    assert_eq!(desc.mastering_luminance, Some((100, 800)));
+    assert!(desc.mastering_primaries.is_some());
+}
+
+#[test]
 fn create_parametric_hdr_description_like_mpv() {
     let mut f = fixture_with_hdr();
     f.add_output(1, (1920, 1080));

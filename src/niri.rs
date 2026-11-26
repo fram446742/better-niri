@@ -82,9 +82,10 @@ use smithay::utils::{
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::color::management::{
-    ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
-    Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
-    TransferFunction as CmTransferFunction, get_surface_description,
+    Chromaticities, ColorManagementState, ColorManagementSurfaceCachedState, Feature,
+    ImageDescription, Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption,
+    RenderIntent as CmRenderIntent, TransferFunction as CmTransferFunction,
+    get_surface_description,
 };
 use smithay::wayland::commit_timing::{
     CommitTimerBarrierStateUserData, CommitTimingManagerState, Timestamp,
@@ -4764,8 +4765,11 @@ impl Niri {
             max_cll: (caps.max_luminance > 0).then(|| u32::from(caps.max_luminance)),
             max_fall: (caps.max_frame_avg_luminance > 0)
                 .then(|| u32::from(caps.max_frame_avg_luminance)),
-            mastering_luminance: None,
-            mastering_primaries: None,
+            // The EDID describes the sink's target volume. When it is absent, leave the
+            // mastering volume unset and let the container primaries/luminances stand in.
+            mastering_luminance: (caps.max_luminance > 0)
+                .then(|| (u32::from(caps.min_luminance), u32::from(caps.max_luminance))),
+            mastering_primaries: Some(Chromaticities::from_named(CmPrimaries::Bt2020)),
             luminances: Some((
                 u32::from(caps.min_luminance),
                 max_luminance,
