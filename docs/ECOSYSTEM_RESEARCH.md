@@ -100,9 +100,11 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 Noctalia is the selected shell. Other shells and bars (DMS, Exo, iNiR, Glimpse,
 delta-shell, dux-shell, gpui-shell, desktop-shell, IgnisNiriShell, ignis,
 ironbar, ashell, bar-rs, vibepanel, Waybar, i3bar-river, i3status-rust) are
-`reference` only: we do not ship a second shell or bar. Niri Waybar modules and
-Eww/QML/GTK bindings are `rejected` as separate maintenance surfaces; the
-Noctalia plugin source is our integration layer. Anyrun is a separate modular
+`reference` only: we do not ship a second shell or bar. The Niri Waybar/Eww
+modules (`niri-taskbar`, `niri_window_buttons`, `waybar-niri-windows`,
+`eww-niri-workspaces`) and the QML/GTK bindings (`qml-niri`, `niri-gtk`) are
+`rejected` as separate maintenance surfaces; the Noctalia plugin source is our
+integration layer. Anyrun is a separate modular
 launcher and is not adopted for the same reason: Noctalia already provides the
 launcher, and a second one would own keybindings, plugins and history.
 

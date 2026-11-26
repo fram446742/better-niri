@@ -79,7 +79,8 @@ workspace** inside this repository (`better-companion/`, `better-portal/`,
 `better-monitor/`, `better-session/`, `better-shot/`, `better-wallpaper/`,
 `better-settings/`, `better-audio/`, `better-sidepanels/`). Each has its own
 `Cargo.toml`, `[workspace]`, tests and README, so it can be split into its own
-repository later with history intact.
+repository later with history intact. The `better` command is only a dispatcher
+over those binaries; it owns no state and no policy.
 
 - **better-nsticky** — sticky/staged windows, persistent state, scratchpads,
   selectors. Owns the sticky/staged *workflow*; the compositor owns the sticky
