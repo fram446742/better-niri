@@ -86,7 +86,7 @@ state.
 | Grid overview | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Per-monitor, tab cells, gestures, IPC focus report. |
 | Window minimisation | Absent | niri-spicy, niri-elite | niri-spicy base + elite UX | Integrated | Real state, actions, rule, grid placeholder, strip. |
 | Magnifier | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Movement actions/binds; pick-colour overlay. |
-| Window groups | Upstream tabs / partial | upstream + kde-niri | upstream | Partial | Upstream tabbed-column display only; Naxdy’s tile groups (auto-group, expel, tab titles) remain deferred — see `UNIMPLEMENTED.md`. |
+| Window groups | Naxdy | Integrated | Tile groups with auto-group, expel-to-column, tab titles/indicator, group-aware movement and animations; groups flatten under upstream tabbed-column display. Reference animation tests ported. |
 | Hot corners | Upstream (overview booleans) | niri-elite | niri-elite | Integrated | Extend to arbitrary actions (`grid-overview`, etc.). |
 | Agent seat | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Second seat over IPC; needs Smithay per-client seat filter. |
 | Focus-ring shaders | Absent | biri | biri | Integrated | Watched-file per-window focus-ring shaders, animated rainbow/wax ring, hot reload, and decoration light spill. |

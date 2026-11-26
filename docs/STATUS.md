@@ -120,8 +120,8 @@ Verified on this branch:
 **Manual/remaining:** subjective full-client checks (tearing in a game, a
 commit-timing client, an output on the second GPU, rotated transitions, HDR
 mixed contrast, popups/animations, a real portal client), hardware profiling
-across DPMS cycles, and the deferred ports in `docs/UNIMPLEMENTED.md` (window
-groups, layer fades, HDR scan-out colour pipelines/post-blend/HDR cursor). See
+across DPMS cycles, and the remaining hardware-only item in
+`docs/UNIMPLEMENTED.md` (HDR scan-out colour pipelines/post-blend/HDR cursor). See
 `docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published

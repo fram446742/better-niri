@@ -17,9 +17,9 @@ instead of only our own assumptions. Entries that could not be ported say why.
 | Carousel pointer warp | biri `87b37916` `src/tests/carousel.rs` | none | Not ported: depends on biri-only fixture helpers (`move_cursor`, visual rectangle). The handler is exercised by session tests, not by a reference port. |
 | Spawn floating at cursor | Naxdy `be7586dc` | none | The reference only updated call sites; it has no behavioural test |
 | Blur brightness/contrast | Naxdy `5059f785` | `niri-config` config test | Config covered; reference had no render test |
-| Window groups/tabbed tiles | Naxdy group/tab commits | see the group port branch | Ported model tests are listed in that commit |
-| Layer fade in/out | Naxdy `4df357ee`, `230e5705` | see the layer port branch | Reference has config/no animation tests; ours cover alpha progression |
-| KDE Screenshot2 | Naxdy `99f238db` | see the screenshot port branch | Reference has no tests; ours cover metadata/raw writer |
+| Window groups/tabbed tiles | Naxdy `src/layout/tests/animations.rs` group tests | `layout/tests/animations.rs` (`appear_group_indicator`, `move_window_into_and_out_of_group_*`) plus `layout/tests.rs` model/geometry tests | Animation ops ported; exact pixel snapshots adapted because our tabs reserve a title band and normalise position |
+| Layer fade in/out | Naxdy `4df357ee`, `230e5705` | `layer::tests` | Reference has no fade tests (only the expected `Animations` config literal, ported); ours cover alpha progression, cleanup and blocked-out outputs |
+| KDE Screenshot2 | Naxdy `99f238db` | `dbus::kwin_screenshot2` | Reference has no tests; ours cover metadata, pipe writer, PNG decode, introspection and a private-bus fd round trip |
 | Floating sidepanel stacks | zgavin/niri-sidepanels test suite | `better-sidepanels/stack` (104 tests) | Imported with the port |
 | Companion rules/run-or-raise/scratchpads | Piri/nsticky test suites | `companion-rules`, `companion-niri`, `nsticky` tests | Behavioural ports, not line-by-line copies |
 | Session restore/snapshots | nirinit/niri-session-manager tests | `better-session` tests | Behavioural ports |
