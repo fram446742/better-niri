@@ -2020,7 +2020,7 @@ mod vulkan_tests {
     }
 
     fn has_visible_pixels(pixels: &[u8]) -> bool {
-        pixels.chunks_exact(4).any(|px| px[3] != 0)
+        pixels.as_chunks::<4>().0.iter().any(|px| px[3] != 0)
     }
 
     /// The MRU title and scope-panel bakes are renderer-independent (cairo/pango into a pixel

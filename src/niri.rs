@@ -5635,45 +5635,6 @@ impl Niri {
             .is_some_and(|c| c.isolated)
     }
 
-    fn is_inside_hot_corner(&self, output: &Output, pos: Point<f64, Logical>) -> bool {
-        let config = self.config.borrow();
-        let hot_corners = output
-            .user_data()
-            .get::<OutputName>()
-            .and_then(|name| config.outputs.find(name))
-            .and_then(|c| c.hot_corners)
-            .unwrap_or(config.gestures.hot_corners)
-            .with_default_corners();
-
-        if hot_corners.off {
-            return false;
-        }
-
-        // Use size from the ceiled output geometry, since that's what we currently use for pointer
-        // motion clamping.
-        let geom = self.global_space.output_geometry(output).unwrap();
-        let size = geom.size.to_f64();
-
-        let contains = move |corner: Point<f64, Logical>| {
-            Rectangle::new(corner, Size::new(1., 1.)).contains(pos)
-        };
-
-        if hot_corners.top_right.is_some() && contains(Point::new(size.w - 1., 0.)) {
-            return true;
-        }
-        if hot_corners.bottom_left.is_some() && contains(Point::new(0., size.h - 1.)) {
-            return true;
-        }
-        if hot_corners.bottom_right.is_some() && contains(Point::new(size.w - 1., size.h - 1.)) {
-            return true;
-        }
-        if hot_corners.top_left.is_some() && contains(Point::new(0., 0.)) {
-            return true;
-        }
-
-        false
-    }
-
     pub fn trigger_hot_corner(&mut self, action: HotCornerAction, output: Option<&Output>) {
         match action {
             HotCornerAction::Overview => self.layout.toggle_overview(),
@@ -7983,12 +7944,11 @@ impl Niri {
         if let Some((zoom, pivot)) = magnifier_params {
             let scale_cursor = self.config.borrow().magnifier.scale_cursor;
             let mut magnifier_push = |elem| {
-                if !scale_cursor {
-                    if let OutputRenderElements::Pointer(_) = &elem {
+                if !scale_cursor
+                    && let OutputRenderElements::Pointer(_) = &elem {
                         push(elem);
                         return;
                     }
-                }
                 let rescaled = RescaleRenderElement::from_element(Box::new(elem), pivot, zoom);
                 push(OutputRenderElements::Magnified(rescaled))
             };

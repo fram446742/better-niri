@@ -58,7 +58,6 @@ pub struct Headless {
     /// `wl_seat` name.
     ///
     /// This defaults to `seat0` and can be overridden with `XDG_SEAT`.
-    udev_seat: String,
     /// Counter for auto-naming headless outputs (HEADLESS-1, HEADLESS-2, etc.)
     output_counter: u32,
     /// Track outputs by name for removal, storing (Output, OutputId)
@@ -82,7 +81,6 @@ impl Headless {
             #[cfg(feature = "xdp-gnome-screencast")]
             gbm: None,
             ipc_outputs: Default::default(),
-            udev_seat,
             output_counter: 0,
             outputs: HashMap::new(),
         }
@@ -405,7 +403,6 @@ impl Headless {
     }
 
     pub fn seat_name(&self) -> String {
-        // Keep the historical Wayland seat name. `udev_seat` is only the libinput seat used when
         // NIRI_HEADLESS_INPUT is enabled.
         "headless".to_owned()
     }
@@ -543,7 +540,6 @@ impl Default for Headless {
             #[cfg(feature = "xdp-gnome-screencast")]
             gbm: None,
             ipc_outputs: Default::default(),
-            udev_seat: "seat0".to_string(),
             output_counter: 0,
             outputs: HashMap::new(),
         }

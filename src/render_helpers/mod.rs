@@ -1004,7 +1004,7 @@ mod capture_tests {
     fn assert_rgba(pixels: &[u8], expected: [u8; 3], what: &str) {
         assert!(!pixels.is_empty(), "{what}: empty readback");
         assert_eq!(pixels.len() % 4, 0, "{what}: not RGBA8");
-        for px in pixels.chunks_exact(4) {
+        for px in pixels.as_chunks::<4>().0 {
             assert_eq!(&px[..3], &expected, "{what}: unexpected pixel {px:?}");
         }
     }

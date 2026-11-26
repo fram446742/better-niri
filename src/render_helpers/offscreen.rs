@@ -644,7 +644,7 @@ mod vulkan_tests {
             );
 
             let (elem, _sync, data) = buffer
-                .render(renderer, Scale::from(1.), &[element.clone()])
+                .render(renderer, Scale::from(1.), std::slice::from_ref(&element))
                 .expect("render into the generic offscreen buffer");
             assert!(elem.texture_vulkan().is_some(), "expected a Vulkan texture");
             assert!(data.damaged, "first offscreen render must report damage");

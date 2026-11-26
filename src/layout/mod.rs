@@ -3896,12 +3896,11 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         if let Some(id) = id {
-            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
-                if let Some(monitor) = monitors.iter_mut().find(|mon| mon.sticky_has_window(id)) {
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set
+                && let Some(monitor) = monitors.iter_mut().find(|mon| mon.sticky_has_window(id)) {
                     monitor.sticky.center_window(Some(id));
                     return;
                 }
-            }
         } else if let Some(monitor) = self.active_monitor().filter(|mon| mon.sticky_is_active()) {
             monitor.sticky.center_window(None);
             return;
@@ -4339,8 +4338,8 @@ impl<W: LayoutElement> Layout<W> {
         let mut seen_workspace_id = HashSet::new();
         let mut seen_workspace_name = Vec::<String>::new();
 
-        if let MonitorSet::Normal { monitors, .. } = &self.monitor_set {
-            if self.grid_all_monitors() {
+        if let MonitorSet::Normal { monitors, .. } = &self.monitor_set
+            && self.grid_all_monitors() {
                 let open = monitors[0].is_grid_overview_open();
                 assert!(
                     monitors
@@ -4349,7 +4348,6 @@ impl<W: LayoutElement> Layout<W> {
                     "with grid-all-monitors, the grid overview must be open on all monitors or none"
                 );
             }
-        }
 
         let (monitors, &primary_idx, &active_monitor_idx) = match &self.monitor_set {
             MonitorSet::Normal {

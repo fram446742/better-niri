@@ -894,7 +894,7 @@ mod vulkan_tests {
     use smithay::backend::allocator::Fourcc;
     use smithay::backend::renderer::vulkan::VulkanRenderer;
     use smithay::backend::renderer::{
-        Bind, Color32F, ExportMem, Frame as _, ImportMem, Offscreen, Renderer, Texture,
+        Bind, Color32F, ExportMem, Frame as _, ImportMem, Offscreen, Renderer,
     };
     use smithay::backend::vulkan::version::Version;
     use smithay::backend::vulkan::{Instance, PhysicalDevice};

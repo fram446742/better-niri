@@ -216,6 +216,17 @@ impl Screenshot {
     }
 }
 
+impl Start for Screenshot {
+    fn start(self, monitor: bool) -> anyhow::Result<zbus::blocking::Connection> {
+        let conn = zbus::blocking::Connection::session()?;
+        conn.object_server()
+            .at("/org/gnome/Shell/Screenshot", self)?;
+        request_name(&conn, "org.gnome.Shell.Screenshot", monitor)?;
+
+        Ok(conn)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -228,16 +239,5 @@ mod tests {
             file_uri(Path::new("/tmp/a screenshot #1.png")).unwrap(),
             "file:///tmp/a%20screenshot%20%231.png"
         );
-    }
-}
-
-impl Start for Screenshot {
-    fn start(self, monitor: bool) -> anyhow::Result<zbus::blocking::Connection> {
-        let conn = zbus::blocking::Connection::session()?;
-        conn.object_server()
-            .at("/org/gnome/Shell/Screenshot", self)?;
-        request_name(&conn, "org.gnome.Shell.Screenshot", monitor)?;
-
-        Ok(conn)
     }
 }
