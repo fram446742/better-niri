@@ -53,9 +53,7 @@ fn srgb_linear(value: u8) -> f64 {
 /// Packs a 10-bit RGB triple into an `Xrgb2101010` word (`x:R:G:B` 2:10:10:10,
 /// leaving the two pad bits zero like the DRM format).
 pub const fn pack(rgb: [u16; 3]) -> u32 {
-    ((rgb[0] as u32 & 0x3ff) << 20)
-        | ((rgb[1] as u32 & 0x3ff) << 10)
-        | (rgb[2] as u32 & 0x3ff)
+    ((rgb[0] as u32 & 0x3ff) << 20) | ((rgb[1] as u32 & 0x3ff) << 10) | (rgb[2] as u32 & 0x3ff)
 }
 
 /// A solid PQ/BT.2020 `Xrgb2101010` buffer, little-endian like `wl_shm`.
