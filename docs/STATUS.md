@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-11-25.
+Last updated: 2026-11-26.
 
 ## Safe baseline (`main`)
 
@@ -104,7 +104,7 @@ Verified on this branch:
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-all.sh` | **48/48 PASS** (compositor, feature matrix, visual-test build, 9 workspaces, packaging, completions, plugins, nsticky) |
+| `scripts/test-all.sh` | **51/51 PASS** (compositor, feature matrix, visual-test build, 9 workspaces + sidepanel stack, packaging, completions, plugins, nsticky) |
 | `cargo test --workspace` | pass, 894 tests, 0 failed |
 | `cargo test -p niri --no-default-features` | pass, 425 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |

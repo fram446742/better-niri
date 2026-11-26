@@ -18,8 +18,8 @@ unless a hardware note says otherwise.
 - Naxdy: `relative-to "cursor"` floating spawn, blur `brightness`/`contrast`
   (alpha masking and saturation already existed), cursor-warp tweaks.
 - Companion: `better-sidepanels-stack` (full zgavin/niri-sidepanels port with
-  104 tests), portal recording, SNI tray and native video wallpapers from the
-  previous round.
+  104 tests), portal recording, SNI tray, native video wallpapers and
+  layer-shell overlay pins (`pin --layer`, live grim-verified).
 
 ## 1. HDR scanout colour pipeline, post-blend encode and HDR cursor plane
 

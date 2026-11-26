@@ -11,7 +11,7 @@ Status legend:
 
 The status column was refreshed on 2026-11-25 against `integration/elite-base`:
 everything marked **Integrated** is implemented and covered by the workspace test
-suite (892 tests on the default build, 423 with `--no-default-features`).
+suite (894 tests on the default build, 425 with `--no-default-features`).
 All planned core protocol ports are integrated;
 hardware behaviour (VRR, tearing, explicit sync, multi-GPU, HDR mixed) is
 implemented but still needs validation on real panels. The rows below keep the
