@@ -138,3 +138,7 @@ record". The entry must explain what it does, why it is not integrated, what
 would make us reconsider, and the alternative used. A one-line "rejected" is not
 enough, and the entry stays in the file permanently so future work does not
 re-audit the same idea without context.
+
+When porting behaviour from a reference project, port its applicable tests too
+and record the mapping in `docs/REFERENCE_TESTS.md`. If the reference has no test
+for that behaviour, say so there rather than implying coverage.

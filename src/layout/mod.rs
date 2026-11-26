@@ -8127,9 +8127,10 @@ impl<W: LayoutElement> Layout<W> {
                         mon.dnd_scroll_gesture_end();
                     }
 
+                    let workspace_is_active = is_active && !mon.sticky_is_active();
                     for (ws_idx, ws) in mon.workspaces.iter_mut().enumerate() {
-                        let is_focused = is_active && ws_idx == mon.active_workspace_idx;
-                        ws.refresh(is_active, is_focused);
+                        let is_focused = workspace_is_active && ws_idx == mon.active_workspace_idx;
+                        ws.refresh(workspace_is_active, is_focused);
 
                         if let Some(is_scrolling) = ongoing_scrolling_dnd {
                             // Lock or unlock the view for scrolling interactive move.

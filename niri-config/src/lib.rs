@@ -4177,3 +4177,60 @@ Config {
         assert_eq!(cc.assembled_zoom, 0.22);
     }
 }
+
+#[cfg(test)]
+mod reference_test_ports {
+    use super::*;
+
+    #[test]
+    fn overview_focus_ring_and_shadow_overrides_parse() {
+        let config = Config::parse_mem(
+            r##"
+            overview {
+                focus-ring {
+                    width 8
+                    active-color "#00ff00"
+                }
+                shadow {
+                    color "#ff000080"
+                }
+            }
+            "##,
+        )
+        .unwrap();
+        assert_eq!(config.overview.focus_ring.width, Some(FloatOrInt(8.)));
+        assert_eq!(
+            config.overview.focus_ring.active_color,
+            Some(Color {
+                r: 0.,
+                g: 1.,
+                b: 0.,
+                a: 1.,
+            })
+        );
+        assert_eq!(
+            config.overview.shadow.color,
+            Some(Color {
+                r: 1.,
+                g: 0.,
+                b: 0.,
+                a: 128. / 255.,
+            })
+        );
+    }
+
+    #[test]
+    fn blur_brightness_and_contrast_parse() {
+        let config = Config::parse_mem(
+            r#"
+            blur {
+                brightness 1.2
+                contrast 0.8
+            }
+            "#,
+        )
+        .unwrap();
+        assert!((config.blur.brightness - 1.2).abs() < 1e-9);
+        assert!((config.blur.contrast - 0.8).abs() < 1e-9);
+    }
+}

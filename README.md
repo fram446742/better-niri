@@ -42,7 +42,8 @@ niri-sidepanels, nirinit, niri-session-manager, NiriMod, niri_display_manager,
 PWSW, Nirisnap, niri-shot, hyprlax and Noctalia. Documentation, provenance and the status of every reference project are in
 `docs/ECOSYSTEM_RESEARCH.md` and `docs/ATTRIBUTION.md`. The research file also
 holds the permanent record of rejected ideas: nothing is dropped without a
-written reason and the conditions that would make us revisit it.
+written reason and the conditions that would make us revisit it. Ported and
+adapted reference tests are listed in `docs/REFERENCE_TESTS.md`.
 
 ## Features
 
