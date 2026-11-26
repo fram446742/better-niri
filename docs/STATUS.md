@@ -311,10 +311,10 @@ picked up without re-auditing.
    surface per output, cover-scaled `wl_shm` images, reload on file change,
    reconnect/hotplug) with `auto|native|command` selection and command
    fallback. Phase 8 packaging is in `packaging/`: Arch/AUR recipes for
-   `niri-better` and `loom-desktop`, pinned and `-git` variants, feature
+   `loom-niri`/`loom-niri-replace` and `loom-desktop`, pinned and `-git` variants, feature
    profiles (minimal/desktop/full), `verify.sh`, and `docs/PACKAGING.md` with
    the compatibility matrix. The Arch/AUR recipes are now split into
-   `niri-better`, `loom-portal`, `loom-companion`, `loom-monitor`,
+   `loom-niri`, `loom-portal`, `loom-companion`, `loom-monitor`,
    `loom-session`, `loom-shot`, `loom-wallpaper`, `loom-settings`,
    `loom-audio`, `loom-sidepanels` and the `loom-desktop` meta package,
    with ownership/staging checks in `verify.sh`. Remaining release tasks: AUR

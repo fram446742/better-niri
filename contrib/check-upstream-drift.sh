@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check better-niri against upstream niri for config/IPC drift and Smithay pin
+# Check loom-niri against upstream niri for config/IPC drift and Smithay pin
 # consistency. Run before and after every `git merge upstream/main`.
 #
 # Usage:
@@ -42,11 +42,11 @@ if [ -z "$upstream_cfg" ]; then
     exit 2
 fi
 
-printf '%s\n' "$upstream_cfg" | extract_options > /tmp/better-niri-upstream-options.txt
-extract_options < resources/default-config.kdl > /tmp/better-niri-options.txt
+printf '%s\n' "$upstream_cfg" | extract_options > /tmp/loom-niri-upstream-options.txt
+extract_options < resources/default-config.kdl > /tmp/loom-niri-options.txt
 
-missing_cfg="$(comm -23 /tmp/better-niri-upstream-options.txt /tmp/better-niri-options.txt)"
-extra_cfg="$(comm -13 /tmp/better-niri-upstream-options.txt /tmp/better-niri-options.txt)"
+missing_cfg="$(comm -23 /tmp/loom-niri-upstream-options.txt /tmp/loom-niri-options.txt)"
+extra_cfg="$(comm -13 /tmp/loom-niri-upstream-options.txt /tmp/loom-niri-options.txt)"
 
 if [ -n "$missing_cfg" ]; then
     status=1
@@ -78,11 +78,11 @@ if [ -z "$upstream_ipc" ]; then
     exit 2
 fi
 
-printf '%s\n' "$upstream_ipc" | extract_ipc_fields | sort -u > /tmp/better-niri-upstream-ipc.txt
-extract_ipc_fields < niri-ipc/src/lib.rs | sort -u > /tmp/better-niri-ipc.txt
+printf '%s\n' "$upstream_ipc" | extract_ipc_fields | sort -u > /tmp/loom-niri-upstream-ipc.txt
+extract_ipc_fields < niri-ipc/src/lib.rs | sort -u > /tmp/loom-niri-ipc.txt
 
-missing_ipc="$(comm -23 /tmp/better-niri-upstream-ipc.txt /tmp/better-niri-ipc.txt)"
-extra_ipc="$(comm -13 /tmp/better-niri-upstream-ipc.txt /tmp/better-niri-ipc.txt)"
+missing_ipc="$(comm -23 /tmp/loom-niri-upstream-ipc.txt /tmp/loom-niri-ipc.txt)"
+extra_ipc="$(comm -13 /tmp/loom-niri-upstream-ipc.txt /tmp/loom-niri-ipc.txt)"
 
 if [ -n "$missing_ipc" ]; then
     status=1
@@ -128,7 +128,7 @@ elif [ "$smithay_rev" != "$extras_rev" ]; then
     echo "== Smithay pin =="
     echo "  smithay=$smithay_rev"
     echo "  smithay-drm-extras=$extras_rev"
-    echo "  both must be the same better-smithay commit"
+    echo "  both must be the same loom-smithay commit"
     echo
 fi
 
@@ -137,22 +137,22 @@ if [ "$smithay_git" != "$extras_git" ]; then
     echo "== Smithay source =="
     echo "  smithay=$smithay_git"
     echo "  smithay-drm-extras=$extras_git"
-    echo "  both must use the same better-smithay repository"
+    echo "  both must use the same loom-smithay repository"
     echo
 fi
 
-if [ -n "$smithay_git" ] && [ "$smithay_git" != "https://github.com/fram446742/better-smithay.git" ]; then
+if [ -n "$smithay_git" ] && [ "$smithay_git" != "https://github.com/fram446742/loom-smithay.git" ]; then
     status=1
     echo "== Smithay source =="
-    echo "  expected https://github.com/fram446742/better-smithay.git, found $smithay_git"
+    echo "  expected https://github.com/fram446742/loom-smithay.git, found $smithay_git"
     echo
 fi
 
 # A pinned path override committed to Cargo.toml breaks clean checkouts.
-if grep -q '^path = "\.\./better-smithay' Cargo.toml; then
+if grep -q '^path = "\.\./loom-smithay' Cargo.toml; then
     status=1
     echo "== Smithay pin =="
-    echo "  committed path override to ../better-smithay found; use the cargo --config"
+    echo "  committed path override to ../loom-smithay found; use the cargo --config"
     echo "  patch command documented in docs/COMPATIBILITY.md instead"
     echo
 fi
