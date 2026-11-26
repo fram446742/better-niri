@@ -43,5 +43,6 @@ notices are preserved in `ATTRIBUTION.md`.
   exercising the widgets needs a running Noctalia session and remains a manual
   check in `docs/validation/noctalia-live-2026-11-24.md`.
 
-Everything else in `ECOSYSTEM_RESEARCH.md` is either integrated or recorded as
-rejected with the conditions that would make us reconsider it.
+Everything else in `ECOSYSTEM_RESEARCH.md` is integrated, recorded as rejected
+with the conditions that would make us reconsider it, or kept as a
+reference-only project that we do not ship.
