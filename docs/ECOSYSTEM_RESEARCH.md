@@ -36,7 +36,7 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 | niri-sidebar | rejected | Superseded by the full niri-sidepanels port. |
 | zgavin/niri-sidepanels | integrated | `better-sidepanels-stack`, full port. |
 | niri-companion (Python) | reference | Overlaps companion profiles/sessions; not adopted to avoid two automation daemons. |
-| nirimap | integrated (behaviour) | The sidepanel `taskbar` module lists windows and focuses them; a graphical minimap remains out of scope. |
+| nirimap | rejected | A graphical minimap would duplicate the grid overview; the sidepanel `taskbar` lists and focuses windows. |
 | miri | rejected | Alternative layout engines conflict with niri’s scrollable model. |
 | nfsm | rejected | Fullscreen behaviour is covered by window rules. |
 | oniri | rejected | Single-window maximize is expressible with existing rules. |
@@ -146,6 +146,15 @@ actions nor our grid/carousel assume a master area.
 
 *Reconsider if* upstream niri adopts pluggable layouts. *Use instead:* the
 existing scrolling layout plus named workspaces; no second engine.
+
+### nirimap
+
+A graphical minimap of workspaces and windows. The overview already renders the
+full scrollable layout on demand, and the sidepanel `taskbar` lists and focuses
+windows; a persistent minimap would be a third view of the same state with extra
+IPC polling and drawing. *Reconsider if* the overview cannot stay open while a
+user works and a compact always-visible map becomes a real workflow.
+*Use instead:* the grid overview plus the sidepanel taskbar.
 
 ### nfsm and oniri
 

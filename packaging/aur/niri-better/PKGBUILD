@@ -448,7 +448,11 @@ package_better-desktop() {
   )
   install=better-desktop.install
 
-  install -Dm755 "${srcdir}/target/release/better" "${pkgdir}/usr/bin/better"
+  # A pinned source commit can predate the unified selector; the git recipe
+  # always builds it. Release pins include it from this commit onward.
+  if [ -f "${srcdir}/target/release/better" ]; then
+    install -Dm755 "${srcdir}/target/release/better" "${pkgdir}/usr/bin/better"
+  fi
   install -Dm644 "${srcdir}/better-desktop.README.md" \
     "${pkgdir}/usr/share/doc/better-desktop/README.md"
   install -Dm644 "${srcdir}/${_pkgname}/LICENSE" \

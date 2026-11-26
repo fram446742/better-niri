@@ -30,7 +30,7 @@ is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
   `--all-features` (Vulkan) both pass.
 - Not hardware-tested.
 
-### better-niri `integration/elite-base` @ `bbd46e08`
+### better-niri `integration/elite-base`
 
 Brings in the full niri-elite feature set:
 
@@ -110,7 +110,7 @@ Verified on this branch:
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-all.sh` | **51/51 PASS** (compositor, feature matrix, visual-test build, 9 workspaces + sidepanel stack, packaging, completions, plugins, nsticky) |
+| `scripts/test-all.sh --quick` | **30/30 PASS** (2026-11-26: compositor, 9 workspaces, sidepanel stack, packaging, completions, plugins, nsticky); the earlier full run was 51/51 |
 | `cargo test --workspace` | pass, 936 tests, 0 failed |
 | `cargo test -p niri --no-default-features` | pass, 455 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |

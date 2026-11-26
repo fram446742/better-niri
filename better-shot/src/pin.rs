@@ -459,7 +459,7 @@ fn add(state: &Path, options: &PinOptions) -> Result<String, String> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        match command.spawn() {
+        match spawn_viewer(&mut command) {
             Ok(_) => {
                 pins[index].viewer = Some(viewer);
                 save(state, &pins)?;
@@ -527,6 +527,22 @@ fn spawn_overlay(path: &Path) -> Result<u64, String> {
         .spawn()
         .map_err(|err| format!("cannot launch layer pin overlay: {err}"))?;
     Ok(u64::from(child.id()))
+}
+
+fn spawn_viewer(command: &mut Command) -> std::io::Result<std::process::Child> {
+    // Package updates and freshly written helper scripts can leave the viewer
+    // open for writing for a moment; ETXTBSY clears as soon as that closes.
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(err) if err.raw_os_error() == Some(26) && attempts < 5 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn pid_arg(pid: u64) -> Option<i32> {
