@@ -1,6 +1,6 @@
 # Modules, core boundary and delivery tiers
 
-This document decides **where each feature lives** so better-niri can stay fast
+This document decides **where each feature lives** so loom-niri can stay fast
 and minimal while still offering the full feature set. It is the reference for
 every future integration.
 
@@ -75,29 +75,29 @@ crashing the session.
 
 Delivery note: per the current instruction not to create new repositories, the
 Tier 3 services ship as **separate Cargo workspaces excluded from niri's
-workspace** inside this repository (`better-companion/`, `better-portal/`,
-`better-monitor/`, `better-session/`, `better-shot/`, `better-wallpaper/`,
-`better-settings/`, `better-audio/`, `better-sidepanels/`). Each has its own
+workspace** inside this repository (`loom-companion/`, `loom-portal/`,
+`loom-monitor/`, `loom-session/`, `loom-shot/`, `loom-wallpaper/`,
+`loom-settings/`, `loom-audio/`, `loom-sidepanels/`). Each has its own
 `Cargo.toml`, `[workspace]`, tests and README, so it can be split into its own
-repository later with history intact. The `better` command is only a dispatcher
+repository later with history intact. The `loom` command is only a dispatcher
 over those binaries; it owns no state and no policy.
 
-- **better-nsticky** — sticky/staged windows, persistent state, scratchpads,
+- **loom-nsticky** — sticky/staged windows, persistent state, scratchpads,
   selectors. Owns the sticky/staged *workflow*; the compositor owns the sticky
   *primitive*.
-- **better-companion** — automation based on Piri: rules, singleton, swallow,
+- **loom-companion** — automation based on Piri: rules, singleton, swallow,
   run-or-raise, workspace hooks, scratchpad orchestration, event API.
-- **better-session** — save/restore work contexts (windows, workspaces, outputs,
+- **loom-session** — save/restore work contexts (windows, workspaces, outputs,
   profiles), combining the ideas of nirinit, niri-session-manager and
   niri-companion.
-- **better-sidepanels** — side panels, stacking, per-app rules.
-- **better-shot** — screenshots, recording, annotations, HDR-aware capture.
-- **better-monitor** — output profiles, safe apply/rollback.
-- **better-audio** — PipeWire routing by app/window/context.
-- **better-wallpaper** — scenes and per-workspace wallpapers (reuse Noctalia).
-- **better-settings** — GTK4/libadwaita frontend; each app remains the authority
+- **loom-sidepanels** — side panels, stacking, per-app rules.
+- **loom-shot** — screenshots, recording, annotations, HDR-aware capture.
+- **loom-monitor** — output profiles, safe apply/rollback.
+- **loom-audio** — PipeWire routing by app/window/context.
+- **loom-wallpaper** — scenes and per-workspace wallpapers (reuse Noctalia).
+- **loom-settings** — GTK4/libadwaita frontend; each app remains the authority
   for its own config.
-- **better-portal** — XDG portal backend and picker daemon; separate from the
+- **loom-portal** — XDG portal backend and picker daemon; separate from the
   compositor from the start.
 
 Companion services use:
@@ -238,12 +238,12 @@ Noctalia widgets/plugins only.
 ## 8. Sticky windows: the concrete split
 
 Decision: sticky/staged/scratchpad **workflow is absorbed into
-better-companion**; the compositor owns only the primitive.
+loom-companion**; the compositor owns only the primitive.
 
 - Compositor core: a `sticky` property on floating windows, actions to toggle it,
   hidden/stage workspaces, and IPC/window-rule support. It follows
   workspaces/outputs correctly and never moves windows around behind the scenes.
-- better-companion: staging, scratchpads, selectors, persistence, per-app rules
+- loom-companion: staging, scratchpads, selectors, persistence, per-app rules
   and the user-facing workflow, preserving nsticky's code/history/attribution
   (BSD-3-Clause). It uses the native sticky primitive when advertised and keeps
   a move-based fallback for plain Niri.
@@ -255,17 +255,17 @@ user-specific staging policy.
 
 ## 9. Portals: the concrete split
 
-Decision: **better-portal is a separate daemon from the start.**
+Decision: **loom-portal is a separate daemon from the start.**
 
-- better-portal implements the XDG desktop portal backend (ScreenCast,
+- loom-portal implements the XDG desktop portal backend (ScreenCast,
   Screenshot, and later remote desktop) over ext-image-copy-capture, PipeWire and
   D-Bus.
-- The picker is owned by better-portal as a layer-shell client (outputs,
+- The picker is owned by loom-portal as a layer-shell client (outputs,
   windows, regions, permissions). A compositor-native picker may be added later
   behind an IPC request if the external one cannot meet the UX or security bar.
 - The compositor keeps capture protocol plumbing and its screenshot/IPC actions;
   it does not embed a portal backend.
-- Permissions and persisted grants live in better-portal.
+- Permissions and persisted grants live in loom-portal.
 - Do not implement capture twice; the compositor remains the source of buffers.
 
 The niri-elite built-in portal code is a reference/prototype, not a module we
@@ -289,17 +289,17 @@ See `ECOSYSTEM.md` section "Open questions". The short list:
 Resolved:
 
 - default build: full binary with all modules; minimal via features/profile;
-- portal: separate `better-portal` daemon from the start;
+- portal: separate `loom-portal` daemon from the start;
 - agent seat: module off by default, explicit authorization and restricted
   socket;
-- sticky/staged/scratchpads: absorbed into better-companion, native primitive in
+- sticky/staged/scratchpads: absorbed into loom-companion, native primitive in
   the compositor;
 - minimise: core; grid/carousel/magnifier: `navigation` module;
 - companion repositories: after Phase 1;
-- Piri: architecture reference only; better-companion is implemented in-tree
+- Piri: architecture reference only; loom-companion is implemented in-tree
   with no Piri code (see the expansion plan's delivery update).
 
-Remaining: the exact way better-companion absorbs nsticky (module layout,
+Remaining: the exact way loom-companion absorbs nsticky (module layout,
 compatibility CLI) and whether the portal picker starts external or gets a
 compositor IPC fallback.
 
@@ -329,7 +329,7 @@ compositor IPC fallback.
   buffers, per-host panel caches and click hits, panel rendering and
   prepasses, and the panel element variants. Only thin layout plumbing and
   no-op stubs remain.
-- `vulkan` (default on): compiles better-smithay's Vulkan backend/renderer and
+- `vulkan` (default on): compiles loom-smithay's Vulkan backend/renderer and
   wires the TTY backend through `TtyGpuManager` (`GbmGlesBackend` or
   `VulkanBackend`) plus the `TtyRenderer`/`TtyFrame` enums. `NIRI_RENDERER`
   (`auto`/`gles`/`vulkan`) selects the path: `auto` stays on GLES, `vulkan`

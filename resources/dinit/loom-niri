@@ -1,0 +1,7 @@
+type               = process
+command            = loom-niri --session
+restart            = false
+working-dir        = $HOME
+ready-notification = pipevar:NOTIFY_FD
+logfile            = $HOME/.local/share/loom-niri/loom-niri.log
+depends-on:        dbus

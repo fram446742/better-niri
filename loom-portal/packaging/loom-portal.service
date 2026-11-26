@@ -1,0 +1,15 @@
+# Optional systemd user unit. scripts/install.sh substitutes the absolute path
+# of the installed loom-portal binary for the ExecStart placeholder.
+[Unit]
+Description=loom-portal (standalone xdg-desktop-portal backend)
+Documentation=file:///usr/share/doc/loom-portal/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@LOOM_PORTAL@
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

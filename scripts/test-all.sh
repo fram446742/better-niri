@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Run every non-hardware test that belongs to the Better Desktop tree:
+# Run every non-hardware test that belongs to the Loom tree:
 # compositor feature matrix, headless visual-test build, every companion
 # workspace, packaging, completions, Noctalia plugins and the external
-# better-nsticky checkout when present.
+# loom-nsticky checkout when present.
 #
 # Usage: ./scripts/test-all.sh [--quick]
 #   --quick skips the slower clippy and per-feature cargo checks.
 #
 # Logs and a TSV summary land in $TEST_LOG_DIR (default
-# /tmp/better-test-run-<timestamp>). Exit status is non-zero if anything failed.
+# /tmp/loom-test-run-<timestamp>). Exit status is non-zero if anything failed.
 set -u
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-LOGDIR=${TEST_LOG_DIR:-/tmp/better-test-run-$(date +%Y%m%d-%H%M%S)}
+LOGDIR=${TEST_LOG_DIR:-/tmp/loom-test-run-$(date +%Y%m%d-%H%M%S)}
 mkdir -p "$LOGDIR"
 export LIBCLANG_PATH=${LIBCLANG_PATH:-/usr/lib}
 export CARGO_TERM_COLOR=never
@@ -60,7 +60,7 @@ run_skip() {
     printf '%-5s %-42s %s\n' SKIP "$name" "$reason"
 }
 
-echo "Better Desktop test run"
+echo "Loom test run"
 echo "root:  $ROOT"
 echo "logs:  $LOGDIR"
 echo
@@ -89,15 +89,16 @@ fi
 # --- companion applications ----------------------------------------------
 
 apps=(
-    better-companion
-    better-portal
-    better-monitor
-    better-session
-    better-shot
-    better-wallpaper
-    better-settings
-    better-audio
-    better-sidepanels
+    loom-companion
+    loom-portal
+    loom-monitor
+    loom-session
+    loom-shot
+    loom-wallpaper
+    loom-settings
+    loom-audio
+    loom-sidepanels
+    loom-tui
 )
 for app in "${apps[@]}"; do
     run_in "$app" "$app-fmt" cargo fmt --check
@@ -108,17 +109,17 @@ for app in "${apps[@]}"; do
 done
 
 # Stack manager ported from zgavin/niri-sidepanels (own workspace).
-run_in "better-sidepanels/stack" "sidepanels-stack-fmt" cargo fmt --check
-run_in "better-sidepanels/stack" "sidepanels-stack-tests" cargo test
+run_in "loom-sidepanels/stack" "sidepanels-stack-fmt" cargo fmt --check
+run_in "loom-sidepanels/stack" "sidepanels-stack-tests" cargo test
 if [ "$QUICK" = 0 ]; then
-    run_in "better-sidepanels/stack" "sidepanels-stack-clippy" cargo clippy --all-targets
+    run_in "loom-sidepanels/stack" "sidepanels-stack-clippy" cargo clippy --all-targets
 fi
 
 # --- packaging, completions, plugins, external nsticky -------------------
 
 run packaging-verify bash "$ROOT/packaging/scripts/verify.sh"
 run completions-check python3 "$ROOT/packaging/scripts/generate-completions.py" --check
-run noctalia-plugins bash "$ROOT/better-noctalia-plugins/verify.sh"
+run noctalia-plugins bash "$ROOT/loom-noctalia-plugins/verify.sh"
 
 NSTICKY=${NSTICKY_SOURCE:-/home/franc/Projects/better-nsticky/source}
 if [ -f "$NSTICKY/Cargo.toml" ]; then

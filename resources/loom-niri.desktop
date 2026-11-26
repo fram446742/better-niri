@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Loom Niri
+Comment=A scrollable-tiling Wayland compositor with the Loom tools
+Exec=loom-niri-session
+Type=Application
+DesktopNames=loom-niri

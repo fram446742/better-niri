@@ -1,0 +1,6 @@
+# Session D-Bus activation file. scripts/install.sh substitutes the absolute
+# path of the installed loom-portal binary for the Exec placeholder.
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.loom
+Exec=@LOOM_PORTAL@
+SystemdService=loom-portal.service

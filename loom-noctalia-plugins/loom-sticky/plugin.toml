@@ -1,0 +1,16 @@
+id = "loom/loom-sticky"
+name = "Loom Sticky"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Stage the focused window and toggle a named scratchpad through loom-companion."
+
+[[widget]]
+id = "sticky"
+entry = "widget.luau"
+
+[[setting]]
+key = "scratchpad"
+type = "string"
+label_key = "settings.scratchpad"
+default = "term"

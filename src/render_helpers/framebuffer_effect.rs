@@ -69,7 +69,7 @@ struct Inner {
 }
 
 /// Vulkan counterpart of [`Inner`]: renderer-owned textures captured, blurred and composited
-/// through better-smithay's custom-pass pipeline. Kept in the same per-element effects cache
+/// through loom-smithay's custom-pass pipeline. Kept in the same per-element effects cache
 /// as [`Inner`] (the two types never mix, since an output uses one renderer).
 #[cfg(feature = "vulkan")]
 #[derive(Debug, Default)]

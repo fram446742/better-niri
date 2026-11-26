@@ -14,7 +14,7 @@ knuffel = "3.2.0"
 # knuffel 3.2 still depends on miette 5, so miette must stay on 5.x for the
 # knuffel::Error -> miette::Diagnostic impl to line up.
 miette = { version = "5.10.0", features = ["fancy-no-backtrace"] }
-niri-ipc = { version = "26.4.0-elite", path = "../niri-ipc" }
+niri-ipc = { version = "26.4.0", path = "../niri-ipc" }
 regex = "1.13.2"
 smithay = { workspace = true, features = ["backend_libinput"] }
 tracing.workspace = true

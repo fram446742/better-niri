@@ -1,0 +1,17 @@
+[Unit]
+Description=Loom Niri compositor
+BindsTo=graphical-session.target
+Before=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+
+Wants=xdg-desktop-autostart.target
+Before=xdg-desktop-autostart.target
+
+[Service]
+Slice=session.slice
+Type=notify
+ExecStart=loom-niri --session
+# The broker may be D-Bus activated before the compositor imports its session
+# environment.
+ExecStartPost=-/usr/bin/systemctl --user --no-block try-restart xdg-desktop-portal.service

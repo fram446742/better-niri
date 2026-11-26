@@ -12,8 +12,8 @@ on GitHub; full history remains in the source repositories.
 | Role | Repository | Branch | Audited HEAD | License |
 | --- | --- | --- | --- | --- |
 | Base | https://github.com/niri-wm/niri | `main` | `02ee0585` | GPL-3.0-or-later |
-| Our compositor | https://github.com/fram446742/better-niri | `main` | `02ee0585` (start) | GPL-3.0-or-later |
-| Our Smithay | https://github.com/fram446742/better-smithay | `master` | `a38bb709` (start) | MIT |
+| Our compositor | https://github.com/fram446742/loom-niri | `main` | `02ee0585` (start) | GPL-3.0-or-later |
+| Our Smithay | https://github.com/fram446742/loom-smithay | `master` | `a38bb709` (start) | MIT |
 | UX/grid/agent/portal | https://github.com/MEKCCK/niri-elite | `main` | `31458c94` | GPL-3.0-or-later |
 | Layout/shaders/wayland | https://github.com/barrulus/biri | `main` | `5b465e4c` | GPL-3.0-or-later |
 | HDR/Vulkan/presentation | https://github.com/losnoco/niri | `spicy-main` | `1bfaa833` | GPL-3.0-or-later |
@@ -24,7 +24,7 @@ on GitHub; full history remains in the source repositories.
 | Blur/KDE/groups | https://github.com/Naxdy/niri | `main` | `b09a30b7` | GPL-3.0-or-later |
 | DPMS/privacy | https://github.com/demoj1/niri | `main` | `3d4ba3e` | GPL-3.0-or-later |
 | Liquid glass | https://github.com/zaroutt/Niri-glass | `main` | `72ee163` | GPL-3.0-or-later |
-| Sticky/staged daemon | https://github.com/fram446742/better-nsticky | `main` | `f4f5bfd` | BSD-3-Clause |
+| Sticky/staged daemon | https://github.com/fram446742/loom-nsticky | `main` | `f4f5bfd` | BSD-3-Clause |
 
 Divergence measured against the newest common niri commit:
 
@@ -57,14 +57,14 @@ Per project direction, the functional base is now
 [`MEKCCK/smithay`](https://github.com/MEKCCK/smithay), not the niri-spicy line.
 The other projects are added on top of that base.
 
-- better-smithay: `integration/elite-base` @
+- loom-smithay: `main` @
   `2e8e9edbe8a89af91d6bf3369c379cff21af76ff`.
   First parent MEKCCK/smithay `66b0670` (stabilised colour management, connector
   colour state, async flips, tearing, seat filtering); second parent the
   losnoco lineage `dba9452b` for the Vulkan renderer, DRM colour pipelines,
   SurfaceBarrier and tone-mapping helpers. The two colour modules were
   otherwise identical apart from `ImageDescription::max_luminance`.
-- better-niri: `integration/elite-base`, merge commit `ea02411a` of
+- loom-niri: `main`, merge commit `ea02411a` of
   niri-elite `31458c94` (base `fcbc971c`) with current upstream `02ee0585`.
   Reconciliation commit `bbd46e08` restored elite layout semantics and adapted
   to upstream APIs.
@@ -282,15 +282,15 @@ Verified in niri `02ee0585`:
 Several fork commits are therefore obsolete. Porting them would create duplicate
 code and conflict with upstream on the next sync.
 
-## 5. better-nsticky
+## 5. loom-nsticky
 
-- Repository: `fram446742/better-nsticky`, `main` @ `f4f5bfd`, BSD-3-Clause,
+- Repository: `fram446742/loom-nsticky`, `main` @ `f4f5bfd`, BSD-3-Clause,
   originally a fork of `lonerOrz/nsticky`.
 - Mechanism: a daemon connects to `$NIRI_SOCKET`, watches events, and moves
   pinned windows between workspaces; it exposes its own CLI socket and adds
   staging, scratchpads, rules, persistence and a selector.
 - Chosen integration: keep it as an independent daemon for staging/scratchpads,
-  and implement native sticky windows in better-niri (biri implementation).
+  and implement native sticky windows in loom-niri (biri implementation).
   Then add a compatibility mode in nsticky:
   - If the compositor advertises native sticky support (new IPC capability),
     `nsticky sticky …` delegates to native actions instead of moving windows.
@@ -305,6 +305,6 @@ code and conflict with upstream on the next sync.
 - Use `cherry-pick -x`; mention the source repository and commit in the body.
 - `docs/ATTRIBUTION.md` lists projects and authors; update it for every series.
 - GPL-3.0-or-later is compatible with all compositor forks listed (all GPL-3.0).
-  Smithay is MIT; better-smithay remains MIT and must keep its notices. better-nsticky is
+  Smithay is MIT; loom-smithay remains MIT and must keep its notices. loom-nsticky is
   BSD-3-Clause; it is combined at runtime over IPC, not linked, and its notices
   stay in its repository.

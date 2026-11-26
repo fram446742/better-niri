@@ -11,13 +11,14 @@ use std::sync::atomic::Ordering;
 use std::{env, mem};
 
 use calloop::EventLoop;
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 use clap_complete::Shell;
 use clap_complete_nushell::Nushell;
 use directories::ProjectDirs;
 use niri::cli::{Cli, CompletionShell, Sub};
 #[cfg(feature = "dbus")]
 use niri::dbus;
+use niri::identity::{self};
 use niri::ipc::client::handle_msg;
 use niri::niri::State;
 use niri::utils::spawning::{
@@ -39,6 +40,8 @@ static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
     tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let identity = identity::current();
+
     // Set backtrace defaults if not set.
     if env::var_os("RUST_BACKTRACE").is_none() {
         unsafe { env::set_var("RUST_BACKTRACE", "1") };
@@ -68,7 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let cli = Cli::parse();
+    let matches = Cli::command()
+        .name(identity.program)
+        .bin_name(identity.program)
+        .get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
 
     #[cfg(feature = "vulkan")]
     if cli.check_vulkan {
@@ -98,7 +105,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Set the current desktop for xdg-desktop-portal.
-        unsafe { env::set_var("XDG_CURRENT_DESKTOP", "niri") };
+        unsafe { env::set_var("XDG_CURRENT_DESKTOP", identity.desktop) };
+        unsafe { env::set_var("XDG_SESSION_DESKTOP", identity.desktop) };
         // Ensure the session type is set to Wayland for xdg-autostart and Qt apps.
         unsafe { env::set_var("XDG_SESSION_TYPE", "wayland") };
     }
@@ -167,7 +175,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load the config.
     let config_path = config_path(cli.config);
-    unsafe { env::remove_var("NIRI_CONFIG") };
+    unsafe { env::remove_var(identity.config_env) };
+    if identity.config_env != "NIRI_CONFIG" {
+        unsafe { env::remove_var("NIRI_CONFIG") };
+    }
     let (config_created_at, config_load_result) = config_path.load_or_create();
     let config_errored = config_load_result.config.is_err();
     let mut config = config_load_result.config.unwrap_or_else(|err| {
@@ -224,6 +235,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ipc) = &state.niri.ipc_server {
         let socket_path = ipc.socket_path.as_deref().unwrap();
         unsafe { env::set_var(SOCKET_PATH_ENV, socket_path) };
+        if identity.socket_env != SOCKET_PATH_ENV {
+            unsafe { env::set_var(identity.socket_env, socket_path) };
+        }
         info!("IPC listening on: {}", socket_path.to_string_lossy());
     }
 
@@ -307,6 +321,7 @@ fn import_environment() {
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
         SOCKET_PATH_ENV,
+        identity::current().socket_env,
     ]
     .join(" ");
 
@@ -352,13 +367,13 @@ fn import_environment() {
 }
 
 fn env_config_path() -> Option<PathBuf> {
-    env::var_os("NIRI_CONFIG")
+    env::var_os(identity::current().config_env)
         .filter(|x| !x.is_empty())
         .map(PathBuf::from)
 }
 
 fn default_config_path() -> Option<PathBuf> {
-    let Some(dirs) = ProjectDirs::from("", "", "niri") else {
+    let Some(dirs) = ProjectDirs::from("", "", identity::current().project) else {
         warn!("error retrieving home directory");
         return None;
     };
@@ -369,7 +384,7 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/niri/config.kdl")
+    PathBuf::from(identity::current().system_config)
 }
 
 /// Resolves an explicit `--config` / `NIRI_CONFIG` path. A directory means

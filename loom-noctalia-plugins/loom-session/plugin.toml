@@ -1,0 +1,10 @@
+id = "loom/loom-session"
+name = "Loom Session"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Restore saved work contexts from the bar."
+
+[[widget]]
+id = "contexts"
+entry = "widget.luau"

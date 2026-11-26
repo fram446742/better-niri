@@ -13,6 +13,7 @@ pub mod cursor;
 pub mod dbus;
 pub mod frame_clock;
 pub mod handlers;
+pub mod identity;
 pub mod input;
 pub mod ipc;
 pub mod layer;

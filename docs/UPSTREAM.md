@@ -5,18 +5,18 @@ This document is the procedure and the known conflict map.
 
 ## 1. Remotes
 
-better-niri keeps a direct relationship with niri:
+loom-niri keeps a direct relationship with niri:
 
 ```sh
 git remote -v
-# origin    https://github.com/fram446742/better-niri.git
+# origin    https://github.com/fram446742/loom-niri.git
 # upstream  https://github.com/niri-wm/niri.git
 ```
 
-better-smithay keeps the same relationship with Smithay:
+loom-smithay keeps the same relationship with Smithay:
 
 ```sh
-# origin    https://github.com/fram446742/better-smithay.git
+# origin    https://github.com/fram446742/loom-smithay.git
 # upstream  https://github.com/Smithay/smithay.git
 ```
 
@@ -96,19 +96,19 @@ upstream. When adding code, prefer a new file over editing these.
 `src/niri.rs` and `src/input/mod.rs` are the two highest-churn files upstream
 (132 and 108 changes in the last 800 commits). Treat edits there as expensive.
 
-## 5. Updating better-smithay
+## 5. Updating loom-smithay
 
 When upstream Smithay moves:
 
-1. Fetch upstream into better-smithay.
-2. Merge upstream into better-smithay `master`; keep feature commits.
+1. Fetch upstream into loom-smithay.
+2. Merge upstream into loom-smithay `master`; keep feature commits.
 3. Drop any of our commits that upstream has landed; note the upstream commit in
    the merge message.
 4. Build Smithay with the same features niri uses, including `renderer_vulkan`
    when the Vulkan feature is enabled.
 5. Run niri's `cargo check` against the new revision using the local patch
    command in `COMPATIBILITY.md`.
-6. Bump **both** `rev` lines in better-niri's `Cargo.toml`, and update
+6. Bump **both** `rev` lines in loom-niri's `Cargo.toml`, and update
    `Cargo.lock` with a normal `cargo update -p smithay`.
 7. Record the new combination in `COMPATIBILITY.md`.
 
@@ -123,7 +123,7 @@ time. Format: file, function, purpose, feature, owner commit.
 
 | File | Function / region | Purpose | Feature | Notes |
 | --- | --- | --- | --- | --- |
-| `Cargo.toml` | workspace Smithay deps | Pin better-smithay | infrastructure | Both `smithay` and `smithay-drm-extras`. |
+| `Cargo.toml` | workspace Smithay deps | Pin loom-smithay | infrastructure | Both `smithay` and `smithay-drm-extras`. |
 | `niri-ipc/src/lib.rs` | `Action` enum | New IPC actions | all interactive features | Additive. |
 | `niri-config/src/lib.rs` | `Config` struct + `pub mod` | Register option modules | all config features | Keep to declarations. |
 | `src/handlers/mod.rs` | `delegate_dispatch!` list | Register protocol handlers | protocols | One line per protocol. |
@@ -134,8 +134,8 @@ reviewing upstream merges.
 
 ## 7. Simulated sync result (baseline)
 
-At audit time better-niri is exactly upstream `02ee0585`; a merge is a no-op and
-there are zero conflicts. better-smithay is exactly Smithay `a38bb709`, the
+At audit time loom-niri is exactly upstream `02ee0585`; a merge is a no-op and
+there are zero conflicts. loom-smithay is exactly Smithay `a38bb709`, the
 revision niri pins.
 
 The first real sync simulation will be run after the Smithay consolidation and

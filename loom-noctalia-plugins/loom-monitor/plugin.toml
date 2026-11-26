@@ -1,0 +1,10 @@
+id = "loom/loom-monitor"
+name = "Loom Monitor"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Apply saved output profiles and cycle them from the bar."
+
+[[widget]]
+id = "profiles"
+entry = "widget.luau"

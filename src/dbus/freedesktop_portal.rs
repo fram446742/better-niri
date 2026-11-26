@@ -33,7 +33,6 @@ use crate::ui::screenshot_ui::ScreenshotPortalError;
 use crate::utils::{CastSessionId, CastStreamId};
 
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
-const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.niri";
 
 const RESPONSE_SUCCESS: u32 = 0;
 const RESPONSE_CANCELLED: u32 = 1;
@@ -316,8 +315,8 @@ impl ScreenCastBackend {
             .as_ref()
             .and_then(|restore| self.resolve_restored_monitors(&select, restore));
 
-        // An external picker (better-portal-picker) can supply the selection
-        // through `org.better.portal.ScreenCastSelection`; consume it instead of
+        // An external picker (loom-portal-picker) can supply the selection
+        // through `org.loom.portal.ScreenCastSelection`; consume it instead of
         // showing the compositor's picker.
         let (sources, persist_mode, creation_time) = if let Some(forced) = forced_selection {
             match validate_selection(&picker_options, forced) {
@@ -956,10 +955,10 @@ async fn remove_request(server: &ObjectServer, path: &OwnedObjectPath) {
     }
 }
 
-/// Internal selection API used by the external `better-portal-picker`.
+/// Internal selection API used by the external `loom-portal-picker`.
 ///
 /// This lives on the compositor's portal bus next to the ScreenCast backend.
-/// better-portal sets the selected output before forwarding Start; niri then
+/// loom-portal sets the selected output before forwarding Start; niri then
 /// skips its own picker and streams the forced selection.
 #[derive(Clone)]
 pub struct ScreenCastSelectionBackend(Arc<Shared>);
@@ -992,7 +991,7 @@ fn parse_selection_sources(sources: &[(u32, String)]) -> Result<Vec<StreamTarget
     Ok(parsed)
 }
 
-#[interface(name = "org.better.portal.ScreenCastSelection")]
+#[interface(name = "org.loom.portal.ScreenCastSelection")]
 impl ScreenCastSelectionBackend {
     async fn set_selection(
         &self,
@@ -1056,7 +1055,7 @@ pub fn start(
         .at(PORTAL_PATH, ScreenshotBackend(shared.clone()))?;
     conn.object_server()
         .at(PORTAL_PATH, ScreenCastSelectionBackend(shared.clone()))?;
-    request_name(&conn, BUS_NAME, monitor)?;
+    request_name(&conn, crate::identity::current().portal_bus, monitor)?;
 
     let async_conn = conn.inner().clone();
     let future = async move {

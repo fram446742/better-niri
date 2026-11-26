@@ -2,7 +2,7 @@
 //!
 //! The Vulkan counterpart of the GLES [`Blur`](super::blur::Blur): a downsample chain through
 //! progressively halved renderer-owned textures, then an upsample chain back into the full-size
-//! output texture. The passes run through better-smithay's custom-pass pipeline using the
+//! output texture. The passes run through loom-smithay's custom-pass pipeline using the
 //! `blur_down`/`blur_up` programs compiled by [`VulkanShaders`](super::shaders::VulkanShaders).
 //!
 //! [`VulkanBlur::render_in_frame`] is used inside an existing frame (the per-window background

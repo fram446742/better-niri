@@ -15,7 +15,7 @@ hardware.
   scaling and ICtCp tone mapping where content exceeds the sink.
 - Per-element `ScanoutColorTransform`, post-blend PQ encode through the CRTC
   gamma LUT, and an HDR cursor-plane transform.
-- SDR capture/readback paths and HDR-aware screenshot metadata in better-shot.
+- SDR capture/readback paths and HDR-aware screenshot metadata in loom-shot.
 - 10-bit `wl_shm` formats (`Xrgb2101010`, `Xbgr2101010`) are advertised so a
   color-managed client can provide a 10-bit surface.
 
@@ -24,7 +24,7 @@ hardware.
 The experimental COSMIC fork (`Liquidmasl/cosmic-comp`, branch `hdr`) was read
 as a second implementation. The useful parity points:
 
-| Area | COSMIC | better-niri |
+| Area | COSMIC | loom-niri |
 | --- | --- | --- |
 | Output policy | HDR enabled by config/env; desktop stays HDR | `auto` engages only for fullscreen HDR content; `on` keeps the desktop HDR |
 | Surface descriptions | PQ + scRGB | broader: wide-gamut SDR, HLG, ext-linear, BT.2100 |

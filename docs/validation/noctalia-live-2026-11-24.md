@@ -7,13 +7,13 @@ plugin API range includes the declared `plugin_api = 24`.
 
 ```sh
 cp ~/.config/noctalia/plugins.json /tmp/noctalia-plugins-backup.json
-noctalia msg plugins source add better-desktop path \
-  /home/franc/Projects/better-niri/better-niri/better-noctalia-plugins
-for p in better-audio better-companion better-monitor better-session \
-         better-shot better-sidepanels better-sticky better-wallpaper; do
-  noctalia msg plugins enable better-desktop/$p
+noctalia msg plugins source add loom-desktop path \
+  /home/franc/Projects/loom-niri/loom-niri/loom-noctalia-plugins
+for p in loom-audio loom-companion loom-monitor loom-session \
+         loom-shot loom-sidepanels loom-sticky loom-wallpaper; do
+  noctalia msg plugins enable loom/$p
 done
-noctalia msg plugins list | grep better-desktop
+noctalia msg plugins list | grep loom-desktop
 ```
 
 ## Result
@@ -21,18 +21,18 @@ noctalia msg plugins list | grep better-desktop
 All eight plugins were discovered, exported and enabled:
 
 ```
-better-desktop/better-audio [better-desktop] 1.0.0 enabled
-better-desktop/better-companion [better-desktop] 1.0.0 enabled
-better-desktop/better-monitor [better-desktop] 1.0.0 enabled
-better-desktop/better-session [better-desktop] 1.0.0 enabled
-better-desktop/better-shot [better-desktop] 1.0.0 enabled
-better-desktop/better-sidepanels [better-desktop] 1.0.0 enabled
-better-desktop/better-sticky [better-desktop] 1.0.0 enabled
-better-desktop/better-wallpaper [better-desktop] 1.0.0 enabled
+loom/loom-audio [loom-desktop] 1.0.0 enabled
+loom/loom-companion [loom-desktop] 1.0.0 enabled
+loom/loom-monitor [loom-desktop] 1.0.0 enabled
+loom/loom-session [loom-desktop] 1.0.0 enabled
+loom/loom-shot [loom-desktop] 1.0.0 enabled
+loom/loom-sidepanels [loom-desktop] 1.0.0 enabled
+loom/loom-sticky [loom-desktop] 1.0.0 enabled
+loom/loom-wallpaper [loom-desktop] 1.0.0 enabled
 ```
 
 `~/.cache/noctalia/noctalia.log.1` records `loaded plugin ...` for every entry
-and contains no `[luau] plugin better-desktop/...` errors after the load. The
+and contains no `[luau] plugin loom/...` errors after the load. The
 entries are widgets, so they only execute `onClick`/`update` once placed on a
 bar; the load path compiles and runs each entry's top-level chunk, which is the
 part that can fail before a user adds the widget.
@@ -55,16 +55,16 @@ NIRI_BACKEND=headless XDG_RUNTIME_DIR=/tmp/noc-test/runtime niri \
 XDG_CONFIG_HOME=/tmp/noc-test/config XDG_STATE_HOME=/tmp/noc-test/state \
   NOCTALIA_CONFIG_HOME=/tmp/noc-test/config NOCTALIA_STATE_HOME=/tmp/noc-test/state \
   WAYLAND_DISPLAY=wayland-1 noctalia -d
-noctalia msg plugin better-desktop/better-companion:status focused refresh
-noctalia msg plugin better-desktop/better-companion:status focused click
-noctalia msg plugin better-desktop/better-companion:status focused right-click
+noctalia msg plugin loom/loom-companion:status focused refresh
+noctalia msg plugin loom/loom-companion:status focused click
+noctalia msg plugin loom/loom-companion:status focused right-click
 ```
 
-The bar instantiated `widget.better_companion`, the log shows
-`widget.better_companion` with its file watcher, and all three IPC events were
-dispatched (`ok: dispatched 1`) with no `[luau] ... better-desktop` errors.
+The bar instantiated `widget.loom_companion`, the log shows
+`widget.loom_companion` with its file watcher, and all three IPC events were
+dispatched (`ok: dispatched 1`) with no `[luau] ... loom-desktop` errors.
 `click` runs the same handler as a pointer click (here it reports the missing
-`companionctl` gracefully), `right-click` opens better-settings, and `refresh`
+`loomctl` gracefully), `right-click` opens loom-settings, and `refresh`
 re-reads the daemon state. The isolated niri, D-Bus and Noctalia processes were
 stopped afterwards; the user's running Noctalia was restarted from its own
 session environment.

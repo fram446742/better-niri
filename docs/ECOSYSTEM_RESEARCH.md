@@ -1,4 +1,4 @@
-# Better Desktop ecosystem research
+# Loom ecosystem research
 
 This is the working map of the reference projects and what happened to their
 ideas. Status values: `integrated` (code or behaviour lives in this tree),
@@ -20,7 +20,7 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 | demoj1/niri | integrated | Block-out blur, DPMS fixes, overview overrides, cache cleanup. |
 | zaroutt/Niri-glass | integrated | Liquid glass through niri-elite. |
 | Smithay/smithay | integrated | Upstream infrastructure. |
-| MEKCCK/smithay | integrated | First parent of better-smithay. |
+| MEKCCK/smithay | integrated | First parent of loom-smithay. |
 | losnoco/smithay | integrated | Second parent (Vulkan, colour pipelines, barriers). |
 | urayde/smithay, dividebysandwich/smithay, reverb256/smithay | reference | Audited; the useful parts are already in the two parents. |
 
@@ -28,13 +28,13 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| Asthestarsfalll/piri | integrated (behaviour) | Compiled-plugin ideas, rules, run-or-raise, swallow, marks are in better-companion; no Piri code is vendored. |
+| Asthestarsfalll/piri | integrated (behaviour) | Compiled-plugin ideas, rules, run-or-raise, swallow, marks are in loom-companion; no Piri code is vendored. |
 | nsticky | integrated | Workflow absorbed; native sticky in the compositor and compatibility aliases in companion. |
 | niri-float-sticky, niri-pip | integrated (behaviour) | Native sticky windows cover the use case; no second daemon. |
-| niri-scratchpad, niri-scratchpad-rs, ndrop | integrated | `scratchpad.*` in better-companion. |
+| niri-scratchpad, niri-scratchpad-rs, ndrop | integrated | `scratchpad.*` in loom-companion. |
 | niri-ror | integrated | `windows.run-or-raise`. |
 | niri-sidebar | rejected | Superseded by the full niri-sidepanels port. |
-| zgavin/niri-sidepanels | integrated | `better-sidepanels-stack`, full port. |
+| zgavin/niri-sidepanels | integrated | `loom-sidepanels-stack`, full port. |
 | niri-companion (Python) | reference | Overlaps companion profiles/sessions; not adopted to avoid two automation daemons. |
 | nirimap | rejected | A graphical minimap would duplicate the grid overview; the sidepanel `taskbar` lists and focuses windows. |
 | miri | rejected | Alternative layout engines conflict with niri’s scrollable model. |
@@ -48,7 +48,7 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| amaanq/nirinit | integrated (behaviour) | Workspace/window snapshots and launch mapping in better-session. |
+| amaanq/nirinit | integrated (behaviour) | Workspace/window snapshots and launch mapping in loom-session. |
 | MTeaHead/niri-session-manager | integrated | Periodic/auto snapshots, pruning and restore warnings. |
 | swaytreesave | reference | Layout-tree idea only; niri has no sway tree. |
 
@@ -56,43 +56,43 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| srinivasr/nirimod | integrated (idea) | KDL-preserving editor in better-settings. |
+| srinivasr/nirimod | integrated (idea) | KDL-preserving editor in loom-settings. |
 | niri_display_manager | integrated | Canvas/drag editor with profiles and rollback. |
 | nirimon | reference | TUI idea; CLI/JSON covers it. |
 | nirilayout | integrated | Profiles. |
-| stefonarch/niri-settings | reference | PyQt settings UI; better-settings is the maintained frontend and owns KDL edits. |
+| stefonarch/niri-settings | reference | PyQt settings UI; loom-settings is the maintained frontend and owns KDL edits. |
 | kanshi | integrated (behaviour) | Watch/rules apply profiles on hotplug. |
 
 ## Audio, sensors and system utilities
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| ledati16/pwsw | integrated | PipeWire routing rules in better-audio. |
+| ledati16/pwsw | integrated | PipeWire routing rules in loom-audio. |
 | mikkurogue/kunai | reference | Per-keyboard layouts already handled by the compositor. |
 | Zhaith-Izaliel/iio-niri | integrated | `rotate.*` in companion. |
 | saltnpepper97/stasis | integrated | `idle.*` inhibitors in companion. |
 | jfreed-dev/niri-screensaver | rejected | Shell/Noctalia responsibility. |
 | system76-scheduler-niri | rejected | External scheduler policy; not desktop state. |
-| nouritsu/niri-cwd | integrated | `windows.cwd` in better-companion. |
-| probeldev/niri-screen-time | integrated | `screentime.*` in better-companion with a Noctalia widget. |
+| nouritsu/niri-cwd | integrated | `windows.cwd` in loom-companion. |
+| probeldev/niri-screen-time | integrated | `screentime.*` in loom-companion with a Noctalia widget. |
 | niriSKL.nvim, vim-niri-nav, arbtt-capture-wl | rejected | Editor/activity tools outside the desktop tooling scope. |
 
 ## Capture
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| niri-shot, Nirisnap | integrated | Capture, annotations, OCR, redaction, pins, history merged in better-shot. |
+| niri-shot, Nirisnap | integrated | Capture, annotations, OCR, redaction, pins, history merged in loom-shot. |
 | utsushot | rejected | Requires relaunching the client on a temporary output; a capture tool must not control application rendering. |
-| niri-screenshot-tools | rejected | External annotation pipeline; better-shot has its own. |
+| niri-screenshot-tools | rejected | External annotation pipeline; loom-shot has its own. |
 
 ## Wallpapers and shaders
 
 | Project | Status | Where / reason |
 | --- | --- | --- |
-| Noctalia wallpaper | reference | Rendering can stay in the shell; better-wallpaper owns scenes. |
+| Noctalia wallpaper | reference | Rendering can stay in the shell; loom-wallpaper owns scenes. |
 | hyprlax | rejected | niri IPC exposes no scroll position to drive real parallax; a fake offset would be misleading. |
 | Pandora | reference | Dynamic wallpaper daemon idea. |
-| YangYuS8/lwe | reference | Video/scene catalogue; native video is in better-wallpaper. |
+| YangYuS8/lwe | reference | Video/scene catalogue; native video is in loom-wallpaper. |
 | nirimation, liixini/shaders | reference | Shader collections for the compositor shader engine. |
 
 ## Shells, bars and bindings
@@ -114,7 +114,7 @@ launcher, and a second one would own keybindings, plugins and history.
 | --- | --- |
 | noctalia-dev/noctalia | integrated (plugin target) |
 | official-plugins, community-plugins | reference |
-| better-noctalia-plugins | integrated (in-repo plugin source) |
+| loom-noctalia-plugins | integrated (in-repo plugin source) |
 
 ## Rejected and deferred ideas — permanent record
 
@@ -133,11 +133,11 @@ would make us reconsider, and what we use instead.
 A single floating window stack at the screen edge. `niri-sidepanels` is its
 direct successor with two independent panels, per-panel widths, peek behaviour
 and managed struts, and we ported that successor in full as
-`better-sidepanels-stack`. Keeping both would duplicate the same window-stack
+`loom-sidepanels-stack`. Keeping both would duplicate the same window-stack
 state and fight over the same windows.
 
 *Reconsider if* niri-sidepanels stops being maintained and a sidebar-specific
-feature has no equivalent there. *Use instead:* better-sidepanels-stack.
+feature has no equivalent there. *Use instead:* loom-sidepanels-stack.
 
 ### miri (MintyDoggo)
 
@@ -180,7 +180,7 @@ policy module; even then it should be an explicit opt-in adapter, not core.
 
 Tunes process priorities from the focused application through System76
 Scheduler. That is host policy, depends on a system daemon and affects every
-process, not only Better Desktop windows. Integrating it would make companion
+process, not only Loom windows. Integrating it would make companion
 depend on a distro-specific service and could surprise users.
 
 *Reconsider if* a generic priority-policy interface exists in the session;
@@ -198,11 +198,11 @@ an external plugin.
 
 ### niri-screenshot-tools
 
-Sends captures to external annotators or servers. better-shot already owns the
+Sends captures to external annotators or servers. loom-shot already owns the
 capture, annotation and export pipeline; adding another router would split the
 history and annotation model. The `--command`/hook escape hatch covers custom
 targets. *Reconsider if* a service protocol needs first-class support; it would
-be a better-shot output backend.
+be a loom-shot output backend.
 
 ### utsushot
 

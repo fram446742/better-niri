@@ -220,13 +220,13 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all --all-targets
 
-  # `better-*` directories are independent Cargo workspaces (they are excluded
+  # `loom-*` directories are independent Cargo workspaces (they are excluded
   # from niri's workspace), so the root jobs above never see them.
-  better-workspaces:
+  loom-workspaces:
     strategy:
       fail-fast: false
 
-    name: better-* workspaces
+    name: loom-* workspaces
     runs-on: ubuntu-26.04
 
     env:
@@ -254,7 +254,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Check every better-* workspace
+      - name: Check every loom-* workspace
         run: scripts/check-workspaces.sh
 
   rustfmt:

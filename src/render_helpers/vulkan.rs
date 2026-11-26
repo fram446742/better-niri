@@ -1,7 +1,7 @@
 //! Vulkan renderer support: device probe, renderer preference and the startup
 //! plan.
 //!
-//! better-smithay ships a Vulkan renderer behind its `renderer_vulkan` feature,
+//! loom-smithay ships a Vulkan renderer behind its `renderer_vulkan` feature,
 //! which niri's `vulkan` feature enables. This module owns the compositor-side
 //! selection policy:
 //!

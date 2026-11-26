@@ -1,4 +1,4 @@
-# better-niri — Phase A audit (2026-11-23)
+# loom-niri — Phase A audit (2026-11-23)
 
 This is the initial repository and feature audit requested before integration work.
 It records what was verified in the local clones, not what READMEs claim. Every
@@ -19,22 +19,22 @@ Companion documents:
 
 | Repository | Local path | Branch / HEAD | Relation to upstream | Working tree |
 | --- | --- | --- | --- | --- |
-| better-niri | `better-niri/` | `main` @ `02ee0585` | identical to `niri-wm/niri` `main` @ `02ee0585` (3,097 commits, 0 ahead) | clean |
-| better-smithay | `better-smithay/` | `master` @ `a38bb709` | identical to `Smithay/smithay` `master` @ `a38bb709` (the revision niri pins) | clean |
+| loom-niri | `loom-niri/` | `main` @ `02ee0585` | identical to `niri-wm/niri` `main` @ `02ee0585` (3,097 commits, 0 ahead) | clean |
+| loom-smithay | `loom-smithay/` | `master` @ `a38bb709` | identical to `Smithay/smithay` `master` @ `a38bb709` (the revision niri pins) | clean |
 | niri (reference) | `niri/` | `main` @ `02ee0585` | upstream | clean |
 | biri | `biri/` | `main` @ `5b465e4c` | base `2fbc6f3b` (2026-11-21), 379 feature commits ahead, 2 behind current niri | clean |
 | niri-elite | `niri-elite/` | `main` @ `31458c94` | base `fcbc971c` (2026-10-27), 317 commits ahead, 92 behind | clean |
 | niri-spicy | `niri-spicy/` | `spicy-main` @ `1bfaa833` | base `5f4469b6` (2026-09-22), 67 commits ahead, 171 behind | clean |
 | kde-niri (Naxdy) | `kde-niri/` | `main` @ `b09a30b7` | base `54c7fdcd` (2025-11-25), 148 ahead, 540 behind | clean |
 | smithay (losnoco) | `smithay/` | `spicy-master` @ `dba9452b` | base Smithay `79bbed5e` (2026-09-22), 50 ahead, 84 behind | clean |
-| better-nsticky | `../better-nsticky/source` | `main` @ `f4f5bfd` | independent daemon, JSON over niri IPC | clean |
+| loom-nsticky | `../loom-nsticky/source` | `main` @ `f4f5bfd` | independent daemon, JSON over niri IPC | clean |
 
 Actions taken during the audit (all reversible):
 
-- Added `upstream` remote to better-niri (`niri-wm/niri`) and fetched it; `origin/main == upstream/main`.
-- Added `upstream`, `mekcck`, `losnoco` remotes to better-smithay for comparison.
-- Fetched `MEKCCK/smithay` `66b0670` and `losnoco/smithay` `spicy-master` into better-smithay object storage and pinned them under `refs/audit/*`; no branches were merged.
-- Repointed better-niri's `smithay` and `smithay-drm-extras` dependencies at `fram446742/better-smithay`, same revision `a38bb709` (byte-identical content, no functional change), establishing the single-Smithay relationship.
+- Added `upstream` remote to loom-niri (`niri-wm/niri`) and fetched it; `origin/main == upstream/main`.
+- Added `upstream`, `mekcck`, `losnoco` remotes to loom-smithay for comparison.
+- Fetched `MEKCCK/smithay` `66b0670` and `losnoco/smithay` `spicy-master` into loom-smithay object storage and pinned them under `refs/audit/*`; no branches were merged.
+- Repointed loom-niri's `smithay` and `smithay-drm-extras` dependencies at `fram446742/loom-smithay`, same revision `a38bb709` (byte-identical content, no functional change), establishing the single-Smithay relationship.
 - `LIBCLANG_PATH=/usr/lib cargo check --workspace` passes.
 
 No new forks or repositories were created. No history was rewritten and nothing was pushed.
@@ -82,7 +82,7 @@ picker, liquid glass, consolidated carousel overview, vertical main axis.
 | zaroutt/Niri-glass | main @ `72ee163` | Liquid glass in 3 files; already hand-ported by niri-elite. |
 | losnoco/smithay | `spicy-master` @ `dba9452b`, 50 commits | Origin of the colour-management lineage, DRM colour pipelines, SurfaceBarrier, commit-timing, async flips, Vulkan renderer. |
 | MEKCCK/smithay | `66b0670`, 16 commits | Rebase of the losnoco colour lineage plus urayde async flips, tearing, and per-client seat filtering. No Vulkan renderer. |
-| better-nsticky | independent daemon | Sticky/staged/scratchpad window management over niri IPC; BSD-3-Clause. |
+| loom-nsticky | independent daemon | Sticky/staged/scratchpad window management over niri IPC; BSD-3-Clause. |
 
 ## 4. Duplicate implementations and chosen base
 
@@ -103,11 +103,11 @@ picker, liquid glass, consolidated carousel overview, vertical main axis.
 | Blur | upstream, kde-niri extra modes | **upstream** + evaluate Naxdy extras | Upstream already has passes/noise/saturation/xray. |
 | DPMS frame callbacks | demoji, upstream | **upstream** | Already fixed upstream; porting would duplicate. |
 | DPMS memory cleanup | RiversJin/niri PR #4550 (`4da66421`), demoji PR #4750 | **backport #4550** | #3295/#4750 remain open; #4550 is diagnosis-complete and user-confirmed. Reclaim dead imports on the 1 s timer; tests in `src/tests/renderer_cleanup.rs`. |
-| Native sticky vs better-nsticky | biri, better-nsticky | **biri native** + nsticky compatibility mode | Native sticky is compositor-level and follows workspaces correctly; nsticky keeps staging/scratchpads, its unique value. |
+| Native sticky vs loom-nsticky | biri, loom-nsticky | **biri native** + nsticky compatibility mode | Native sticky is compositor-level and follows workspaces correctly; nsticky keeps staging/scratchpads, its unique value. |
 
 ## 5. Smithay decision, in detail
 
-Current better-smithay is exactly upstream Smithay at niri's pinned revision.
+Current loom-smithay is exactly upstream Smithay at niri's pinned revision.
 That is the correct starting point, but it cannot support HDR, Vulkan or tearing.
 
 Candidate comparison, measured locally:
@@ -121,7 +121,7 @@ Candidate comparison, measured locally:
 `smithay-drm-extras` is untouched by both forks, so a single Smithay revision can
 pair with upstream `smithay-drm-extras`.
 
-Decision: better-smithay will be rebuilt as upstream `master` + reviewed,
+Decision: loom-smithay will be rebuilt as upstream `master` + reviewed,
 thematically grouped commits from the losnoco lineage, then MEKCCK's
 `seat: allow filtering which clients see a seat global` (needed by the agent
 seat), then any losnoco-to-newer-upstream adaptation that MEKCCK already solved
@@ -267,7 +267,7 @@ tests and documentation.
 10. **Privacy / stability**: `block-out-blur`, texture-cache/DPMS investigation,
     Nvidia fences, multi-GPU, suspend/resume.
 11. **nsticky integration**: native sticky plus a compatibility mode in
-    better-nsticky (delegate sticky to the compositor, keep staging/scratchpads).
+    loom-nsticky (delegate sticky to the compositor, keep staging/scratchpads).
 12. **Validation**: CI, headless visual tests, hardware matrix, docs updates.
 
 ## 11. Deliverable checklist

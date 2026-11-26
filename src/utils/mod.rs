@@ -149,25 +149,9 @@ pub fn version() -> String {
         return String::from(v);
     }
 
-    const MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
-    const MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
-    const PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
-    const PRE: &str = env!("CARGO_PKG_VERSION_PRE");
-
     let commit =
         option_env!("NIRI_BUILD_COMMIT").unwrap_or(git_version!(fallback = "unknown commit"));
-
-    let base = if PATCH == "0" {
-        format!("{MAJOR}.{MINOR:0>2}")
-    } else {
-        format!("{MAJOR}.{MINOR:0>2}.{PATCH}")
-    };
-
-    if PRE.is_empty() {
-        format!("{base} ({commit})")
-    } else {
-        format!("{base}-{PRE} ({commit})")
-    }
+    format!("{} ({commit})", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn get_monotonic_time() -> Duration {

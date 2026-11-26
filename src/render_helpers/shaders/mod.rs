@@ -779,7 +779,7 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 /// Vulkan-compiled niri shader programs.
 ///
 /// The TTY Vulkan renderer draws the same GLSL sources as GLES, compiled to
-/// SPIR-V through better-smithay's custom pixel pipeline. Textured programs
+/// SPIR-V through loom-smithay's custom pixel pipeline. Textured programs
 /// (panel, decoration light, blur, background composite) sample
 /// renderer-owned `VulkanTexture`s; producers that only exist on the GLES
 /// side (resize/close/open snapshots, xray backdrop buffers) still keep their
@@ -1752,7 +1752,7 @@ mod tests {
                 "background-effect postprocess shader failed to compile on {}",
                 device.name()
             );
-            // Global/scoped programs need five samplers; better-smithay now
+            // Global/scoped programs need five samplers; loom-smithay now
             // exposes MAX_CUSTOM_TEXTURES = 8, so they compile for real.
             assert!(
                 compile_vulkan_global(

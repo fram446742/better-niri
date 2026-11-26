@@ -59,15 +59,15 @@ profile_apps() {
 component_manifest() {
     case $1 in
         niri) printf '%s\n' "" ;;
-        portal) printf '%s\n' better-portal/Cargo.toml ;;
-        companion) printf '%s\n' better-companion/Cargo.toml ;;
-        monitor) printf '%s\n' better-monitor/Cargo.toml ;;
-        session) printf '%s\n' better-session/Cargo.toml ;;
-        shot) printf '%s\n' better-shot/Cargo.toml ;;
-        wallpaper) printf '%s\n' better-wallpaper/Cargo.toml ;;
-        settings) printf '%s\n' better-settings/Cargo.toml ;;
-        audio) printf '%s\n' better-audio/Cargo.toml ;;
-        sidepanels) printf '%s\n' better-sidepanels/Cargo.toml ;;
+        portal) printf '%s\n' loom-portal/Cargo.toml ;;
+        companion) printf '%s\n' loom-companion/Cargo.toml ;;
+        monitor) printf '%s\n' loom-monitor/Cargo.toml ;;
+        session) printf '%s\n' loom-session/Cargo.toml ;;
+        shot) printf '%s\n' loom-shot/Cargo.toml ;;
+        wallpaper) printf '%s\n' loom-wallpaper/Cargo.toml ;;
+        settings) printf '%s\n' loom-settings/Cargo.toml ;;
+        audio) printf '%s\n' loom-audio/Cargo.toml ;;
+        sidepanels) printf '%s\n' loom-sidepanels/Cargo.toml ;;
         *) return 1 ;;
     esac
 }
@@ -75,16 +75,16 @@ component_manifest() {
 # Print the binaries a component is expected to produce, one per line.
 component_binaries() {
     case $1 in
-        niri) printf '%s\n' niri ;;
-        portal) printf '%s\n' better-portal better-portal-picker ;;
-        companion) printf '%s\n' better-companion companionctl ;;
-        monitor) printf '%s\n' better-monitor ;;
-        session) printf '%s\n' better-session ;;
-        shot) printf '%s\n' better-shot ;;
-        wallpaper) printf '%s\n' better-wallpaper ;;
-        settings) printf '%s\n' better-settings better-settingsctl ;;
-        audio) printf '%s\n' better-audio ;;
-        sidepanels) printf '%s\n' better-sidepanels ;;
+        niri) printf '%s\n' niri loom-niri loom ;;
+        portal) printf '%s\n' loom-portal loom-portal-picker ;;
+        companion) printf '%s\n' loom-companion loomctl ;;
+        monitor) printf '%s\n' loom-monitor ;;
+        session) printf '%s\n' loom-session ;;
+        shot) printf '%s\n' loom-shot ;;
+        wallpaper) printf '%s\n' loom-wallpaper ;;
+        settings) printf '%s\n' loom-settings loom-settingsctl ;;
+        audio) printf '%s\n' loom-audio ;;
+        sidepanels) printf '%s\n' loom-sidepanels ;;
         *) return 1 ;;
     esac
 }

@@ -1,12 +1,12 @@
-# better-companion architecture
+# loom-companion architecture
 
-better-companion is the window/automation daemon of the ecosystem. It absorbs
+loom-companion is the window/automation daemon of the ecosystem. It absorbs
 nsticky's workflow and Piri's automation ideas. This document decides how it is
 modularised.
 
 ## 1. Decision: one daemon, internal modules
 
-better-companion is **one process with internal modules**, not one daemon per
+loom-companion is **one process with internal modules**, not one daemon per
 feature.
 
 Reasons:
@@ -33,8 +33,8 @@ Split only when at least one is true:
 - the component is useful without the compositor/companion;
 - it needs to survive companion restarts independently.
 
-Current splits: better-portal, better-shot, better-monitor, better-session,
-better-audio, better-wallpaper, better-settings. better-companion stays focused
+Current splits: loom-portal, loom-shot, loom-monitor, loom-session,
+loom-audio, loom-wallpaper, loom-settings. loom-companion stays focused
 on windows, workspaces and automation.
 
 ## 3. Module layout
@@ -46,7 +46,7 @@ context** instead of one crate per tiny module. This keeps compile times and
 ownership clear without a dozen near-empty crates.
 
 ```
-better-companion/
+loom-companion/
   Cargo.toml                 workspace
   crates/
     companion-core/          IPC client, state, event bus, config, action registry,
@@ -55,8 +55,8 @@ better-companion/
     companion-automation/    modules: rules, launch, singleton, swallow
     companion-hooks/         module: hooks (workspace/output/session events)
     companion-system/        modules: idle, orientation (candidates)
-    companionctl/            CLI
-    better-companion/        daemon binary
+    loomctl/            CLI
+    loom-companion/        daemon binary
 ```
 
 Rules:
@@ -91,7 +91,7 @@ Rules:
 - State changes go through the core state manager.
 - Configuration lives under `[modules.<name>]`, with validation and defaults.
 - Ordering is explicit and deterministic; conflicts are resolved by priority and
-  rule specificity, and explained by `companionctl explain`.
+  rule specificity, and explained by `loomctl explain`.
 - A module can be disabled at runtime and must then do no work and hold no
   timers.
 - Errors in one module are reported and do not kill the daemon.
@@ -146,7 +146,7 @@ Core, not module-owned:
    (`window.opened`, `window.closed`, `workspace.activated`, `output.changed`,
    `focus.changed`, `config.reloaded`), and only receive what they subscribe to.
 6. Every action returns a typed result/error, is listed by
-   `companionctl actions --json`, and is covered by the module's tests.
+   `loomctl actions --json`, and is covered by the module's tests.
 
 ### Naming and hierarchy
 
@@ -163,9 +163,9 @@ Namespaces (`window`, `automation`, `event`, `system`, `core`) are grouping
 nodes; a module owns a **leaf subtree**, not the whole namespace. The registry
 uses longest-prefix matching and rejects duplicate subtree owners.
 
-- CLI: `companionctl window sticky toggle`,
-  `companionctl automation launch focus-or-spawn`,
-  `companionctl system idle inhibit`.
+- CLI: `loomctl window sticky toggle`,
+  `loomctl automation launch focus-or-spawn`,
+  `loomctl system idle inhibit`.
 - UDS/JSON: `window.sticky.toggle`, `automation.rules.explain`.
 - Config: `[modules.sticky]`, `[modules.stage]`, `[modules.scratchpad]`,
   `[modules.rules]`, `[modules.launch]`, `[modules.idle]`. Config names stay
@@ -199,7 +199,7 @@ per feature.
 Third parties do not load `.so` modules. They can:
 - call the documented UDS API;
 - run as an external service and expose their own actions;
-- ask better-companion to invoke them through a configured, permissioned hook.
+- ask loom-companion to invoke them through a configured, permissioned hook.
 
 If a third-party action category becomes broadly useful, it can be absorbed as a
 compiled module.
@@ -230,7 +230,7 @@ Rules:
    interceptors. Modules cannot silently override each other.
 2. Order is deterministic: explicit priority, then rule specificity, then
    registration order. No hash-map iteration order.
-3. Every rewrite/block is recorded. `companionctl explain <action> --args ...`
+3. Every rewrite/block is recorded. `loomctl explain <action> --args ...`
    prints the chain: matching rules, rewrites, final owner, result.
 4. Loop protection: max rewrite depth and `(action, args)` cycle detection.
 5. Overrides apply to external requests by default. Internal calls from a module
@@ -270,7 +270,7 @@ Modules own:
 - `modules/rules`: nsticky's app/title/output/floating rules, merged with Piri's
   rule engine (one rule model, not two).
 - Compatibility: accept `nsticky` CLI commands and its config path as aliases in
-  better-companion. Do not modify or deprecate the standalone nsticky
+  loom-companion. Do not modify or deprecate the standalone nsticky
   repository; users who want only sticky/staged can keep using it.
 - Preserve history/attribution when merging code (BSD-3-Clause).
 
@@ -378,14 +378,14 @@ Action names and config stay compatible if split later.
 
 ## Implemented so far
 
-`better-companion/` (separate workspace inside this repository; excluded from
+`loom-companion/` (separate workspace inside this repository; excluded from
 niri's Cargo workspace):
 
 - `companion-core`: JSON-line protocol (`list`, `call`, `status`), merged
   action registry with namespaces, UDS/state path helpers and atomic JSON
   state.
 - `companion-parking`: named parking lots (`park`, `unpark`, `list`, `lots`,
-  `clear`) persisted under `$XDG_STATE_HOME/better-companion/parking.json`.
+  `clear`) persisted under `$XDG_STATE_HOME/loom-companion/parking.json`.
 - `companion-automation`: named sequences of `(namespace, action, params)`
   steps; `automation.run` executes them through the registry.
 - `companion-hooks`: event → commands registration and resolution (`fire`
@@ -399,7 +399,7 @@ niri's Cargo workspace):
   whose `/proc` parent chain reaches an allowlisted terminal minimizes the
   terminal; closing the child restores it. Pairs persist in the `swallow` lot.
 - `companion-adapters`: optional Phase C namespaces `session.*`, `monitor.*`,
-  `audio.*`, `wallpaper.*` for better-session/monitor/audio/wallpaper. Each
+  `audio.*`, `wallpaper.*` for loom-session/monitor/audio/wallpaper. Each
   stores explicit commands and event hooks; only the explicit `dispatch`
   action runs a command. Disabled by default.
 - `companion-system`: ping/status/paths.
@@ -411,8 +411,8 @@ niri's Cargo workspace):
   lots: `park`/`restore` a window and `park-workspace`/`restore-workspace` a
   group, minimizing/unminimizing through niri and recording snapshots in the
   `parker` lot.
-- `companion-daemon` (`better-companion`): Unix socket server, mode 0600.
-- `companionctl`: list/status/call client.
+- `companion-daemon` (`loom-companion`): Unix socket server, mode 0600.
+- `loomctl`: list/status/call client.
 
 Phase B is in: `rules.*`, `windows.run-or-raise`/`singleton` and terminal
 `swallow.*`. Workspace/output placement is in: the `layout` module resolves
@@ -425,8 +425,8 @@ event lines, reconnects from a full snapshot, bounds its window cache and
 rejects oversized requests without closing the socket. Phase C adapters are in:
 `session.*`, `monitor.*`, `audio.*`, `wallpaper.*` store commands/hooks and
 execute only on explicit dispatch. The companion apps live as excluded
-workspaces in this repository (`better-monitor`, `better-session`, `better-shot`,
-`better-wallpaper`, `better-settings`, `better-audio`, `better-sidepanels`).
+workspaces in this repository (`loom-monitor`, `loom-session`, `loom-shot`,
+`loom-wallpaper`, `loom-settings`, `loom-audio`, `loom-sidepanels`).
 Not yet: nsticky's `stage`/`scratchpad` workflow with compatibility aliases;
 parking still means minimizing.
 
@@ -441,13 +441,13 @@ parking still means minimizing.
 ### Phase B — automation
 
 - Unified `rules` (nsticky + Piri), `run_or_raise`, `singleton`, `swallow`.
-- `companionctl explain` and dry-run.
+- `loomctl explain` and dry-run.
 
 ### Phase C — hooks and ecosystem adapters
 
 - Workspace/output/focus hooks.
-- Optional adapters to better-session, better-monitor, better-audio,
-  better-wallpaper; no hard dependency.
+- Optional adapters to loom-session, loom-monitor, loom-audio,
+  loom-wallpaper; no hard dependency.
 
 ### Phase D — optional helpers
 
@@ -468,4 +468,4 @@ Remaining:
 
 - one crate per category or grouped crates (current proposal: grouped);
 - whether to expose a WASM/Lua extension host later (not in v1);
-- GUI: none in companion; better-settings owns configuration.
+- GUI: none in companion; loom-settings owns configuration.

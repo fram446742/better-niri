@@ -6,16 +6,16 @@ component. A single source checkout and a single `build()` serve all of them:
 | Package | Contents |
 | --- | --- |
 | `niri-better` | compositor, `niri-session`, session files, `niri.portal`, completions, docs |
-| `better-portal` | `better-portal`, picker, `better.portal`, systemd/D-Bus units, example portals.conf |
-| `better-companion` | `better-companion`, `companionctl`, optional systemd user unit |
-| `better-monitor` | `better-monitor` |
-| `better-session` | `better-session` |
-| `better-shot` | `better-shot` |
-| `better-wallpaper` | `better-wallpaper` |
-| `better-settings` | `better-settings`, `better-settingsctl`, desktop file |
-| `better-audio` | `better-audio` |
-| `better-sidepanels` | `better-sidepanels` |
-| `better-desktop` | meta package depending on every package above; installs `better` |
+| `loom-portal` | `loom-portal`, picker, `loom.portal`, systemd/D-Bus units, example portals.conf |
+| `loom-companion` | `loom-companion`, `loomctl`, optional systemd user unit |
+| `loom-monitor` | `loom-monitor` |
+| `loom-session` | `loom-session` |
+| `loom-shot` | `loom-shot` |
+| `loom-wallpaper` | `loom-wallpaper` |
+| `loom-settings` | `loom-settings`, `loom-settingsctl`, desktop file |
+| `loom-audio` | `loom-audio` |
+| `loom-sidepanels` | `loom-sidepanels` |
+| `loom-desktop` | meta package depending on every package above; installs `loom` |
 
 Build the whole set:
 
@@ -29,10 +29,10 @@ subset packages only those files):
 
 ```sh
 makepkg -si --pkg niri-better
-makepkg -si --pkg better-portal better-settings
+makepkg -si --pkg loom-portal loom-settings
 ```
 
-`better-settings.desktop`, `better-desktop.README.md` and
-`better-desktop.install` are local recipe files; keep them next to `PKGBUILD`
+`loom-settings.desktop`, `loom-desktop.README.md` and
+`loom-desktop.install` are local recipe files; keep them next to `PKGBUILD`
 when copying the recipe elsewhere. Regenerate `.SRCINFO` with
 `packaging/scripts/update-srcinfo.sh` after any metadata change.

@@ -1,0 +1,10 @@
+id = "loom/loom-audio"
+name = "Loom Audio"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Show and switch the default output sink through loom-audio."
+
+[[widget]]
+id = "sinks"
+entry = "widget.luau"

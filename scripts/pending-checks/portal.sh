@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Exercise better-portal from a user session bus. Build it first:
-#   cargo build --manifest-path better-portal/Cargo.toml
+# Exercise loom-portal from a user session bus. Build it first:
+#   cargo build --manifest-path loom-portal/Cargo.toml
 set -u
 TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 LOG=${PENDING_LOG:-/tmp/pending-portal.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
-BIN=${BETTER_PORTAL_BIN:-./better-portal/target/debug/better-portal}
+BIN=${LOOM_PORTAL_BIN:-./loom-portal/target/debug/loom-portal}
 BUS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}
 export DBUS_SESSION_BUS_ADDRESS=$BUS
-[ -x "$BIN" ] || { echo "missing $BIN (cargo build --manifest-path better-portal/Cargo.toml)"; exit 1; }
+[ -x "$BIN" ] || { echo "missing $BIN (cargo build --manifest-path loom-portal/Cargo.toml)"; exit 1; }
 say() { printf '\n== %s ==\n' "$*"; }
-OUT=/tmp/better-portal-shot.png
+OUT=/tmp/loom-portal-shot.png
 rm -f "$OUT"
 
 say "start portal (background)"
-"$BIN" >/tmp/better-portal.log 2>&1 &
+"$BIN" >/tmp/loom-portal.log 2>&1 &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT
 sleep 1
 
 say "interface introspection"
-gdbus introspect --session --dest org.freedesktop.impl.portal.desktop.better \
+gdbus introspect --session --dest org.freedesktop.impl.portal.desktop.loom \
   --object-path /org/freedesktop/portal/desktop 2>&1 | \
   grep -E 'Screenshot|PickColor|CreateSession|SelectSources|Start' | head -20
 
@@ -50,7 +50,7 @@ if gdbus introspect --session --dest org.freedesktop.portal.Desktop \
     echo "Screenshot request succeeded (response 0)"
     grep -o "'uri': <'[^']*'>" "$monitor" | head -1
   else
-    echo "No successful Response seen; check the frontend's portal selection and /tmp/better-portal.log"
+    echo "No successful Response seen; check the frontend's portal selection and /tmp/loom-portal.log"
   fi
 else
   echo "xdg-desktop-portal frontend is not running on this bus; backend-only checks above."
@@ -58,8 +58,8 @@ else
 fi
 
 say "portal integration tests"
-if [ -f better-portal/Cargo.toml ]; then
-  cargo test --manifest-path better-portal/Cargo.toml 2>&1 | grep -E '^test result|Running|FAILED' | tail -12
+if [ -f loom-portal/Cargo.toml ]; then
+  cargo test --manifest-path loom-portal/Cargo.toml 2>&1 | grep -E '^test result|Running|FAILED' | tail -12
 fi
 
 echo "Direct impl calls need a client that exports a Request object; the frontend screenshot"

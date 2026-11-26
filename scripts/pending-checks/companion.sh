@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Exercise better-companion rules/park/swallow plumbing against the current
-# niri session. Build: cargo build --manifest-path better-companion/Cargo.toml
+# Exercise loom-companion rules/park/swallow plumbing against the current
+# niri session. Build: cargo build --manifest-path loom-companion/Cargo.toml
 set -u
 TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 LOG=${PENDING_LOG:-/tmp/pending-companion.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
-BASE=${BETTER_COMPANION:-./better-companion/target/debug}
-SOCK=/tmp/better-companion-test.sock
-export BETTER_COMPANION_SOCKET=$SOCK
+BASE=${LOOM_COMPANION:-./loom-companion/target/debug}
+SOCK=/tmp/loom-companion-test.sock
+export LOOM_COMPANION_SOCKET=$SOCK
 say() { printf '\n== %s ==\n' "$*"; }
-[ -x "$BASE/better-companion" ] || { echo "build better-companion first"; exit 1; }
+[ -x "$BASE/loom-companion" ] || { echo "build loom-companion first"; exit 1; }
 rm -f "$SOCK"
-"$BASE/better-companion" --socket "$SOCK" >/tmp/better-companion.log 2>&1 &
+"$BASE/loom-companion" --socket "$SOCK" >/tmp/loom-companion.log 2>&1 &
 PID=$!
 trap 'kill $PID 2>/dev/null; rm -f "$SOCK"' EXIT
 sleep 1
 
-ctl() { "$BASE/companionctl" --socket "$SOCK" "$@"; }
+ctl() { "$BASE/loomctl" --socket "$SOCK" "$@"; }
 say "status"; ctl status || true
 say "namespaces"; ctl list || true
 say "compositor queries"

@@ -20,14 +20,14 @@ instead of only our own assumptions. Entries that could not be ported say why.
 | Window groups/tabbed tiles | Naxdy `src/layout/tests/animations.rs` group tests | `layout/tests/animations.rs` (`appear_group_indicator`, `move_window_into_and_out_of_group_*`) plus `layout/tests.rs` model/geometry tests | Animation ops ported; exact pixel snapshots adapted because our tabs reserve a title band and normalise position |
 | Layer fade in/out | Naxdy `4df357ee`, `230e5705` | `layer::tests` | Reference has no fade tests (only the expected `Animations` config literal, ported); ours cover alpha progression, cleanup and blocked-out outputs |
 | KDE Screenshot2 | Naxdy `99f238db` | `dbus::kwin_screenshot2` | Reference has no tests; ours cover metadata, pipe writer, PNG decode, introspection and a private-bus fd round trip |
-| Floating sidepanel stacks | zgavin/niri-sidepanels test suite | `better-sidepanels/stack` (104 tests) | Imported with the port |
+| Floating sidepanel stacks | zgavin/niri-sidepanels test suite | `loom-sidepanels/stack` (104 tests) | Imported with the port |
 | Companion rules/run-or-raise/scratchpads | Piri/nsticky test suites | `companion-rules`, `companion-niri`, `nsticky` tests | Behavioural ports, not line-by-line copies |
-| Session restore/snapshots | nirinit/niri-session-manager tests | `better-session` tests | Behavioural ports |
-| Monitor profiles/rollback | niri_display_manager/nirilayout tests | `better-monitor` tests | Behavioural ports |
-| KDL editing | NiriMod tests | `better-settings` tests | Behavioural ports |
-| Audio routing | PWSW tests | `better-audio` tests | Behavioural ports |
-| Screenshots/annotations/pins | Nirisnap/niri-shot tests | `better-shot` tests | Behavioural ports plus our pin tests |
-| Noctalia widgets | Noctalia plugin examples | `better-noctalia-plugins/verify.sh` | Syntax/manifest checks; live shell check manual |
+| Session restore/snapshots | nirinit/niri-session-manager tests | `loom-session` tests | Behavioural ports |
+| Monitor profiles/rollback | niri_display_manager/nirilayout tests | `loom-monitor` tests | Behavioural ports |
+| KDL editing | NiriMod tests | `loom-settings` tests | Behavioural ports |
+| Audio routing | PWSW tests | `loom-audio` tests | Behavioural ports |
+| Screenshots/annotations/pins | Nirisnap/niri-shot tests | `loom-shot` tests | Behavioural ports plus our pin tests |
+| Noctalia widgets | Noctalia plugin examples | `loom-noctalia-plugins/verify.sh` | Syntax/manifest checks; live shell check manual |
 
 ## Rules
 

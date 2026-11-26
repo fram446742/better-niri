@@ -20,7 +20,7 @@ printf '| niri package version | `%s` |\n' \
     "$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="niri"))')"
 printf '| Rust MSRV | `%s` |\n' \
     "$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["rust_version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="niri"))')"
-printf '| better-smithay revision | `%s` |\n' \
+printf '| loom-smithay revision | `%s` |\n' \
     "$(sed -n '/\[workspace.dependencies.smithay\]/,/^$/p' Cargo.toml | sed -n 's/^rev = "\(.*\)"/\1/p' | head -n1)"
 printf '| Default Cargo features | `%s` |\n\n' \
     "$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(", ".join(next(p["features"]["default"] for p in json.load(sys.stdin)["packages"] if p["name"]=="niri")))')"

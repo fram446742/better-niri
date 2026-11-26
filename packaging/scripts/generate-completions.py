@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate bash, fish and zsh completions for the Better Desktop CLIs.
+"""Generate bash, fish and zsh completions for the Loom CLIs.
 
 The companion CLIs parse their arguments by hand, so the completion lists are
 declared here instead of being derived from clap. Run this script after adding a
@@ -19,7 +19,31 @@ OUT = ROOT / "packaging" / "completions"
 
 # bin: (commands, options (name, takes_value), nested {group: [subcommands]})
 CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] = {
-    "better-companion": (
+    "loom": (
+        [
+            "companion",
+            "companion-daemon",
+            "portal",
+            "portal-picker",
+            "monitor",
+            "session",
+            "shot",
+            "wallpaper",
+            "settings",
+            "settingsctl",
+            "audio",
+            "sidepanels",
+            "tui",
+        ],
+        [("list", False), ("version", False), ("help", False)],
+        {},
+    ),
+    "loom-tui": (
+        [],
+        [("help", False), ("version", False)],
+        {},
+    ),
+    "loom-companion": (
         [],
         [
             ("socket", True),
@@ -31,7 +55,7 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
         ],
         {},
     ),
-    "companionctl": (
+    "loomctl": (
         ["list", "describe", "status", "call", "explain", "history", "config", "subscribe"],
         [("socket", True), ("id", True), ("dry-run", False), ("help", False), ("version", False)],
         {
@@ -40,17 +64,17 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
             "explain": ["rules", "windows"],
         },
     ),
-    "better-portal": (
+    "loom-portal": (
         [],
         [("help", False), ("version", False)],
         {},
     ),
-    "better-portal-picker": (
+    "loom-portal-picker": (
         [],
         [("screencast", False), ("screencast-window", False), ("help", False), ("version", False)],
         {},
     ),
-    "better-monitor": (
+    "loom-monitor": (
         [
             "list",
             "show",
@@ -91,7 +115,7 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
         ],
         {"rules": ["list", "add", "remove", "explain", "apply"]},
     ),
-    "better-session": (
+    "loom-session": (
         [
             "list",
             "show",
@@ -155,7 +179,7 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
             "template": ["list", "show", "apply"],
         },
     ),
-    "better-shot": (
+    "loom-shot": (
         ["ui", "screen", "window", "record", "annotate", "history", "pin", "ocr"],
         [
             ("socket", True),
@@ -195,12 +219,12 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
         ],
         {},
     ),
-    "better-wallpaper": (
+    "loom-wallpaper": (
         ["scene", "apply", "watch", "status"],
         [("socket", True), ("backend", True), ("dry-run", False), ("session", True), ("help", False), ("version", False)],
         {"scene": ["set", "use", "session", "list", "show", "export", "import", "delete"]},
     ),
-    "better-audio": (
+    "loom-audio": (
         [
             "sinks",
             "sources",
@@ -236,12 +260,12 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
             "profile": ["list", "show", "apply", "restore"],
         },
     ),
-    "better-settings": (
+    "loom-settings": (
         [],
         [("help", False), ("version", False)],
         {},
     ),
-    "better-settingsctl": (
+    "loom-settingsctl": (
         [
             "get",
             "set",
@@ -270,7 +294,7 @@ CLIS: dict[str, tuple[list[str], list[tuple[str, bool]], dict[str, list[str]]]] 
         [("config", True), ("dry-run", False), ("raw", True), ("help", False), ("version", False)],
         {},
     ),
-    "better-sidepanels": (
+    "loom-sidepanels": (
         [],
         [
             ("config", True),

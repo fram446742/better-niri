@@ -1,0 +1,16 @@
+# xdg-desktop-portal implementation descriptor for loom-portal.
+#
+# Install as:
+#   $XDG_DATA_DIRS/xdg-desktop-portal/portals/loom.portal
+# or, for a single user:
+#   $XDG_DATA_HOME/xdg-desktop-portal/portals/loom.portal
+#
+# The implementation name used in portals.conf is the file stem: "loom".
+#
+# PickColor is part of org.freedesktop.impl.portal.Screenshot version 2, so it
+# is covered by the Screenshot entry below; there is no separate
+# org.freedesktop.impl.portal.PickColor interface in the portal specification.
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.loom
+Interfaces=org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast;
+UseIn=loom-niri

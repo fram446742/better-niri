@@ -5,16 +5,16 @@ Last updated: 2026-11-26.
 ## Safe baseline (`main`)
 
 `main` is niri upstream `02ee0585` plus documentation, the upstream drift
-script, and a pin to the pristine better-smithay fork (`a38bb709`, identical to
+script, and a pin to the pristine loom-smithay fork (`a38bb709`, identical to
 Smithay upstream). It has no behavioural changes.
 
-## Integration branch: `integration/elite-base`
+## Integration branch: `main`
 
 This is now the main integration line. It keeps niri upstream history as its
 base and merges niri-elite as the feature base, then reconciles with current
 upstream.
 
-### better-smithay `integration/elite-base` @ `c7614890`
+### loom-smithay `main` @ `c7614890`
 
 The branch starts from the merged `66b0670` + losnoco lineage (`2e8e9edb`) and
 is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
@@ -30,7 +30,7 @@ is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
   `--all-features` (Vulkan) both pass.
 - Not hardware-tested.
 
-### better-niri `integration/elite-base`
+### loom-niri `main`
 
 Brings in the full niri-elite feature set:
 
@@ -133,10 +133,10 @@ cursor-plane path in `docs/UNIMPLEMENTED.md`. See
 
 ## What is published
 
-- `fram446742/better-smithay` branch `integration/elite-base` (`c7614890`).
-- `fram446742/better-smithay` branch `integration/hdr-color` (`344be37b`, the
+- `fram446742/loom-smithay` branch `main` (`c7614890`).
+- `fram446742/loom-smithay` branch `integration/hdr-color` (`344be37b`, the
   previous losnoco-base experiment; kept for comparison).
-- `fram446742/better-niri` `main` remains the safe baseline; the elite branch is
+- `fram446742/loom-niri` `main` remains the safe baseline; the elite branch is
   pushed separately, never force-updated.
 
 ## Architecture decision (2026-11-23)
@@ -148,9 +148,9 @@ The module boundary is now documented and drives the next integrations:
 - **Built-in modules**: `effects` (all shader scopes + liquid glass presets),
   `navigation` (grid/carousel/zoom/magnifier), `cursor` (SVG/shake), `agent`
   (off by default), `kde`, `vulkan`.
-- **Companions**: better-companion (absorbs nsticky's staging/scratchpad
-  workflow), better-session, better-sidepanels, better-shot, better-monitor,
-  better-audio, better-wallpaper, better-settings, better-portal (separate
+- **Companions**: loom-companion (absorbs nsticky's staging/scratchpad
+  workflow), loom-session, loom-sidepanels, loom-shot, loom-monitor,
+  loom-audio, loom-wallpaper, loom-settings, loom-portal (separate
   portal daemon); shell integration stays Noctalia-only.
 
 See `docs/MODULES.md` and `docs/ECOSYSTEM.md`. Per-keyboard configuration is
@@ -182,7 +182,7 @@ picked up without re-auditing.
    axis; large).
 4. **Vulkan renderer** — wired for the TTY backend (`TtyGpuManager`/`TtyRenderer`
    over GLES or Vulkan, `NIRI_RENDERER`). Borders and shadows now also render on
-   Vulkan: their GLSL sources are compiled to SPIR-V through better-smithay's
+   Vulkan: their GLSL sources are compiled to SPIR-V through loom-smithay's
    custom pixel pipeline at renderer init, together with the rounded-corner
    clipping texture program and the configured decoration shaders; a test
    compiles them on a real `VulkanRenderer`. Resize animations keep their animated stretch on GLES; on
@@ -207,7 +207,7 @@ picked up without re-auditing.
    keeps it always on. `niri msg output <out> hdr auto|on|off
    [--reference-luminance N]` is a temporary runtime override, the output JSON
    exposes `hdr_supported`/`hdr_enabled`/`hdr_active`/`hdr_mode`, and
-   better-settings offers the same selector in Displays. Switching HDR
+   loom-settings offers the same selector in Displays. Switching HDR
    enabledness reconnects the output so the 10-bit scanout formats are
    re-probed.
    Screen capture protocols run on Vulkan too: wlr-screencopy (output/window/
@@ -240,12 +240,12 @@ picked up without re-auditing.
    `org.kde.kwin.Screenshot` (fullscreen/area/window/window-under-cursor/
    interactive) on top of niri's capture pipeline, alongside the colour picker
    and output order.
-6. **Ecosystem** — `better-companion` foundation is in `better-companion/`:
+6. **Ecosystem** — `loom-companion` foundation is in `loom-companion/`:
    a separate Cargo workspace (excluded from niri's) with `companion-core`
    (JSON-line UDS protocol + registry), `companion-parking`,
    `companion-automation` (registry-dispatched sequences),
-   `companion-hooks`, `companion-system`, the `better-companion` daemon and
-   `companionctl`; `companion-niri` adds a `compositor.*` bridge that performs
+   `companion-hooks`, `companion-system`, the `loom-companion` daemon and
+   `loomctl`; `companion-niri` adds a `compositor.*` bridge that performs
    typed niri actions and queries outputs/workspaces/windows over IPC, and
    subscribes to the event stream to auto-track `auto:workspaces` /
    `auto:windows` parking lots (activation, focus, close, minimize, urgency),
@@ -258,21 +258,21 @@ picked up without re-auditing.
    Phase C ecosystem adapters are in: optional `session.*`, `monitor.*`,
    `audio.*` and `wallpaper.*` namespaces storing explicit commands and event
    hooks (execution only via explicit dispatch, disabled by default). The first
-   companion apps are in: `better-monitor/` snapshots output profiles and
+   companion apps are in: `loom-monitor/` snapshots output profiles and
    applies them through niri IPC with `--dry-run`, `__previous` rollback and
-   `restore`; `better-session/` saves workspaces/windows and restores them
+   `restore`; `loom-session/` saves workspaces/windows and restores them
    (matches by app id/title, moves/floats windows, focuses named workspaces,
-   spawns configured missing apps, reports unmatched ones); `better-shot/`
+   spawns configured missing apps, reports unmatched ones); `loom-shot/`
    captures UI/output/window screenshots to generated paths with optional
-   `wl-copy` and `satty` post-processing; `better-wallpaper/` maps named
+   `wl-copy` and `satty` post-processing; `loom-wallpaper/` maps named
    workspace scenes to images and applies them once or by following niri's
    event stream (`swaybg`/`swww` style command templates, one process per
-   output); `better-settings/` edits niri's KDL config through a
+   output); `loom-settings/` edits niri's KDL config through a
    text-preserving patcher (comments/formatting kept, timestamped backups) with
-   a GTK4 frontend plus a scriptable `better-settingsctl`; `better-audio/`
+   a GTK4 frontend plus a scriptable `loom-settingsctl`; `loom-audio/`
    routes playback streams by app rule to sinks through `pactl` (priority,
    glob/substring matching, dry-run, default sink, watcher);
-   `better-sidepanels/` creates persistent layer-shell side panels per output
+   `loom-sidepanels/` creates persistent layer-shell side panels per output
    (exclusive zone, click commands, module rows refreshed on an interval,
    cairo-rendered, configurable theme) with a testable model/renderer.
    Later rounds added workspace/output placement (`layout` target resolution,
@@ -280,13 +280,13 @@ picked up without re-auditing.
    `focus-output`), cross-workspace swallowing with bounded pair storage and
    `swallow.reload`, and daemon resilience (tolerant event parsing, reconnects
    from a snapshot, bounded window cache, oversized-request rejection,
-   idempotent raise/restore). `better-portal/` is installable on its own:
-   `better.portal`, `portals.conf` snippet, D-Bus/systemd units, install and
+   idempotent raise/restore). `loom-portal/` is installable on its own:
+   `loom.portal`, `portals.conf` snippet, D-Bus/systemd units, install and
    uninstall scripts, and a private-bus smoke test.
    The nsticky workflow is absorbed: `stage.*` (on the shared parking state),
    `scratchpad.*` named slots with persistence/reconcile, native
    `windows.toggle-sticky`/`set-sticky`/`list-sticky` and the `nsticky.*`
-   compatibility namespace with a migration table. `better-shot/` now handles
+   compatibility namespace with a migration table. `loom-shot/` now handles
    HDR capture (`--hdr=keep|sdr|tonemap`, PQ tone mapping for 16-bit sources),
    built-in `rect`/`text`/`arrow` annotations, PNG/JPEG/WebP output and JSON
    metadata sidecars.
@@ -294,41 +294,41 @@ picked up without re-auditing.
    command timeouts, user/audio/fullscreen inhibitors, logind shell-out,
    idempotent ticks, explain) and `rotate.*` (iio-sensor-proxy or a configured
    sensor command, hysteresis, transform+position through `Request::Output`,
-   lock/manual set), both inert by default. `better-session/` gained named
+   lock/manual set), both inert by default. `loom-session/` gained named
    contexts with outputs, hooks and ordered, idempotent restore that waits for
-   late apps. `better-sidepanels/` gained built-in modules (clock, niri
+   late apps. `loom-sidepanels/` gained built-in modules (clock, niri
    workspaces with per-chip click and scroll cycling, window title, media,
    battery, cpu, memory, network, volume, custom), safe click/scroll actions,
    panels on all four edges (several per output), config v2 with per-output
-   overrides, validation and file-watch reload. Delivered in the `better-*`
-   family: `better-audio/` has a native PipeWire backend (registry
+   overrides, validation and file-watch reload. Delivered in the `loom-*`
+   family: `loom-audio/` has a native PipeWire backend (registry
    enumeration, port-link moves, metadata default sink, per-stream
    volume/mute) with `pactl`/`wpctl` fallbacks, backend selection and restore;
    `companion-adapters` now routes niri and companion events to the
    session/monitor/audio/wallpaper adapters with quoted templates, dedup,
    timeouts, concurrency limits and an opt-in failure policy.
-   `better-wallpaper/` gained a native layer-shell backend (one background
+   `loom-wallpaper/` gained a native layer-shell backend (one background
    surface per output, cover-scaled `wl_shm` images, reload on file change,
    reconnect/hotplug) with `auto|native|command` selection and command
    fallback. Phase 8 packaging is in `packaging/`: Arch/AUR recipes for
-   `niri-better` and `better-desktop`, pinned and `-git` variants, feature
+   `niri-better` and `loom-desktop`, pinned and `-git` variants, feature
    profiles (minimal/desktop/full), `verify.sh`, and `docs/PACKAGING.md` with
    the compatibility matrix. The Arch/AUR recipes are now split into
-   `niri-better`, `better-portal`, `better-companion`, `better-monitor`,
-   `better-session`, `better-shot`, `better-wallpaper`, `better-settings`,
-   `better-audio`, `better-sidepanels` and the `better-desktop` meta package,
+   `niri-better`, `loom-portal`, `loom-companion`, `loom-monitor`,
+   `loom-session`, `loom-shot`, `loom-wallpaper`, `loom-settings`,
+   `loom-audio`, `loom-sidepanels` and the `loom-desktop` meta package,
    with ownership/staging checks in `verify.sh`. Remaining release tasks: AUR
-   publishing/signing and the subjective hardware checklist. `better-settings/` now covers layout, input
+   publishing/signing and the subjective hardware checklist. `loom-settings/` now covers layout, input
    (keyboard/touchpad/mouse/trackpoint/touch/tablet), per-output settings,
    binds with flags and multi-action, window/layer rules, startup, environment,
    animations, gestures, overview, cursor, clipboard and screenshot path, with
    byte-preserving edits, dry-run diffs, export/import and a libadwaita control
    center with Overview, Compositor, Displays, Sessions, Wallpaper, Audio, Side
    panels, Automation, Services and About pages.
-   `better-monitor/` now has schema v2 (matching by name/make/model/serial,
+   `loom-monitor/` now has schema v2 (matching by name/make/model/serial,
    max BPC, HDR notes, VRR aliases), layout validation, ordered apply,
    partial-failure rollback, rules with priorities, a debounced watch mode and
-   JSON reports; `better-shot/` added `record` with `wf-recorder`/command
+   JSON reports; `loom-shot/` added `record` with `wf-recorder`/command
    backends, region/window/output selection, codecs/containers, audio, HDR
    handling, PID state, `--stop` and JSON reports.
    Delivered since: session orchestration of monitor/audio/wallpaper/companion
@@ -345,21 +345,21 @@ picked up without re-auditing.
    app/workspace rules, named layouts, session state and SIGHUP reload;
    audio sources, named profiles, focus/workspace context rules, hotplug gating
    and `diagnose`; wallpaper cross-fades, playlists, time rules, per-session
-   scenes and scene import/export. `better-settings/` now also exposes the
+   scenes and scene import/export. `loom-settings/` now also exposes the
    other apps through their own CLIs/JSON (displays, sessions, wallpaper, audio,
    side panels, automation) with preview-then-apply, and degrades per tool when
    something is missing. The companion daemon ships a systemd user unit, and
-   `scripts/check-workspaces.sh` plus a `better-workspaces` CI job run fmt/check/
+   `scripts/check-workspaces.sh` plus a `loom-workspaces` CI job run fmt/check/
    test for every workspace, every companion binary answers `--version`, and the
    split packages install bash/fish/zsh completions generated by
    `packaging/scripts/generate-completions.py`.
-   The optional GUI pieces are in too: better-monitor `position`/`arrange`
-   (validated, dry-run, rollback), better-audio `volume`/`mute` for sinks and
+   The optional GUI pieces are in too: loom-monitor `position`/`arrange`
+   (validated, dry-run, rollback), loom-audio `volume`/`mute` for sinks and
    sources, a GTK display arrangement editor (drag, snap, overlap validation,
    preview/apply) and an audio mixer with sliders and mute toggles.
    The live Noctalia check is done: all 8 plugins loaded in the running shell
    with no Lua errors (see `docs/validation/noctalia-live-2026-11-24.md`) and the
-   temporary source/plugins were removed afterwards. better-nsticky has the
+   temporary source/plugins were removed afterwards. loom-nsticky has the
    capability-gated native sticky delegation as
    `contrib/patches/nsticky-native-sticky.patch` (applied to the local external
    checkout, 473 tests): `sticky add/remove/list` and the focused/app-id/title
@@ -382,7 +382,7 @@ picked up without re-auditing.
    update and click/right-click handlers were exercised both in the live shell
    and in an isolated headless niri session (see the validation note).
 7. **Built-in module features** — `vulkan` is wired end to end for the TTY
-   backend: the `vulkan` Cargo feature (default on) compiles better-smithay's
+   backend: the `vulkan` Cargo feature (default on) compiles loom-smithay's
    `renderer_vulkan`; `niri --check-vulkan` probes Vulkan 1.3 devices and
    reports whether `VulkanRenderer::new` succeeds per device; `NIRI_RENDERER`
    (`auto`/`gles`/`vulkan`) resolves into a plan and startup logs the

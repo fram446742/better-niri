@@ -1,6 +1,6 @@
-# Better Desktop ecosystem plan
+# Loom ecosystem plan
 
-This document connects better-niri with the wider Better Desktop family. It
+This document connects loom-niri with the wider Loom family. It
 turns the reference-project list into concrete responsibilities, interfaces and
 phases. It complements `MODULES.md` (what lives inside the compositor) and the
 umbrella `EXPANSION_PLAN.m`.
@@ -20,16 +20,16 @@ coherent ecosystem.**
 
 ### Layer A — Desktop foundation
 
-better-niri + better-smithay + upstream Niri compatibility + Wayland/DRM.
+loom-niri + loom-smithay + upstream Niri compatibility + Wayland/DRM.
 
 Owns: presentation, HDR/colour, input, layout/window primitives, output
 management, capture protocols, sticky primitive, virtual outputs, IPC/config.
 
 ### Layer B — Native services
 
-better-nsticky, better-companion, better-session, better-sidepanels, better-shot,
-better-monitor, better-audio, better-wallpaper, better-settings, optionally
-better-portal.
+loom-nsticky, loom-companion, loom-session, loom-sidepanels, loom-shot,
+loom-monitor, loom-audio, loom-wallpaper, loom-settings, optionally
+loom-portal.
 
 Own policy, state and UI. Communicate over niri IPC, Unix sockets, D-Bus and
 PipeWire. Never in the compositor's render loop.
@@ -64,71 +64,71 @@ operate the desktop without the shell.
 | SVG cursors | niri-elite | Cosmetic dependency | Module `cursor` |
 | Shake-to-enlarge | niri-elite | Cursor effect | Module `cursor` |
 | Software EGL / multi-GPU | niri-elite | Backend support | Core |
-| Native portal | niri-elite | Separate daemon from the start | `better-portal` |
+| Native portal | niri-elite | Separate daemon from the start | `loom-portal` |
 | Window groups | Naxdy / upstream tabs | Tile-group model with tab indicator | Core (`layout`) |
-| Sticky windows | better-nsticky, biri | Native primitive in core; workflow absorbed into better-companion | Core primitive + better-companion |
+| Sticky windows | loom-nsticky, biri | Native primitive in core; workflow absorbed into loom-companion | Core primitive + loom-companion |
 | Focus-ring shaders | biri | Scope of `effects` | Module `effects` |
-| Scratchpads | Piri, niri-scratchpad-rs, nsticky | Companion feature | better-companion / nsticky |
-| Run-or-raise, singleton, swallow | Piri, niri-ror | Companion automation | better-companion |
-| Side panels | niri-sidepanels | Reuse/adapt | better-sidepanels |
-| Sessions | nirinit, niri-session-manager, niri-companion | Combine into contexts | better-session |
-| Config GUI | NiriMod, nirimon, nirilayout | Reference; preserve KDL/comments | better-settings / better-monitor |
-| Audio routing | PWSW | Audit first (LLM-generated, author warning) | better-audio |
+| Scratchpads | Piri, niri-scratchpad-rs, nsticky | Companion feature | loom-companion / nsticky |
+| Run-or-raise, singleton, swallow | Piri, niri-ror | Companion automation | loom-companion |
+| Side panels | niri-sidepanels | Reuse/adapt | loom-sidepanels |
+| Sessions | nirinit, niri-session-manager, niri-companion | Combine into contexts | loom-session |
+| Config GUI | NiriMod, nirimon, nirilayout | Reference; preserve KDL/comments | loom-settings / loom-monitor |
+| Audio routing | PWSW | Audit first (LLM-generated, author warning) | loom-audio |
 | Keyboard layout per device | kunai | Our per-keyboard config covers most | Core (`input`); kunai as reference |
-| Auto-rotate | iio-niri | Optional service | better-companion integration |
-| Idle/suspend | Stasis | Optional service | better-companion or separate `better-idle` |
-| Screenshots/recording | niri-shot, nirisnap, utsushot | Compare and reuse | better-shot |
+| Auto-rotate | iio-niri | Optional service | loom-companion integration |
+| Idle/suspend | Stasis | Optional service | loom-companion or separate `loom-idle` |
+| Screenshots/recording | niri-shot, nirisnap, utsushot | Compare and reuse | loom-shot |
 | Shell | Noctalia, DMS, Exo, iNiR, Ironbar, Glimpse | Shell frozen | Noctalia plugins only |
 
 ## 4. Repositories and responsibilities
 
 | Repository | Responsibility | Status |
 | --- | --- | --- |
-| better-niri | Compositor, core + built-in modules | active |
-| better-smithay | Wayland/DRM/render infrastructure | active |
-| better-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; better-companion absorbs its code and offers compatibility aliases/config |
-| better-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | **delivered**: one daemon + per-context crates; parking, rules, windows, stage/scratchpad, nsticky aliases, swallow, idle/rotate modules and event adapters (187 tests) |
-| better-session | Context/session save/restore | **delivered**: named contexts with outputs, workspaces, windows, hooks, ordered idempotent restore, late-app waiting, monitor/audio/wallpaper/companion profile orchestration with partial success, history/snapshots, import/export, templates and `.desktop`/Flatpak launches (54 tests) |
-| better-sidepanels | Persistent side panels | **delivered**: layer-shell panels on all edges, built-in modules (clock/workspaces/title/media/battery/cpu/memory/network/volume/tray/custom), SNI tray host with pixmap/SVG icons, actions, per-output config, reload (67 tests + 104 stack tests) |
-| better-shot | Capture/recording/annotation | **delivered**: screenshots with HDR modes, full annotation engine (blur/pixelate/redaction/crop/zoom/spotlight/lines), annotation log with undo/redo, capture history, OCR, multi-output stitching, metadata and screen recording (`wf-recorder`, xdg-desktop-portal ScreenCast via gst-launch, and command backends; region/window/output, codecs, audio, PID state, `--stop`) (132 tests) |
-| better-monitor | Output profiles, safe apply | **delivered**: schema v2 with matching, rules, watch, validation, rollback and JSON output, plus the safe-apply confirmation window (`apply --confirm-timeout`/`confirm`/`cancel`), runtime `position`/`arrange` and a GTK drag arrangement editor (80 tests) |
-| better-audio | PipeWire routing | **delivered**: native PipeWire backend (registry, port-link moves, metadata default sink, volume/mute) with pactl/wpctl fallbacks and restore, plus sources, profiles, focus/workspace context rules, hotplug gating, diagnostics and a volume/mute mixer with a GTK mixer (54 tests) |
-| better-wallpaper | Scenes, per-workspace wallpapers | **delivered**: native layer-shell background backend with cover-scaled shm images, reload and command fallback, cross-fade transitions, native video wallpapers with HDR→SDR tone mapping, playlists, time rules and per-session scenes (47 tests) |
-| better-settings | Unified GTK4/libadwaita control center | **delivered**: full niri catalog coverage with byte-preserving KDL edits, dry-run diffs, import/export, plus Overview, Compositor, Displays (profiles, drag arrangement, HDR), Sessions, Wallpaper, Audio (mixer), Side panels, Automation (rules/idle/rotate/marks/history), Services and About through each app's own CLI/JSON (98 tests) |
-| better-portal | XDG portal backend + external layer-shell picker daemon | **delivered**: Screenshot/PickColor native, ScreenCast proxy, picker, install/uninstall, portal descriptor, D-Bus/systemd units and smoke script (42 tests) |
-| better-noctalia-plugins | Shell integration | **delivered**: in-repo Luau plugin source with bar widgets for companion, sticky/stage, monitor, session, shot, audio, wallpaper and sidepanels; manifest + Lua syntax checked, live Noctalia check pending (8 plugins) |
+| loom-niri | Compositor, core + built-in modules | active |
+| loom-smithay | Wayland/DRM/render infrastructure | active |
+| loom-nsticky | Sticky/staged windows, scratchpads, workflow | existing, left untouched; loom-companion absorbs its code and offers compatibility aliases/config |
+| loom-companion | Automation, rules, run-or-raise, singleton, swallow, orchestration | **delivered**: one daemon + per-context crates; parking, rules, windows, stage/scratchpad, nsticky aliases, swallow, idle/rotate modules and event adapters (187 tests) |
+| loom-session | Context/session save/restore | **delivered**: named contexts with outputs, workspaces, windows, hooks, ordered idempotent restore, late-app waiting, monitor/audio/wallpaper/companion profile orchestration with partial success, history/snapshots, import/export, templates and `.desktop`/Flatpak launches (54 tests) |
+| loom-sidepanels | Persistent side panels | **delivered**: layer-shell panels on all edges, built-in modules (clock/workspaces/title/media/battery/cpu/memory/network/volume/tray/custom), SNI tray host with pixmap/SVG icons, actions, per-output config, reload (67 tests + 104 stack tests) |
+| loom-shot | Capture/recording/annotation | **delivered**: screenshots with HDR modes, full annotation engine (blur/pixelate/redaction/crop/zoom/spotlight/lines), annotation log with undo/redo, capture history, OCR, multi-output stitching, metadata and screen recording (`wf-recorder`, xdg-desktop-portal ScreenCast via gst-launch, and command backends; region/window/output, codecs, audio, PID state, `--stop`) (132 tests) |
+| loom-monitor | Output profiles, safe apply | **delivered**: schema v2 with matching, rules, watch, validation, rollback and JSON output, plus the safe-apply confirmation window (`apply --confirm-timeout`/`confirm`/`cancel`), runtime `position`/`arrange` and a GTK drag arrangement editor (80 tests) |
+| loom-audio | PipeWire routing | **delivered**: native PipeWire backend (registry, port-link moves, metadata default sink, volume/mute) with pactl/wpctl fallbacks and restore, plus sources, profiles, focus/workspace context rules, hotplug gating, diagnostics and a volume/mute mixer with a GTK mixer (54 tests) |
+| loom-wallpaper | Scenes, per-workspace wallpapers | **delivered**: native layer-shell background backend with cover-scaled shm images, reload and command fallback, cross-fade transitions, native video wallpapers with HDR→SDR tone mapping, playlists, time rules and per-session scenes (47 tests) |
+| loom-settings | Unified GTK4/libadwaita control center | **delivered**: full niri catalog coverage with byte-preserving KDL edits, dry-run diffs, import/export, plus Overview, Compositor, Displays (profiles, drag arrangement, HDR), Sessions, Wallpaper, Audio (mixer), Side panels, Automation (rules/idle/rotate/marks/history), Services and About through each app's own CLI/JSON (98 tests) |
+| loom-portal | XDG portal backend + external layer-shell picker daemon | **delivered**: Screenshot/PickColor native, ScreenCast proxy, picker, install/uninstall, portal descriptor, D-Bus/systemd units and smoke script (42 tests) |
+| loom-noctalia-plugins | Shell integration | **delivered**: in-repo Luau plugin source with bar widgets for companion, sticky/stage, monitor, session, shot, audio, wallpaper and sidepanels; manifest + Lua syntax checked, live Noctalia check pending (8 plugins) |
 
 **Do not create repositories or publish anything without explicit approval.**
 Piri and niri-sidepanels should preserve upstream history/attribution if reused.
 
 ### 4.1 Naming rules and candidates
 
-`better-*` repository names are only for **independently installable services or
+`loom-*` repository names are only for **independently installable services or
 applications**. Internal compositor modules do not get a repository:
 
 - internal modules: `effects`, `navigation`, `cursor`, `agent`, `kde`, `vulkan`;
 - companion features that are not yet independent: scratchpads, staging,
   run-or-raise, singleton, swallow, idle handling, auto-rotate.
 
-Candidate projects: `better-idle` and `better-rotate` were delivered as
+Candidate projects: `loom-idle` and `loom-rotate` were delivered as
 `companion-idle`/`companion-rotate` modules (idle policies/inhibitors and
-accelerometer rotation) rather than separate repositories. `better-desktop`
+accelerometer rotation) rather than separate repositories. `loom-desktop`
 exists as packaging recipes and `docs/PACKAGING.md`, not as a runtime component.
 
 | Candidate | Purpose | Recommendation |
 | --- | --- | --- |
-| better-idle | idle/suspend policy, game/audio inhibition (Stasis reference) | start as a better-companion module; split only if it needs its own lifecycle |
-| better-rotate | accelerometer-based output rotation (iio-niri reference) | start as a companion module/service |
-| better-desktop | umbrella docs, package profiles, compatibility matrix | documentation only, no runtime dependency |
-| better-noctalia-plugins | Noctalia widgets for the ecosystem | later; shell remains frozen |
+| loom-idle | idle/suspend policy, game/audio inhibition (Stasis reference) | start as a loom-companion module; split only if it needs its own lifecycle |
+| loom-rotate | accelerometer-based output rotation (iio-niri reference) | start as a companion module/service |
+| loom-desktop | umbrella docs, package profiles, compatibility matrix | documentation only, no runtime dependency |
+| loom-noctalia-plugins | Noctalia widgets for the ecosystem | later; shell remains frozen |
 
 Rules:
 
 - Do not create a repository merely to host a small feature.
-- Do not create a shared crate (`better-ipc`, `better-niri-client`) until at
+- Do not create a shared crate (`loom-ipc`, `loom-niri-client`) until at
   least two projects need it.
-- Keep one owner per workflow: sticky/stage/scratchpad in better-companion,
-  sessions in better-session, outputs in better-monitor, capture in better-shot.
+- Keep one owner per workflow: sticky/stage/scratchpad in loom-companion,
+  sessions in loom-session, outputs in loom-monitor, capture in loom-shot.
 
 ## 5. Interfaces
 
@@ -143,11 +143,11 @@ Rules:
 
 ### Action registry
 
-Both the compositor and better-companion expose a machine-readable action
+Both the compositor and loom-companion expose a machine-readable action
 registry grouped by category:
 
-- `better-niri` IPC: module/capability query plus the native actions.
-- `better-companion`: `companionctl actions --json`, UDS `core.api.actions`.
+- `loom-niri` IPC: module/capability query plus the native actions.
+- `loom-companion`: `loomctl actions --json`, UDS `core.api.actions`.
 - Each action has a stable hierarchical name (`window.sticky.toggle`,
   `automation.rules.explain`, `compositor.navigation.open-grid`), owner,
   argument schema, permissions and runtime availability.
@@ -156,7 +156,7 @@ registry grouped by category:
 
 ### Companion APIs
 
-- Versioned JSON over Unix sockets under `$XDG_RUNTIME_DIR/better-<name>/`.
+- Versioned JSON over Unix sockets under `$XDG_RUNTIME_DIR/loom-<name>/`.
 - Request IDs, typed errors, subscriptions, capability discovery.
 - Socket permissions restricted; no HTTP localhost; no arbitrary shell by
   default.
@@ -166,7 +166,7 @@ registry grouped by category:
 
 - If `sticky` capability is present: nsticky delegates sticky to native actions.
   Implemented by `contrib/patches/nsticky-native-sticky.patch`; the local
-  better-nsticky checkout has it applied and its 473-test suite passes.
+  loom-nsticky checkout has it applied and its 473-test suite passes.
 - Otherwise: nsticky uses its move-based fallback.
 - Staging/scratchpads remain nsticky; companion may call nsticky rather than
   duplicating it.
@@ -175,7 +175,7 @@ registry grouped by category:
 ### Portals
 
 - Compositor provides buffers/protocols and the picker UI where needed.
-- The portal backend lives in `better-portal` from the start; do not duplicate
+- The portal backend lives in `loom-portal` from the start; do not duplicate
   capture paths.
 
 ## 6. Roadmap
@@ -205,7 +205,7 @@ registry grouped by category:
 ### Phase 3 — Companion foundation
 
 - Audit Piri deeply; preserve history/licence; decide plugin model.
-- Build better-companion: single IPC listener, state sync, reconnection,
+- Build loom-companion: single IPC listener, state sync, reconnection,
   scratchpads/rules/singleton/swallow/run-or-raise.
 - Absorb nsticky's staging/scratchpad/workflow code with its history and
   attribution; use the native sticky primitive; no duplicate sticky.
@@ -213,20 +213,20 @@ registry grouped by category:
 
 ### Phase 4 — Session and monitor
 
-- better-session contexts (windows + workspaces + outputs + hooks).
-- better-monitor with safe apply/rollback and profiles.
+- loom-session contexts (windows + workspaces + outputs + hooks).
+- loom-monitor with safe apply/rollback and profiles.
 
 ### Phase 5 — Productivity and capture
 
-- better-sidepanels; better-shot with HDR-aware capture and annotations.
+- loom-sidepanels; loom-shot with HDR-aware capture and annotations.
 
 ### Phase 6 — Multimedia
 
-- better-audio (after PWSW audit), better-wallpaper (reuse Noctalia).
+- loom-audio (after PWSW audit), loom-wallpaper (reuse Noctalia).
 
 ### Phase 7 — Settings and shell integration
 
-- better-settings GTK4; Noctalia plugins only; no shell.
+- loom-settings GTK4; Noctalia plugins only; no shell.
 
 ### Phase 8 — Packaging
 
@@ -256,59 +256,59 @@ Resolved:
 
 1. **Default build**: full binary with all built-in modules enabled; minimal via
    `--no-default-features` and installation profiles.
-2. **Portal**: `better-portal` daemon from the start; the compositor keeps only
+2. **Portal**: `loom-portal` daemon from the start; the compositor keeps only
    capture plumbing and screenshot/IPC actions.
 3. **Agent seat**: module off by default, explicit authorization, restricted
-   socket; automation policy in better-companion.
+   socket; automation policy in loom-companion.
 4. **Sticky/staged/scratchpads**: native primitive in the compositor; workflow
-   absorbed into better-companion with nsticky's history/attribution.
+   absorbed into loom-companion with nsticky's history/attribution.
 5. **Navigation/minimise**: minimise core; grid/carousel/magnifier in the
    `navigation` module.
 6. **Repositories**: companion repositories after Phase 1.
-7. **Piri**: architecture reference only; better-companion is an in-tree
+7. **Piri**: architecture reference only; loom-companion is an in-tree
    implementation that vendors no Piri code (§26.11 of the expansion plan).
 8. **Shell**: Noctalia plugins only; no native shell.
 
 More resolved:
 
-- **better-companion shape**: one daemon with internal `sticky`, `stage`,
+- **loom-companion shape**: one daemon with internal `sticky`, `stage`,
   `scratchpad`, `rules` modules, modelled on Piri's compiled-plugin idea and
   absorbing nsticky's workflows. It does not vendor Piri code: the daemon's
   core is the JSON/UDS protocol and per-namespace crates, which Piri does not
   provide (see `EXPANSION_PLAN.m` §26.11 for the deviation and rationale).
-- **nsticky compatibility**: better-companion accepts `nsticky` CLI/config as
+- **nsticky compatibility**: loom-companion accepts `nsticky` CLI/config as
   aliases. The nsticky repository is **not modified or deprecated**; it remains
   a standalone option for users who want only sticky/staged windows.
-- **Portal picker**: external layer-shell picker owned by better-portal.
+- **Portal picker**: external layer-shell picker owned by loom-portal.
 
 Resolved during delivery:
 
-- **better-idle / better-rotate**: delivered as `companion-idle`/`companion-rotate`
+- **loom-idle / loom-rotate**: delivered as `companion-idle`/`companion-rotate`
   modules; split into repositories only if they need their own lifecycle.
-- **better-audio**: native PipeWire backend delivered (registry, port links,
+- **loom-audio**: native PipeWire backend delivered (registry, port links,
   metadata default sink, volume/mute) with pactl/wpctl fallbacks; PWSW was not
   adopted.
-- **better-shot scope**: screenshots, HDR handling, annotations, history, OCR
-  and recording are all in `better-shot/`.
-- **better-portal scope**: Screenshot and PickColor native, ScreenCast proxies
+- **loom-shot scope**: screenshots, HDR handling, annotations, history, OCR
+  and recording are all in `loom-shot/`.
+- **loom-portal scope**: Screenshot and PickColor native, ScreenCast proxies
   niri (the compositor keeps capture and PipeWire ownership); RemoteDesktop is
   not part of this scope.
-- **better-settings**: thin GTK4 frontend plus CLI that delegates to each app's
+- **loom-settings**: thin GTK4 frontend plus CLI that delegates to each app's
   own config/CLI; it never owns their data. HDR mode and reference luminance
   are editable in KDL, and the Displays tab also has the runtime selector.
 - **nsticky delegation**: `contrib/patches/nsticky-native-sticky.patch` makes
-  better-nsticky use the compositor's native sticky flag when `Capabilities`
+  loom-nsticky use the compositor's native sticky flag when `Capabilities`
   reports it, with the move-based fallback otherwise.
 
 
-## better-portal status
+## loom-portal status
 
-`better-portal/` now exists as a separate daemon inside this repository,
+`loom-portal/` now exists as a separate daemon inside this repository,
 excluded from niri's Cargo workspace. It implements the portal Screenshot
 backend (fullscreen/interactive screenshot and colour picking) and proxies the
 ScreenCast backend (CreateSession/SelectSources/Start plus Session/Request
 Close) to the compositor's existing portal backend, with the PipeWire node ids
 passed through. Interactive screenshots use an external layer-shell
-`better-portal-picker`; ScreenCast selection is also external: output picking via the layer-shell
+`loom-portal-picker`; ScreenCast selection is also external: output picking via the layer-shell
 picker, window picking via niri's IPC crosshair, both through niri's
-`org.better.portal.ScreenCastSelection` API.
+`org.loom.portal.ScreenCastSelection` API.

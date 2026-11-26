@@ -6,18 +6,18 @@
 
 | Component | Source | Revision | Notes |
 | --- | --- | --- | --- |
-| better-niri | `fram446742/better-niri` | `main` (audit baseline `02ee0585` + docs) | No behavioural changes. |
-| better-smithay | `fram446742/better-smithay` | `a38bb709a0400759b6a4fab6129e0f1dd72808c3` | Identical to Smithay `master`; the revision niri upstream pins. |
-| smithay-drm-extras | same better-smithay commit | `a38bb709…` | Must always match `smithay`. |
+| loom-niri | `fram446742/loom-niri` | `main` (audit baseline `02ee0585` + docs) | No behavioural changes. |
+| loom-smithay | `fram446742/loom-smithay` | `a38bb709a0400759b6a4fab6129e0f1dd72808c3` | Identical to Smithay `master`; the revision niri upstream pins. |
+| smithay-drm-extras | same loom-smithay commit | `a38bb709…` | Must always match `smithay`. |
 
-### Integration branch (`integration/elite-base`)
+### Integration branch (`main`)
 
 | Component | Source | Revision | Notes |
 | --- | --- | --- | --- |
-| better-niri | `fram446742/better-niri` | branch `integration/elite-base` | niri upstream + niri-elite feature base, reconciled. |
-| better-smithay | `fram446742/better-smithay` | `c76148907cf6dae4441aa7224ac518bc120e356a` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
-| smithay-drm-extras | same better-smithay commit | `c7614890…` | |
-| niri-config / niri-ipc | workspace | `26.4.0-elite` | Elitish version string; to be renamed for better-niri. |
+| loom-niri | `fram446742/loom-niri` | branch `main` | niri upstream + niri-elite feature base, reconciled. |
+| loom-smithay | `fram446742/loom-smithay` | `c76148907cf6dae4441aa7224ac518bc120e356a` | MEKCCK/smithay `66b0670` + losnoco Vulkan/DRM-colour/SurfaceBarrier. |
+| smithay-drm-extras | same loom-smithay commit | `c7614890…` | |
+| niri-config / niri-ipc | workspace | `26.4.0+loom.1` | Loom build metadata, no elite suffix. |
 | Rust | toolchain | MSRV 1.95 (edition 2024) | |
 
 Verified at this pin: `cargo check --workspace`, `cargo test --workspace`
@@ -47,16 +47,16 @@ The full integration registry is in `UPSTREAM.md`.
 
 | Fork | Niri base | Smithay dependency | Compatibility note |
 | --- | --- | --- | --- |
-| niri-elite | `fcbc971c` | MEKCCK/smithay `66b0670` | The feature base chosen for better-niri; lacks Vulkan, so losnoco is merged on top in better-smithay. |
+| niri-elite | `fcbc971c` | MEKCCK/smithay `66b0670` | The feature base chosen for loom-niri; lacks Vulkan, so losnoco is merged on top in loom-smithay. |
 | niri-spicy | `5f4469b6` | `Smithay/smithay` `79bbed5e` **patched by path** to losnoco `spicy-master` | A fresh clone without `../smithay` builds against upstream Smithay and fails. Not reproduced here. |
 | biri | `2fbc6f3b` | upstream Smithay `a38bb709` | Next source: layout, hidden/virtual/isolated outputs, per-keyboard, shaders. |
 | kde-niri | `54c7fdcd` (2025-11) | path `../smithay` | One year of upstream drift; cherry-pick only. |
-| losnoco/smithay | Smithay `79bbed5e` | — | Merged into better-smithay for Vulkan/DRM colour/SurfaceBarrier. |
-| MEKCCK/smithay | Smithay `8a270232` | — | First parent of better-smithay `integration/elite-base`. |
+| losnoco/smithay | Smithay `79bbed5e` | — | Merged into loom-smithay for Vulkan/DRM colour/SurfaceBarrier. |
+| MEKCCK/smithay | Smithay `8a270232` | — | First parent of loom-smithay `main`. |
 
 ## 4. Single-Smithay policy
 
-- better-niri declares exactly one `smithay` and one `smithay-drm-extras` source.
+- loom-niri declares exactly one `smithay` and one `smithay-drm-extras` source.
 - No `[patch]` table with a machine-specific path is committed. Use the command
   below for local development.
 - When Vulkan is disabled, the same Smithay commit must still build and run with
@@ -68,16 +68,16 @@ The full integration registry is in `UPSTREAM.md`.
 
 ### Local development against the sibling checkout
 
-From `better-niri/`, with `../better-smithay` checked out:
+From `loom-niri/`, with `../loom-smithay` checked out:
 
 ```sh
 LIBCLANG_PATH=/usr/lib cargo \
-  --config 'patch."https://github.com/fram446742/better-smithay.git".smithay.path="../better-smithay"' \
-  --config 'patch."https://github.com/fram446742/better-smithay.git".smithay-drm-extras.path="../better-smithay/smithay-drm-extras"' \
+  --config 'patch."https://github.com/fram446742/loom-smithay.git".smithay.path="../loom-smithay"' \
+  --config 'patch."https://github.com/fram446742/loom-smithay.git".smithay-drm-extras.path="../loom-smithay/smithay-drm-extras"' \
   check --workspace
 ```
 
-Do not commit a `[patch]` table pointing at `../better-smithay`; it breaks
+Do not commit a `[patch]` table pointing at `../loom-smithay`; it breaks
 clean checkouts and CI.
 
 ## 5. Renderer and colour combinations
@@ -118,7 +118,7 @@ Runtime (hardware validation):
 - Upstream Smithay already provides `fifo`, `drm_syncobj`, `commit_timing`,
   `content_type`, `pointer_warp`, `image_copy_capture`, `background_effect`.
   Only `tearing_control`, colour management, DRM colour pipelines, async flips,
-  SurfaceBarrier and the Vulkan renderer need better-smithay commits.
+  SurfaceBarrier and the Vulkan renderer need loom-smithay commits.
 - `niri-config` and `niri-ipc` are public APIs for external tools. Add fields and
   actions; do not rename or remove without a deprecation plan.
 - The default config must parse and must not contain duplicate binds; CI runs

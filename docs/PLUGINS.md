@@ -1,6 +1,6 @@
 # Plugin runtime architecture and feasibility
 
-This document evaluates the hybrid plugin model for better-companion:
+This document evaluates the hybrid plugin model for loom-companion:
 
 - Piri's compiled `Plugin` trait as the **internal contract**;
 - a runtime-neutral plugin manager (registry, categories, permissions,

@@ -15,14 +15,25 @@ use niri_ipc::{
 use serde_json::json;
 
 use crate::cli::Msg;
+use crate::identity;
 use crate::utils::version;
 
 pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Result<()> {
-    // Shells that niri didn't start, like a coding agent's, don't have NIRI_SOCKET, and long-lived
-    // programs keep the one of a niri that has since restarted.
-    let socket_exists = env::var_os(SOCKET_PATH_ENV)
-        .is_some_and(|path| !path.is_empty() && Path::new(&path).exists());
-    if !socket_exists && let Some(path) = find_niri_socket() {
+    // Shells that the compositor didn't start, like a coding agent's, don't have the socket
+    // variable, and long-lived programs keep the one of an instance that has since restarted.
+    let identity = identity::current();
+    let socket_env = identity.socket_envs().into_iter().find(|name| {
+        env::var_os(name).is_some_and(|path| !path.is_empty() && Path::new(&path).exists())
+    });
+    if socket_env.is_none()
+        && let Some(path) = find_niri_socket()
+    {
+        unsafe { env::set_var(SOCKET_PATH_ENV, path) };
+    } else if let Some(name) = socket_env
+        && let Some(path) = env::var_os(name)
+    {
+        // The IPC helper reads NIRI_SOCKET; keep it pointing at the instance
+        // selected by this executable's identity.
         unsafe { env::set_var(SOCKET_PATH_ENV, path) };
     }
 
@@ -1208,12 +1219,14 @@ fn find_niri_socket() -> Option<PathBuf> {
     let dir = env::var_os("XDG_RUNTIME_DIR")?;
     let wayland_display = env::var("WAYLAND_DISPLAY").ok().filter(|d| !d.is_empty());
 
+    let prefixes = ["niri.", "loom-niri."];
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(rest) = name
-            .strip_prefix("niri.")
+        let Some(rest) = prefixes
+            .iter()
+            .find_map(|prefix| name.strip_prefix(prefix))
             .and_then(|r| r.strip_suffix(".sock"))
         else {
             continue;

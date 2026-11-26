@@ -3,13 +3,13 @@
 # Enables the user-facing niri modules without the experimental Vulkan renderer
 # or the optional dinit integration. The companion set covers portals,
 # screenshots, settings, monitor/session profiles, wallpapers, audio and panels.
-# The automation daemon (`better-companion`) is left to the full profile.
+# The automation daemon (`loom-companion`) is left to the full profile.
 #
 # Check/build it with:
 #   packaging/scripts/build-profile.sh --check desktop
 #   packaging/scripts/build-profile.sh --build desktop
 name = "desktop"
-description = "Daily-driver modules (GLES) plus the core Better Desktop apps."
+description = "Daily-driver modules (GLES) plus the core Loom apps."
 cargo_features = [
     "agent",
     "cursor",

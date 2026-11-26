@@ -3,16 +3,17 @@ members = [
     "niri-config",
     "niri-ipc",
     "niri-visual-tests",
+    "loom-state",
 ]
-exclude = ["better-companion", "better-portal", "better-monitor", "better-session", "better-shot", "better-wallpaper", "better-settings", "better-audio", "better-sidepanels"]
+exclude = ["loom-companion", "loom-portal", "loom-monitor", "loom-session", "loom-shot", "loom-wallpaper", "loom-settings", "loom-audio", "loom-sidepanels", "loom-tui"]
 
 [workspace.package]
-version = "26.4.0-elite"
-description = "A scrollable-tiling Wayland compositor"
+version = "26.4.0+loom.1"
+description = "Loom: a niri-based scrollable-tiling Wayland compositor"
 authors = ["Ivan Molodetskikh <yalterz@gmail.com>"]
 license = "GPL-3.0-or-later"
 edition = "2024"
-repository = "https://github.com/niri-wm/niri"
+repository = "https://github.com/fram446742/loom-niri"
 rust-version = "1.95"
 
 [workspace.lints.clippy]
@@ -35,27 +36,27 @@ tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_leve
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracy-client = { version = "0.19.0", default-features = false }
 
-# better-smithay is our single Smithay fork. It starts from upstream Smithay at
+# loom-smithay is our single Smithay fork. It starts from upstream Smithay at
 # the revision niri upstream pinned, and carries our reviewed feature commits on
 # top (colour management/HDR, DRM colour pipelines, async flips/tearing,
 # SurfaceBarrier/commit-timing, Vulkan renderer, seat filtering).
 #
 # Bump `rev` here and in smithay-drm-extras together; both must come from the
-# same better-smithay commit. See docs/COMPATIBILITY.md.
+# same loom-smithay commit. See docs/COMPATIBILITY.md.
 #
-# For local development against ../better-smithay without editing this file:
-#   cargo --config 'patch."https://github.com/fram446742/better-smithay.git".smithay.path="../better-smithay"' \
-#         --config 'patch."https://github.com/fram446742/better-smithay.git".smithay-drm-extras.path="../better-smithay/smithay-drm-extras"' \
+# For local development against ../loom-smithay without editing this file:
+#   cargo --config 'patch."https://github.com/fram446742/loom-smithay.git".smithay.path="../loom-smithay"' \
+#         --config 'patch."https://github.com/fram446742/loom-smithay.git".smithay-drm-extras.path="../loom-smithay/smithay-drm-extras"' \
 #         build
 [workspace.dependencies.smithay]
-git = "https://github.com/fram446742/better-smithay.git"
+git = "https://github.com/fram446742/loom-smithay.git"
 rev = "c76148907cf6dae4441aa7224ac518bc120e356a"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
-git = "https://github.com/fram446742/better-smithay.git"
+git = "https://github.com/fram446742/loom-smithay.git"
 rev = "c76148907cf6dae4441aa7224ac518bc120e356a"
-# path = "../better-smithay/smithay-drm-extras"
+# path = "../loom-smithay/smithay-drm-extras"
 
 [package]
 name = "niri"
@@ -69,6 +70,15 @@ rust-version.workspace = true
 
 readme = "README.md"
 keywords = ["wayland", "compositor", "tiling", "smithay", "wm"]
+
+[[bin]]
+name = "niri"
+path = "src/main.rs"
+
+[[bin]]
+name = "loom-niri"
+path = "src/main.rs"
+
 
 [dependencies]
 accesskit = { version = "0.25.2", optional = true }
@@ -91,15 +101,15 @@ fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "io"] }
 getrandom = { version = "0.4.3", optional = true }
 git-version = "0.3.9"
-# Must match the glam version used by the pinned better-smithay revision.
+# Must match the glam version used by the pinned loom-smithay revision.
 glam = "0.34"
 input = { version = "0.10.0", features = ["libinput_1_21"] }
 keyframe = { version = "1.1.1", default-features = false }
 libc = "0.2.191"
 libdisplay-info = { version = "0.3.0", features = ["v0_2"] }
 log = { version = "0.4.35", features = ["max_level_trace", "release_max_level_debug"] }
-niri-config = { version = "26.4.0-elite", path = "niri-config" }
-niri-ipc = { version = "26.4.0-elite", path = "niri-ipc", features = ["clap"] }
+niri-config = { version = "26.4.0", path = "niri-config" }
+niri-ipc = { version = "26.4.0", path = "niri-ipc", features = ["clap"] }
 ordered-float = "5.5.1"
 pango = { version = "0.22.9", features = ["v1_44"] }
 pangocairo = "0.22.9"
@@ -174,7 +184,7 @@ effects = []
 # Enables the navigation module: screen magnifier, grid overview (model, renderer and
 # gestures) and the consolidated carousel, including their input/action entry points.
 navigation = []
-# Enables Vulkan renderer support: better-smithay's Vulkan backend/renderer is
+# Enables Vulkan renderer support: loom-smithay's Vulkan backend/renderer is
 # compiled in, niri probes physical devices at startup, applies NIRI_RENDERER
 # (auto|gles|vulkan) and falls back to EGL/GLES with a logged reason.
 # `niri --check-vulkan` prints the resolved plan as JSON.

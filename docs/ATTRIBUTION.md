@@ -1,6 +1,6 @@
 # Attribution
 
-better-niri is a combined work. This file records the projects, authors and
+loom-niri is a combined work. This file records the projects, authors and
 licences behind the code. It is updated whenever a feature series is integrated.
 
 ## Upstream foundations
@@ -16,7 +16,7 @@ licences behind the code. It is updated whenever a feature series is integrated.
 
 ## Feature sources
 
-| Project | Maintainer / authors | Licence | Contributed to better-niri |
+| Project | Maintainer / authors | Licence | Contributed to loom-niri |
 | --- | --- | --- | --- |
 | https://github.com/MEKCCK/niri-elite | MEKCCK and contributors | GPL-3.0-or-later | Integration strategy reference, grid overview, minimisation UX, magnifier, agent seat, portal backend, SVG cursors, hot-corner actions, input binds, liquid-glass port |
 | https://github.com/SHORiN-KiWATA/niri | SHORiN-KiWATA | GPL-3.0-or-later | Origin of grid overview, magnifier, minimisation, agent seat, portal backend, SVG cursors, shake-to-enlarge |
@@ -33,10 +33,10 @@ licences behind the code. It is updated whenever a feature series is integrated.
 | https://github.com/zaroutt/Niri-glass | zaroutt | GPL-3.0-or-later | Liquid glass shader and parameters |
 | https://github.com/reverb256/smithay | reverb256 | MIT | `hdr-modern` reference for HDR colour handling (audited) |
 | https://github.com/AmmoniumX/niri-qol | AmmoniumX | GPL-3.0-or-later | Hidden-workspace and QoL work folded into biri |
-| https://github.com/Asthestarsfalll/piri | Asthestarsfalll and contributors | MIT | Automation architecture reference (compiled plugins, rules, run-or-raise, swallow); better-companion is an in-tree implementation and vendors no Piri code |
-| https://github.com/lonerOrz/nsticky | lonerOrz | BSD-3-Clause | Sticky-window daemon that better-nsticky extends |
-| better-nsticky | fram446742 and contributors | BSD-3-Clause | Staging, scratchpads, rules, persistence, selector, compatibility integration |
-| https://github.com/zgavin/niri-sidepanels | zgavin and contributors | MIT | Floating sidepanel stacks (`toggle-window`/`send`/`flip`/`focus`/`reorder`/struts), ported into `better-sidepanels/stack` |
+| https://github.com/Asthestarsfalll/piri | Asthestarsfalll and contributors | MIT | Automation architecture reference (compiled plugins, rules, run-or-raise, swallow); loom-companion is an in-tree implementation and vendors no Piri code |
+| https://github.com/lonerOrz/nsticky | lonerOrz | BSD-3-Clause | Sticky-window daemon that loom-nsticky extends |
+| loom-nsticky | fram446742 and contributors | BSD-3-Clause | Staging, scratchpads, rules, persistence, selector, compatibility integration |
+| https://github.com/zgavin/niri-sidepanels | zgavin and contributors | MIT | Floating sidepanel stacks (`toggle-window`/`send`/`flip`/`focus`/`reorder`/struts), ported into `loom-sidepanels/stack` |
 
 The companion tools are original implementations. Their behaviour was informed
 by these projects, without vendoring their code:
@@ -90,8 +90,8 @@ and specification text are used under the licences shipped with
 | Component | Licence | Combined with GPL-3.0-or-later |
 | --- | --- | --- |
 | niri and forks | GPL-3.0-or-later | yes |
-| Smithay / better-smithay | MIT | yes (MIT is GPL-compatible; keep notices) |
-| better-nsticky | BSD-3-Clause | yes for the daemon; combined over IPC, not linked |
+| Smithay / loom-smithay | MIT | yes (MIT is GPL-compatible; keep notices) |
+| loom-nsticky | BSD-3-Clause | yes for the daemon; combined over IPC, not linked |
 | Wayland protocol XML | MIT / HPND-style as shipped | yes, keep notices |
 | Linux DRM headers | MIT/GPL-2.0 WITH Linux-syscall-note | used as intended |
 
@@ -100,4 +100,4 @@ Obligations:
 - Keep copyright headers and licence files.
 - Preserve original authorship in ported commits (`cherry-pick -x` plus a note).
 - Do not relicense Smithay-derived files; they remain MIT with their notices.
-- Publish better-niri under GPL-3.0-or-later and better-smithay under MIT.
+- Publish loom-niri under GPL-3.0-or-later and loom-smithay under MIT.

@@ -3,7 +3,7 @@
 # Adds the Vulkan renderer (default in niri's manifest, opt-in at runtime with
 # NIRI_RENDERER=vulkan or niri --check-vulkan) and the dinit session integration
 # on top of the desktop profile. All companion applications are built,
-# including the `better-companion` automation daemon and `companionctl`.
+# including the `loom-companion` automation daemon and `loomctl`.
 #
 # Check/build it with:
 #   packaging/scripts/build-profile.sh --check full

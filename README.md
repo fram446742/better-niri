@@ -26,25 +26,25 @@ Every monitor has an independent set of workspaces, and there's always one empty
 The workspace arrangement is preserved across disconnecting and connecting monitors where it makes sense.
 When a monitor disconnects, its workspaces will move to another monitor, but upon reconnection they will move back to the original monitor.
 
-## Better Desktop
+## Loom
 
-This tree is the Better Desktop fork of niri. Alongside the compositor it ships
+This tree is the Loom fork of niri. Alongside the compositor it ships
 a set of small, independent tools that share niri's IPC and configuration
 conventions: companion (automation, scratchpads, sticky workflow), session,
 monitor, settings, shot, audio, wallpaper, sidepanels and the Noctalia plugin
 source. They are maintained as separate workspaces and mirrored to their own
 repositories, so each can be built, tested and released on its own:
-[better-desktop](https://github.com/fram446742/better-desktop),
-[better-companion](https://github.com/fram446742/better-companion),
-[better-session](https://github.com/fram446742/better-session),
-[better-monitor](https://github.com/fram446742/better-monitor),
-[better-settings](https://github.com/fram446742/better-settings),
-[better-shot](https://github.com/fram446742/better-shot),
-[better-audio](https://github.com/fram446742/better-audio),
-[better-wallpaper](https://github.com/fram446742/better-wallpaper),
-[better-sidepanels](https://github.com/fram446742/better-sidepanels),
-[better-portal](https://github.com/fram446742/better-portal) and
-[better-noctalia-plugins](https://github.com/fram446742/better-noctalia-plugins).
+[Loom](https://github.com/fram446742/loom),
+[loom-companion](https://github.com/fram446742/loom-companion),
+[loom-session](https://github.com/fram446742/loom-session),
+[loom-monitor](https://github.com/fram446742/loom-monitor),
+[loom-settings](https://github.com/fram446742/loom-settings),
+[loom-shot](https://github.com/fram446742/loom-shot),
+[loom-audio](https://github.com/fram446742/loom-audio),
+[loom-wallpaper](https://github.com/fram446742/loom-wallpaper),
+[loom-sidepanels](https://github.com/fram446742/loom-sidepanels),
+[loom-portal](https://github.com/fram446742/loom-portal) and
+[loom-noctalia-plugins](https://github.com/fram446742/loom-noctalia-plugins).
 
 The compositor is built from niri and the work of its community: niri-elite,
 biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
@@ -133,43 +133,43 @@ My talk about some testing techniques used in niri: property-based tests, snapsh
 The first half overlaps with my RustCon talk, the second half is new.
 The talk is in Russian, but I prepared full English subtitles that you can find in YouTube's subtitle language selector.
 
-## Better Desktop companion tools
+## Loom tools
 
 The companion applications live as independent Cargo workspaces inside this
-repository (`better-companion/`, `better-portal/`, ...).
+repository (`loom-companion/`, `loom-portal/`, ...).
 Their sources still build and package on their own, but for development you can
-run every tool through the `better` command, which selects the right binary and
+run every tool through the `loom` command, which selects the right binary and
 falls back to the tool's own workspace:
 
 ```sh
-cargo run --bin better -- --list
-cargo run --bin better -- shot screen --copy
-cargo run --bin better -- monitor list
-cargo run --bin better -- companion status
+cargo run --bin loom -- --list
+cargo run --bin loom -- shot screen --copy
+cargo run --bin loom -- monitor list
+cargo run --bin loom -- companion status
 ```
 
-Installed packages put the same command in `/usr/bin/better`; it runs the
-individual `better-*` binaries, so each tool remains usable on its own. The
+Installed packages put the same command in `/usr/bin/loom`; it runs the
+individual `loom-*` binaries, so each tool remains usable on its own. The
 direct shims are still available:
 
 ```sh
-cargo run --bin better-monitor -- --help
-cargo run --bin better-settings -- --version
-cargo run --bin companionctl -- status
-cargo run --bin better-shot -- screen --copy
-cargo run --bin better-audio -- sinks
-cargo run --bin better-wallpaper -- status
-cargo run --bin better-session -- list
-cargo run --bin better-sidepanels -- --check
-cargo run --bin better-portal -- --version
+cargo run --bin loom-monitor -- --help
+cargo run --bin loom-settings -- --version
+cargo run --bin loomctl -- status
+cargo run --bin loom-shot -- screen --copy
+cargo run --bin loom-audio -- sinks
+cargo run --bin loom-wallpaper -- status
+cargo run --bin loom-session -- list
+cargo run --bin loom-sidepanels -- --check
+cargo run --bin loom-portal -- --version
 ```
 
-Available bins: `better`, `better-companion`, `companionctl`, `better-portal`,
-`better-portal-picker`, `better-monitor`, `better-session`, `better-shot`,
-`better-wallpaper`, `better-settings`, `better-settingsctl`, `better-audio`,
-`better-sidepanels`. Each shim forwards its arguments and exit status to the
+Available bins: `loom`, `loom-companion`, `loomctl`, `loom-portal`,
+`loom-portal-picker`, `loom-monitor`, `loom-session`, `loom-shot`,
+`loom-wallpaper`, `loom-settings`, `loom-settingsctl`, `loom-audio`,
+`loom-sidepanels`. Each shim forwards its arguments and exit status to the
 tool's own `cargo run`, so the separate lockfiles and packaging stay intact.
-Use the workspace directly (`cd better-monitor && cargo run -- …`) when you want
+Use the workspace directly (`cd loom-monitor && cargo run -- …`) when you want
 a fully isolated build.
 
 ## Contributing

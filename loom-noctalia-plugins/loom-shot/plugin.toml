@@ -1,0 +1,10 @@
+id = "loom/loom-shot"
+name = "Loom Shot"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Screenshot launcher for loom-shot."
+
+[[widget]]
+id = "capture"
+entry = "widget.luau"

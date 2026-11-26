@@ -6,10 +6,10 @@ Status legend:
 - **Partial** — the mechanism exists upstream but is incomplete for the feature as
   described (e.g. 10-bit formats exist, general HDR output does not).
 - **Absent** — not in upstream at this commit.
-- **Planned** — accepted for better-niri; not integrated yet.
+- **Planned** — accepted for loom-niri; not integrated yet.
 - **Deferred** — evaluated, not scheduled (reason given).
 
-The status column was refreshed on 2026-11-25 against `integration/elite-base`:
+The status column was refreshed on 2026-11-25 against `main`:
 everything marked **Integrated** is implemented and covered by the workspace test
 suite (894 tests on the default build, 425 with `--no-default-features`).
 All planned core protocol ports are integrated;
@@ -20,7 +20,7 @@ state.
 
 ## Rendering and colour
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | HDR output signalling (`HDR_OUTPUT_METADATA`, BT.2020, 10-bit) | Absent | niri-spicy | Integrate niri-spicy | Integrated | Default auto on HDR-capable outputs; `off`/`on` and runtime `niri msg output <out> hdr …` overrides; hardware pass entered/left HDR on DP-1. |
 | `wp_color_management_v1` | Absent | niri-spicy | niri-spicy | Integrated | Windows scRGB, BT.2100, extended target volume, custom primaries. |
@@ -42,11 +42,11 @@ state.
 | KDE blur protocol | Absent | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur` is different from upstream's `ext-background-effect-v1`. |
 | Liquid glass / refraction / lens / edge light | Absent | zaroutt/Niri-glass via niri-elite | niri-elite port | Integrated | Implement as a background-effect shader, not a second engine. |
 | VRR | Upstream | upstream | upstream | Upstream | On-demand and per-window rules. |
-| Tearing control | Absent | urayde | urayde | Integrated | Upstream Smithay has no `wp_tearing_control_v1`; better-smithay must add it. Per-output gate: `allow-tearing always|never|fullscreen` (focused fullscreen by default). |
+| Tearing control | Absent | urayde | urayde | Integrated | Upstream Smithay has no `wp_tearing_control_v1`; loom-smithay must add it. Per-output gate: `allow-tearing always|never|fullscreen` (focused fullscreen by default). |
 
 ## Presentation and DRM
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Explicit sync (`linux-drm-syncobj-v1`) | Absent | urayde | urayde | Integrated | Upstream Smithay already has `drm_syncobj`. |
 | Tearing | Absent | urayde | urayde | Integrated | Window rule + content type + async flip path. |
@@ -65,7 +65,7 @@ state.
 
 ## Outputs and workspaces
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Virtual outputs | Absent | biri (niri PR #3800, open) | biri | Integrated (core) | TTY + headless; IPC/CLI create/remove; config `create-virtual`; virtual-output frame-callback path. |
 | Isolated outputs | Absent | biri | biri | Integrated (core) | Overview/Alt-Tab/hotkey overlay/config notification hidden; `power-off-monitors skip-isolated=true` keeps them lit. |
@@ -77,11 +77,11 @@ state.
 | Sticky windows | Absent | biri | biri native | Integrated | Native monitor-level sticky space, `open-sticky`, `toggle-window-sticky`, `float-above-fullscreen`; sticky windows render above workspaces. |
 | Sticky floating windows | Absent | biri (niri PR #3302, closed) | biri | Integrated | `open-sticky` implies floating; sticky tiles live on the monitor, not a workspace. |
 | Float above fullscreen | Absent | biri (niri PR #4062, open) | biri | Integrated | Opt-in window rule. |
-| Stage / scratchpad workspaces | External | better-nsticky | better-nsticky | Integrated | Keep as external daemon; add compatibility mode. |
+| Stage / scratchpad workspaces | External | loom-nsticky | loom-nsticky | Integrated | Keep as external daemon; add compatibility mode. |
 
 ## Windows and desktop UX
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Grid overview | Absent | niri-elite (SHORiN) | niri-elite | Integrated | Per-monitor, tab cells, gestures, IPC focus report. |
 | Window minimisation | Absent | niri-spicy, niri-elite | niri-spicy base + elite UX | Integrated | Real state, actions, rule, grid placeholder, strip. |
@@ -100,7 +100,7 @@ state.
 
 ## Input
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Per-keyboard configuration | Absent | biri (niri PR #4459, open) | biri | Integrated (core) | Named `keyboard` blocks inherit unset fields; keymap/repeat/numlock/locale1/IPC follow the last physical keyboard. |
 | Num Lock state | Upstream config | biri | biri | Integrated | biri fixes Num Lock/locale1/IPC across keyboard switches. |
@@ -115,7 +115,7 @@ state.
 
 ## Portals, capture and applications
 
-| Feature | Upstream | Best source | Decision | better-niri | Notes |
+| Feature | Upstream | Best source | Decision | loom-niri | Notes |
 | --- | --- | --- | --- | --- | --- |
 | XDG desktop portal backend | Absent | niri-elite (SHORiN) | niri-elite | Integrated | `org.freedesktop.impl.portal.desktop.niri`. |
 | ScreenCast | Upstream via GNOME portal | niri-elite native | niri-elite | Integrated | Native picker and permissions. |
@@ -159,5 +159,5 @@ state.
 | Configuration | KDL, per-domain modules, defaults documented, runtime toggles where meaningful. |
 | IPC | Typed actions/events in `niri-ipc`, no scripts for native behaviour. |
 | Upstream sync | Merge-based, upstream first, drift script, no rebase of `main`. |
-| Smithay | Single fork `fram446742/better-smithay`, pinned by commit; never two Smithays. |
+| Smithay | Single fork `fram446742/loom-smithay`, pinned by commit; never two Smithays. |
 | Documentation | This directory; update with every integration. |

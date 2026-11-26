@@ -1,0 +1,10 @@
+id = "loom/loom-screentime"
+name = "Loom Screen Time"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Per-application usage time recorded by loom-companion."
+
+[[widget]]
+id = "usage"
+entry = "widget.luau"

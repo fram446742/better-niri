@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Format, check and test every Better Desktop Cargo workspace.
+# Format, check and test every Loom Cargo workspace.
 #
-# Each `better-*` directory is its own workspace (it is excluded from niri's
+# Each `loom-*` directory is its own workspace (it is excluded from niri's
 # Cargo workspace). A workspace whose system libraries are absent is skipped
 # with a note instead of failing the whole run, so a developer without GTK or
 # PipeWire development headers can still test the pure workspaces.
 #
 # Usage: scripts/check-workspaces.sh [workspace ...]
-#   scripts/check-workspaces.sh                  # every better-* workspace
-#   scripts/check-workspaces.sh better-monitor   # selected workspaces
+#   scripts/check-workspaces.sh                  # every loom-* workspace
+#   scripts/check-workspaces.sh loom-monitor   # selected workspaces
 #
 # Environment:
 #   LIBCLANG_PATH  defaults to /usr/lib (bindgen for PipeWire/SPA bindings).
@@ -24,29 +24,30 @@ cd "$root"
 export LIBCLANG_PATH=${LIBCLANG_PATH:-/usr/lib}
 export CARGO_TERM_COLOR=${CARGO_TERM_COLOR:-always}
 
-# Keep this list in sync with the top-level `better-*` directories. The order
+# Keep this list in sync with the top-level `loom-*` directories. The order
 # is cheapest-first so a dependency problem shows up after the pure workspaces.
 workspaces=(
-    better-monitor
-    better-session
-    better-shot
-    better-companion
-    better-wallpaper
-    better-portal
-    better-audio
-    better-settings
-    better-sidepanels
-    better-noctalia-plugins
+    loom-monitor
+    loom-session
+    loom-shot
+    loom-companion
+    loom-wallpaper
+    loom-portal
+    loom-audio
+    loom-settings
+    loom-sidepanels
+    loom-tui
+    loom-noctalia-plugins
 )
 
 # pkg-config modules required by each workspace. Empty means pure Rust.
 system_dependencies() {
     case $1 in
-        better-settings) printf '%s\n' gtk4 ;;
-        better-audio) printf '%s\n' libpipewire-0.3 ;;
-        better-wallpaper) printf '%s\n' wayland-client xkbcommon ;;
-        better-portal) printf '%s\n' wayland-client xkbcommon ;;
-        better-sidepanels) printf '%s\n' wayland-client cairo xkbcommon ;;
+        loom-settings) printf '%s\n' gtk4 ;;
+        loom-audio) printf '%s\n' libpipewire-0.3 ;;
+        loom-wallpaper) printf '%s\n' wayland-client xkbcommon ;;
+        loom-portal) printf '%s\n' wayland-client xkbcommon ;;
+        loom-sidepanels) printf '%s\n' wayland-client cairo xkbcommon ;;
         *) printf '%s\n' ;;
     esac
 }

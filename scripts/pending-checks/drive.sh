@@ -7,7 +7,7 @@ TEST_DIR=${NIRI_TEST_DIR:-/tmp/niri-test-session}
 LOG=${PENDING_LOG:-/tmp/pending-drive.log}
 exec > >(tee -a "$LOG") 2>&1
 echo "logging to $LOG"
-NIRI=${NIRI_BIN:-/home/franc/Projects/better-niri/better-niri/target/debug/niri}
+NIRI=${NIRI_BIN:-/home/franc/Projects/loom-niri/loom-niri/target/debug/niri}
 [ -x "$NIRI" ] || NIRI=niri
 say() { printf '\n== %s ==\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }

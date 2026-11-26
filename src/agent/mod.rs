@@ -513,6 +513,7 @@ impl State {
             ),
             // Agent apps shouldn't drive niri.
             (String::from("NIRI_SOCKET"), None),
+            (String::from("LOOM_NIRI_SOCKET"), None),
         ];
         spawn_with_env(command, None, env);
 

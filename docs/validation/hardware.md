@@ -10,7 +10,7 @@ Switch to a free VT (for example `Ctrl+Alt+F3`), log in as the same user and
 run:
 
 ```sh
-cd /home/franc/Projects/better-niri/better-niri
+cd /home/franc/Projects/loom-niri/loom-niri
 HDR_OUTPUT=DP-1 ./scripts/pending-checks/hardware-validation.sh
 ```
 

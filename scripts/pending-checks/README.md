@@ -73,10 +73,10 @@ and will look different (dimmer/washed out) on most monitors by design. To
 compare, capture a screenshot in both modes (screenshots stay SDR) and check
 that colours match, then compare the on-screen brightness.
 
-## portal.sh — better-portal
+## portal.sh — loom-portal
 
-Needs: `better-portal` built
-(`cargo build --manifest-path better-portal/Cargo.toml`), a session bus, and
+Needs: `loom-portal` built
+(`cargo build --manifest-path loom-portal/Cargo.toml`), a session bus, and
 interactive selection for screenshot/region calls.
 
 ```sh
@@ -90,15 +90,15 @@ be running.
 
 ## companion.sh — rules, parking, swallow, run-or-raise
 
-Needs: `better-companion` built
-(`cargo build --manifest-path better-companion/Cargo.toml`) and a running niri
+Needs: `loom-companion` built
+(`cargo build --manifest-path loom-companion/Cargo.toml`) and a running niri
 session for compositor/park/swallow.
 
 ```sh
 ./scripts/pending-checks/companion.sh
 ```
 
-Starts a temporary daemon on `/tmp/better-companion-test.sock` and exercises
+Starts a temporary daemon on `/tmp/loom-companion-test.sock` and exercises
 rules, parking, window find/run-or-raise and swallow status. Swallowing itself
 needs a child launched from the terminal after enabling it.
 

@@ -410,7 +410,7 @@ niri msg output DP-1 hdr off    # never signal HDR
 niri msg output DP-1 hdr auto --reference-luminance 203
 ```
 
-better-settings exposes the same selector in its Displays section.
+loom-settings exposes the same selector in its Displays section.
 
 The optional `mode` property controls when the output is in HDR:
 

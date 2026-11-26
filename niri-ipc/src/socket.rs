@@ -11,6 +11,9 @@ use crate::{Event, Reply, Request};
 /// Name of the environment variable containing the niri IPC socket path.
 pub const SOCKET_PATH_ENV: &str = "NIRI_SOCKET";
 
+/// Name of the environment variable used by a coexisting Loom session.
+pub const LOOM_SOCKET_PATH_ENV: &str = "LOOM_NIRI_SOCKET";
+
 /// Helper for blocking communication over the niri socket.
 ///
 /// This struct is used to communicate with the niri IPC server. It handles the socket connection
@@ -25,12 +28,17 @@ impl Socket {
     /// This is equivalent to calling [`Self::connect_to`] with the path taken from the
     /// [`SOCKET_PATH_ENV`] environment variable.
     pub fn connect() -> io::Result<Self> {
-        let socket_path = env::var_os(SOCKET_PATH_ENV).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{SOCKET_PATH_ENV} is not set, are you running this within niri?"),
-            )
-        })?;
+        let socket_path = env::var_os(SOCKET_PATH_ENV)
+            .or_else(|| env::var_os(LOOM_SOCKET_PATH_ENV))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "neither {SOCKET_PATH_ENV} nor {LOOM_SOCKET_PATH_ENV} is set, \
+                         are you running this within niri?"
+                    ),
+                )
+            })?;
         Self::connect_to(socket_path)
     }
 

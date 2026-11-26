@@ -1,0 +1,22 @@
+{
+  "requested_backend": "auto",
+  "active_backend": "native",
+  "active_backend_description": "native PipeWire metadata backend",
+  "degraded": false,
+  "reason": "native backend is available",
+  "attempts": [],
+  "config": "/home/user/.config/loom-audio/rules.json",
+  "current_default": "alsa_output.speakers",
+  "configured_default": "alsa_output.speakers",
+  "rules": [
+    {
+      "app": "firefox",
+      "sink": "alsa_output.speakers",
+      "priority": 10,
+      "volume": 0.8,
+      "mute": false
+    }
+  ],
+  "restore_entries": [],
+  "restore_count": 0
+}

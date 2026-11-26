@@ -21,9 +21,9 @@ evidence.
 ## 2. Piri compiled plugins
 
 Piri's plugin model is an in-process Rust trait, not an ABI. Reusing its plugins
-would mean embedding Piri and replacing better-companion's UDS/JSON boundary;
+would mean embedding Piri and replacing loom-companion's UDS/JSON boundary;
 the plugins would still be compiled per binary, so users would not gain an
-installable plugin format. better-companion keeps the Piri behaviour (rules,
+installable plugin format. loom-companion keeps the Piri behaviour (rules,
 run-or-raise, scratchpads, swallowing, marks) as original code.
 
 If compiled plugin reuse becomes a hard requirement, it should be an optional
@@ -32,10 +32,10 @@ notices are preserved in `ATTRIBUTION.md`.
 
 ## 3. Limits that belong elsewhere
 
-- **Output mirroring.** niri has no mirror primitive. better-monitor validates
+- **Output mirroring.** niri has no mirror primitive. loom-monitor validates
   the relationship and can run it through `wl-mirror`; a compositor-native
   mirror would need an output-composition feature. See `docs/HDR.md` and the
-  better-monitor README.
+  loom-monitor README.
 - **HDR wallpaper output.** HDR video now takes the 10-bit PQ/BT.2020 path with
   a `wp_color_manager_v1` description when the output is HDR-active; static
   images remain SDR, and a missing protocol or 10-bit buffer falls back to SDR

@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how better-niri will carry many features without turning
+This document describes how loom-niri will carry many features without turning
 into an unmergeable fork. It is deliberately conservative: niri is a single
 tightly-coupled compositor, and the cheapest maintenance strategy is usually a
 small patch in the right existing seam, not a new abstraction.
@@ -89,7 +89,7 @@ Only heavy or platform-specific dependencies are optional:
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `vulkan` | on | Compiles better-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. The TTY backend renders through `TtyRenderer`/`TtyFrame` enums over the GLES and Vulkan multi-GPU renderers, so `vulkan` drives outputs with `VulkanRenderer`; borders, shadows, textured shader elements (panel/decoration-light programs), the per-window blur/background composite and liquid glass recompile their GLSL to SPIR-V and draw. `OffscreenBuffer` is backend-agnostic, so panel-source bakes and the decoration-light emission prepass run on the active renderer; the decoration light blurs its emission with the Vulkan dual-Kawase ladder (`blur_vulkan.rs`), the same ladder as the per-window effect. Producers that remain GLES-only (xray backdrops, resize/screen transitions) stay on GLES and are skipped; xray falls back to the per-window background effect on Vulkan. Capture paths are renderer-generic too: `render_capture_paths()` runs wlr-screencopy and ext-image-copy-capture on the active renderer, SHM targets are filled from a generic offscreen readback, dma-buf targets are rendered directly through `Bind<Dmabuf>`, and the PipeWire screencast renders both its dma-buf and SHM buffers on Vulkan (advertising SHM only when no EGL render-format list exists). `niri --check-vulkan` prints the plan as JSON. |
+| `vulkan` | on | Compiles loom-smithay's `renderer_vulkan`, probes physical devices at startup, applies `NIRI_RENDERER` (`auto`/`gles`/`vulkan`) and falls back to EGL/GLES with a logged reason. The TTY backend renders through `TtyRenderer`/`TtyFrame` enums over the GLES and Vulkan multi-GPU renderers, so `vulkan` drives outputs with `VulkanRenderer`; borders, shadows, textured shader elements (panel/decoration-light programs), the per-window blur/background composite and liquid glass recompile their GLSL to SPIR-V and draw. `OffscreenBuffer` is backend-agnostic, so panel-source bakes and the decoration-light emission prepass run on the active renderer; the decoration light blurs its emission with the Vulkan dual-Kawase ladder (`blur_vulkan.rs`), the same ladder as the per-window effect. Producers that remain GLES-only (xray backdrops, resize/screen transitions) stay on GLES and are skipped; xray falls back to the per-window background effect on Vulkan. Capture paths are renderer-generic too: `render_capture_paths()` runs wlr-screencopy and ext-image-copy-capture on the active renderer, SHM targets are filled from a generic offscreen readback, dma-buf targets are rendered directly through `Bind<Dmabuf>`, and the PipeWire screencast renders both its dma-buf and SHM buffers on Vulkan (advertising SHM only when no EGL render-format list exists). `niri --check-vulkan` prints the plan as JSON. |
 | `agent` | on | Agent seat, agent IPC socket, automation helpers. No heavy dependency; default-on so the compositor is complete. |
 | `portal` | on | Built-in XDG portal backend (`zbus` already optional upstream). |
 | `svg-cursors` | on | SVG cursor themes (`resvg`/`usvg`). |
@@ -105,7 +105,7 @@ configuration.
   consumed by external tools.
 - Do not add a crate for each feature. A shader crate is justified only if a
   second consumer (e.g. a preset validator CLI) needs the same code.
-- `better-smithay` is the only forked dependency. Everything else stays on
+- `loom-smithay` is the only forked dependency. Everything else stays on
   crates.io/GitHub upstream.
 
 ### Delivery tiers
@@ -116,8 +116,8 @@ Features are classified before they are integrated:
   layout/window primitives, outputs, protocols, config/IPC).
 - **Tier 2 built-in modules** — shipped in the binary, compile-time optional,
   inert until configured: `effects`, `navigation`, `cursor`, `agent`, `kde`,
-  `vulkan`. The portal backend is the separate `better-portal` daemon.
-- **Tier 3 companions** — separate repositories over IPC: better-companion
+  `vulkan`. The portal backend is the separate `loom-portal` daemon.
+- **Tier 3 companions** — separate repositories over IPC: loom-companion
   (which absorbs nsticky's workflow), sessions, panels, shot, monitor, audio,
   wallpaper, settings, portal.
 - **Tier 4 shell** — Noctalia plugins only (frozen).
@@ -161,7 +161,7 @@ Do not introduce traits for these unless a second implementation exists.
 
 ## 5. Smithay integration
 
-better-smithay is rebuilt from upstream `master` with thematically grouped
+loom-smithay is rebuilt from upstream `master` with thematically grouped
 commits:
 
 1. Colour management / HDR primitives (protocol, image descriptions, connector
@@ -227,7 +227,7 @@ These rules apply to every visual feature:
 - IPC additions are typed in `niri-ipc`; events are additive and backward
   compatible. Do not rename existing fields.
 - Duplicated config is forbidden: if upstream already has `blur`, extend it
-  rather than adding `better-blur`.
+  rather than adding `loom-blur`.
 
 ## 8. Test architecture
 
@@ -247,5 +247,5 @@ These rules apply to every visual feature:
   accepted as the price of small conflicts.
 - Layout features still require deep edits; they are scheduled last and tested
   hardest.
-- No plugin ecosystem. This is intentional: better-niri is a compositor, not a
+- No plugin ecosystem. This is intentional: loom-niri is a compositor, not a
   plugin host.

@@ -1,0 +1,10 @@
+id = "loom/loom-wallpaper"
+name = "Loom Wallpaper"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Show the active scene and reapply it from the bar."
+
+[[widget]]
+id = "scene"
+entry = "widget.luau"

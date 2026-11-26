@@ -8,8 +8,8 @@ when the row says so.
 
 `scripts/test-all.sh` is the single non-hardware gate. It runs the compositor
 suite, the feature matrix, every companion workspace, packaging, completions,
-the Noctalia plugins and the external better-nsticky checkout, and writes a TSV
-summary under `/tmp/better-test-run-<timestamp>/summary.tsv`.
+the Noctalia plugins and the external loom-nsticky checkout, and writes a TSV
+summary under `/tmp/loom-test-run-<timestamp>/summary.tsv`.
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -23,12 +23,12 @@ summary under `/tmp/better-test-run-<timestamp>/summary.tsv`.
 | Companion workspaces | `cargo test --workspace` in each of the nine apps | **Pass**; companion 225, portal 42, monitor 80, session 54, shot 122, wallpaper 43, settings 98, audio 54, sidepanels 62 |
 | Packaging | `packaging/scripts/verify.sh` | **Pass** |
 | Completions | `generate-completions.py --check` | **Pass**, 36 files in sync |
-| Noctalia plugins | `better-noctalia-plugins/verify.sh` + live shell | **Pass**, 8 loaded, refresh/click exercised |
-| better-nsticky (external) | `cargo test --all-targets` in the local checkout | **Pass**, 473 tests |
+| Noctalia plugins | `loom-noctalia-plugins/verify.sh` + live shell | **Pass**, 8 loaded, refresh/click exercised |
+| loom-nsticky (external) | `cargo test --all-targets` in the local checkout | **Pass**, 473 tests |
 | Automated hardware pass | `HDR_OUTPUT=DP-1 scripts/pending-checks/hardware-validation.sh` on DP-1 | **Pass**: Vulkan, capabilities, VRR, 10-bit, explicit sync, 2 DRM devices, runtime HDR auto/off/auto, screenshot, HDR clip `hdr=true`→`hdr=false` |
 | Subjective hardware | tearing game, commit-timing client, second-GPU output, rotated transitions, HDR mixed contrast, popups/animations, real portal client | **Manual**, see `docs/validation/hardware.md` |
 
-Note: `cargo check --workspace --all-features` in better-smithay fails inside
+Note: `cargo check --workspace --all-features` in loom-smithay fails inside
 the `profiling` crate because puffin and tracy backends are mutually exclusive;
 that is feature unification, not project code.
 

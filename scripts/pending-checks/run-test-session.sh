@@ -3,7 +3,7 @@
 # Run this ON tty3; niri takes over the VT. The log survives after exit.
 set -u
 DIR=${1:-${NIRI_TEST_DIR:-/tmp/niri-test-session}}
-NIRI_BIN=${NIRI_BIN:-/home/franc/Projects/better-niri/better-niri/target/debug/niri}
+NIRI_BIN=${NIRI_BIN:-/home/franc/Projects/loom-niri/loom-niri/target/debug/niri}
 [ -x "$NIRI_BIN" ] || NIRI_BIN=$(command -v niri || true)
 [ -n "$NIRI_BIN" ] || { echo "no niri binary; cargo build -p niri"; exit 1; }
 LOG=${NIRI_LOG:-/tmp/niri-test-session.log}

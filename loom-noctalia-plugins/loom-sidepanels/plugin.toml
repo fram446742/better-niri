@@ -1,0 +1,10 @@
+id = "loom/loom-sidepanels"
+name = "Loom Sidepanels"
+version = "1.0.0"
+plugin_api = 24
+author = "Loom"
+description = "Reload and validate loom-sidepanels from the bar."
+
+[[widget]]
+id = "panels"
+entry = "widget.luau"

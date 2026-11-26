@@ -311,7 +311,7 @@ pub struct Capabilities {
     pub kde_output_order: bool,
     /// GNOME screencast D-Bus path.
     pub xdp_gnome_screencast: bool,
-    /// `org.better.portal.ScreenCastSelection` handshake used by better-portal.
+    /// `org.loom.portal.ScreenCastSelection` handshake used by loom-portal.
     pub portal_screencast_selection: bool,
 }
 
