@@ -110,10 +110,10 @@ Verified on this branch:
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-all.sh --quick` | **30/30 PASS** (2026-11-26: compositor, 9 workspaces, sidepanel stack, packaging, completions, plugins, nsticky) |
-| `scripts/test-all.sh` | **51/51 PASS** (2026-11-26, after the HDR/mirror changes: compositor, feature matrix, visual-test build, 9 workspaces + sidepanel stack, packaging, completions, plugins, nsticky) |
-| `cargo test --workspace` | pass, 937 tests, 0 failed |
-| `cargo test -p niri --no-default-features` | pass, 458 tests, 0 failed |
+| `scripts/test-all.sh --quick` | **32/32 PASS** (2026-11-26, after the Loom rename: compositor, 9 tool workspaces, sidepanel stack, packaging, completions, plugins, nsticky) |
+| `scripts/test-all.sh` | 51/51 PASS before the Loom rename; rerun the full matrix before release |
+| `cargo test --workspace` | pass, 942 tests, 0 failed |
+| `cargo test -p niri --no-default-features` | pass, 461 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |
 | `cargo test -p niri-ipc --features clap` | pass |
 | `cargo build -p niri-visual-tests` | pass |

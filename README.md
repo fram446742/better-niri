@@ -43,8 +43,10 @@ repositories, so each can be built, tested and released on its own:
 [loom-audio](https://github.com/fram446742/loom-audio),
 [loom-wallpaper](https://github.com/fram446742/loom-wallpaper),
 [loom-sidepanels](https://github.com/fram446742/loom-sidepanels),
-[loom-portal](https://github.com/fram446742/loom-portal) and
-[loom-noctalia-plugins](https://github.com/fram446742/loom-noctalia-plugins).
+[loom-tui](https://github.com/fram446742/loom-tui),
+[loom-portal](https://github.com/fram446742/loom-portal),
+[loom-noctalia-plugins](https://github.com/fram446742/loom-noctalia-plugins) and
+[loom-nsticky](https://github.com/fram446742/loom-nsticky).
 
 The compositor is built from niri and the work of its community: niri-elite,
 biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
