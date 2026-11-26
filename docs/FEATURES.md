@@ -145,8 +145,8 @@ state.
 | Hidden-workspace child placement | biri | Integrated |
 | Spawn floating relative to cursor | Naxdy | Integrated |
 | Blur brightness/contrast | Naxdy | Integrated |
-| Layer fade in/out | Naxdy | Deferred — see `UNIMPLEMENTED.md` |
-| HDR scanout colour pipelines, post-blend encode, HDR cursor plane | niri-spicy | Deferred — see `UNIMPLEMENTED.md` |
+| Layer fade in/out | Naxdy | Integrated | `animations.layer-open`/`layer-close`; offscreen open fade, per-output closing snapshot, Vulkan/GLES, skipped for blocked-out targets. |
+| HDR scanout colour pipelines, post-blend encode, HDR cursor plane | niri-spicy | Integrated (hardware pending) | Per-element scanout transforms, post-blend PQ encode and cursor-plane transform in the TTY path; KMS colour programming still needs the NVIDIA hardware run. |
 | KDE Screenshot2 fd interface | Naxdy | Integrated | `org.kde.KWin.ScreenShot2` with `CaptureWorkspace`/`CaptureActiveScreen`/`CaptureScreen`/`CaptureActiveWindow`/`CaptureArea`/`CaptureInteractive`, raw RGBA8888 through the client pipe. |
 
 ## Architecture, configuration, tooling

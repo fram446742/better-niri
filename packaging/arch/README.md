@@ -15,7 +15,7 @@ component. A single source checkout and a single `build()` serve all of them:
 | `better-settings` | `better-settings`, `better-settingsctl`, desktop file |
 | `better-audio` | `better-audio` |
 | `better-sidepanels` | `better-sidepanels` |
-| `better-desktop` | meta package depending on every package above |
+| `better-desktop` | meta package depending on every package above; installs `better` |
 
 Build the whole set:
 

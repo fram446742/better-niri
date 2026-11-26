@@ -6,6 +6,7 @@ compositor and all companion applications:
 
 | Component | Package | Binary | Purpose |
 | --- | --- | --- | --- |
+| selector | `better-desktop` | `better` | one command for every tool (`better shot`, `better monitor`, …) |
 | niri | `niri-better` | `niri`, `niri-session` | compositor and session launcher |
 | better-portal | `better-portal` | `better-portal`, `better-portal-picker` | standalone Screenshot/ScreenCast portal backend |
 | better-companion | `better-companion` | `better-companion`, `companionctl` | window/workspace automation and parking daemon |

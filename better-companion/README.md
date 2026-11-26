@@ -504,6 +504,7 @@ Every populated field in `match` is ANDed; strings are case-insensitive.
 | `workspace_name` / `workspace_name_regex` | name from `auto:workspaces` |
 | `workspace_idx` | workspace index on its monitor (`idx`) |
 | `workspace_output` | output name substring from `auto:workspaces` |
+| `workspace_empty` | true when no tracked window belongs to the workspace |
 | `is_floating` / `is_minimized` / `is_sticky` / `is_urgent` | exact boolean |
 
 `rules.set` rejects invalid regular expressions before storing anything, and
@@ -511,7 +512,7 @@ older rule files keep loading because every new field is optional.
 
 `rules.explain` reports each matching rule with its `match` object, `priority`
 and a `window_state` snapshot (including the resolved `workspace_name`,
-`workspace_idx` and `workspace_output`), plus the steps. Matches are ordered by
+`workspace_idx`, `workspace_output` and `workspace_empty`), plus the steps. Matches are ordered by
 numeric window id, then higher `priority` first (default `0`), then rule name,
 so repeated calls return stable results. `rules.apply` reports the same
 matcher/window state with a `step_count` instead of the steps:
@@ -639,6 +640,19 @@ Without `workspace_state`, evaluation covers the current `auto:workspaces`
 snapshot. Matches are ordered by numeric workspace id, then rule name, so
 explain/run output is deterministic. `rules.run`/`--dry-run` never mixes window
 rules into a workspace event (and vice versa).
+
+Use `workspace_empty` for niri-empty style actions: it is true when no tracked
+window belongs to the workspace. Niri always keeps one empty workspace, so this
+fires when focus moves to it without a separate daemon.
+
+```sh
+companionctl call rules set '{
+  "name":"empty-hint",
+  "trigger":"workspace-activated",
+  "match":{"workspace_empty":true},
+  "steps":[{"namespace":"hooks","action":"fire","params":{"event":"empty-workspace"}}]
+}'
+```
 
 ## Automation history (`history.*`)
 

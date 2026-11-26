@@ -443,6 +443,7 @@ package_better-desktop() {
   )
   install=better-desktop.install
 
+  install -Dm755 "${srcdir}/target/release/better" "${pkgdir}/usr/bin/better"
   install -Dm644 "${srcdir}/better-desktop.README.md" \
     "${pkgdir}/usr/share/doc/better-desktop/README.md"
   install -Dm644 "${srcdir}/${_pkgname}/LICENSE" \

@@ -15,7 +15,8 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 | SHORiN-KiWATA/niri | integrated | Through niri-elite. |
 | urayde/niri | integrated | Tearing, FIFO, syncobj, pointer warp, async flips. |
 | dividebysandwich/niri, losnoco/niri, kakxem/niri | integrated | HDR/colour lineage in the elite base and niri-spicy ports. |
-| Naxdy/niri | integrated / candidate | KDE interop and blur integrated; window groups and layer fades remain candidates. |
+| niri-spicy (spicy-main) | integrated | Peak-luminance override, tearing gate, suspended toplevels, NVIDIA fences and the scanout colour/post-blend/cursor pipeline. |
+| Naxdy/niri | integrated | KDE interop, blur, window groups, layer fades and the ScreenShot2 fd interface. |
 | demoj1/niri | integrated | Block-out blur, DPMS fixes, overview overrides, cache cleanup. |
 | zaroutt/Niri-glass | integrated | Liquid glass through niri-elite. |
 | Smithay/smithay | integrated | Upstream infrastructure. |
@@ -40,7 +41,8 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 | nfsm | rejected | Fullscreen behaviour is covered by window rules. |
 | oniri | rejected | Single-window maximize is expressible with existing rules. |
 | wl-freeze | rejected | External process freezer; unrelated to compositor state. |
-| niri-empty, niri-scripts, niri_tweaks, Nirius | reference | Ideas covered by rules/automation; no code imported. |
+| niri-empty | integrated (behaviour) | `workspace_empty` condition in workspace-triggered rules; no daemon. |
+| niri-scripts, niri_tweaks, Nirius | reference | Ideas covered by rules/automation; no code imported. |
 
 ## Sessions
 
@@ -58,6 +60,7 @@ ideas. Status values: `integrated` (code or behaviour lives in this tree),
 | niri_display_manager | integrated | Canvas/drag editor with profiles and rollback. |
 | nirimon | reference | TUI idea; CLI/JSON covers it. |
 | nirilayout | integrated | Profiles. |
+| stefonarch/niri-settings | reference | PyQt settings UI; better-settings is the maintained frontend and owns KDL edits. |
 | kanshi | integrated (behaviour) | Watch/rules apply profiles on hotplug. |
 
 ## Audio, sensors and system utilities
@@ -99,7 +102,9 @@ delta-shell, dux-shell, gpui-shell, desktop-shell, IgnisNiriShell, ignis,
 ironbar, ashell, bar-rs, vibepanel, Waybar, i3bar-river, i3status-rust) are
 `reference` only: we do not ship a second shell or bar. Niri Waybar modules and
 Eww/QML/GTK bindings are `rejected` as separate maintenance surfaces; the
-Noctalia plugin source is our integration layer.
+Noctalia plugin source is our integration layer. Anyrun is a separate modular
+launcher and is not adopted for the same reason: Noctalia already provides the
+launcher, and a second one would own keybindings, plugins and history.
 
 ## Noctalia
 
@@ -232,6 +237,14 @@ the fix then belongs in a plugin, not a second shell.
 UI bindings for other shells. We use JSON IPC in our own tools and Noctalia's
 API in the plugins; adding language bindings would create parallel maintenance
 without a consumer. *Reconsider if* an external tool asks for a stable binding.
+
+### Anyrun
+
+A modular Wayland launcher with providers and plugins. Noctalia already owns the
+launcher, its keybindings, plugin source and history, and two launchers would
+compete for the same activation path. *Reconsider if* Noctalia's launcher cannot
+host a required provider; the provider then belongs in a Noctalia plugin. *Use
+instead:* Noctalia launcher.
 
 ### DMS, kode54/niri
 

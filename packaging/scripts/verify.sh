@@ -165,6 +165,7 @@ expects_binaries() {
     local component
     case $1 in
         niri-better) printf '%s\n' niri niri-session ;;
+        better-desktop) printf '%s\n' better ;;
         better-noctalia-plugins) return 0 ;;
         *)
             component=$(package_component "$1") || return 1
@@ -252,6 +253,8 @@ usr/share/better-desktop/noctalia-plugins/better-companion/plugin.toml
 usr/share/better-desktop/noctalia-plugins/better-companion/widget.luau
 usr/share/better-desktop/noctalia-plugins/better-monitor/plugin.toml
 usr/share/better-desktop/noctalia-plugins/better-monitor/widget.luau
+usr/share/better-desktop/noctalia-plugins/better-screentime/plugin.toml
+usr/share/better-desktop/noctalia-plugins/better-screentime/widget.luau
 usr/share/better-desktop/noctalia-plugins/better-session/plugin.toml
 usr/share/better-desktop/noctalia-plugins/better-session/widget.luau
 usr/share/better-desktop/noctalia-plugins/better-shot/plugin.toml
@@ -271,6 +274,7 @@ EOF
             ;;
         better-desktop)
             cat <<'EOF'
+usr/bin/better
 usr/share/doc/better-desktop/README.md
 usr/share/licenses/better-desktop/LICENSE
 EOF
@@ -370,7 +374,7 @@ all_bins() {
     for component in $(all_components); do
         component_binaries "$component"
     done
-    printf '%s\n' niri-session
+    printf '%s\n' better niri-session
 }
 
 printf '==> syntax\n'

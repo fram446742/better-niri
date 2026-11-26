@@ -224,21 +224,23 @@ Design documents worth carrying over (adapt names/paths):
 
 ### KDE — kde-niri (Naxdy)
 
-Imported so far: `org_kde_kwin_blur` (via niri-elite) and
-`kde_output_order_v1` (Naxdy `fffe1e88`, wired to `sorted_outputs`; adapted to
-the elite base's existing blur/background-effect state).
+Imported: `org_kde_kwin_blur` (via niri-elite), `kde_output_order_v1`
+(Naxdy `fffe1e88`), `org.kde.KWin.ScreenShot2`, layer open/close fades and the
+tile-group model. The screenshot2 interface keeps the old
+`org.kde.kwin.Screenshot` path untouched.
 
 Much of Naxdy's blur lineage is already upstream. Port only what is still
 missing and current-API compatible.
 
 | Feature | Commits |
 | --- | --- |
-| `org_kde_kwin_blur` | `69a9029a` and the blur series `99e8ceaf`…`5faa13eb` (port only the protocol handler if upstream blur already covers rendering) |
-| KDE screenshot2 / Spectacle | `69a9029a`…`81e2f9e1` (`src/dbus/kwin_screenshot2.rs`) |
+| `org_kde_kwin_blur` | `69a9029a` and the blur series `99e8ceaf`…`5faa13eb` (ported) |
+| KDE screenshot2 / Spectacle | `69a9029a`…`81e2f9e1` (`src/dbus/kwin_screenshot2.rs`, landed) |
 | KDE colour picker | `757007fc` (`src/dbus/kwin_colorpicker.rs`) |
-| KDE output order | `fffe1e88` (`src/protocols/kde_output_order.rs`) |
-| Window group refinements | `1b7b2b55`…`475c787c` (only if still missing after upstream tabs) |
-| Blur improvements (true blur, region blur, fps cap) | `758ee16b`, `11b8cacd`, `733131b8`, `7f0b08a8` (evaluate; upstream may already cover) |
+| KDE output order | `fffe1e88` (landed) |
+| Window groups and tab indicator | `1b7b2b55`…`475c787c` (landed; exact reference snapshots adapted to our title band) |
+| Layer fades | `4df357ee`, `230e5705` (landed; reference had no animation tests) |
+| Blur improvements (true blur, region blur, fps cap) | `758ee16b`, `11b8cacd`, `733131b8`, `7f0b08a8` (upstream covers most; brightness/contrast landed) |
 
 ### Privacy and DPMS — demoji
 

@@ -71,6 +71,9 @@ pub struct Match {
     /// Output name substring, resolved from `auto:workspaces`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_output: Option<String>,
+    /// Whether the workspace has no tracked windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_empty: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_floating: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,13 +173,16 @@ impl Rules {
 
     fn matching_rules(&self, window: Option<u64>) -> Result<Vec<RuleMatch>, String> {
         let windows = self.parking.lot(AUTO_WINDOWS);
+        let counts = windows_per_workspace(&self.parking);
         let workspace_facts: BTreeMap<u64, WorkspaceFacts> = self
             .parking
             .lot(AUTO_WORKSPACES)
             .into_iter()
             .filter_map(|(id, value)| {
                 let id = id.parse().ok()?;
-                Some((id, WorkspaceFacts::from_value(&value)))
+                let mut facts = WorkspaceFacts::from_value(&value);
+                facts.empty = Some(counts.get(&id).copied().unwrap_or(0) == 0);
+                Some((id, facts))
             })
             .collect();
         let state = self
@@ -248,13 +254,15 @@ impl Rules {
             .filter_map(|value| Some((value.get("id").and_then(Value::as_u64)?, value)))
             .collect();
         workspaces.sort_by_key(|(id, _)| *id);
+        let counts = windows_per_workspace(&self.parking);
 
         let rules = self
             .state
             .lock()
             .map_err(|_| "rules state lock poisoned".to_owned())?;
         let mut matches = Vec::new();
-        for (id, value) in workspaces {
+        for (id, mut value) in workspaces {
+            value["empty"] = json!(counts.get(&id).copied().unwrap_or(0) == 0);
             let facts = WorkspaceFacts::from_value(&value);
             for (name, rule) in &rules.rules {
                 if rule.trigger.as_deref() != Some(event) {
@@ -317,12 +325,23 @@ fn workspace_matches(matcher: &Match, workspace: &Value) -> bool {
     rule_matches_in(matcher, workspace, Some(&facts))
 }
 
+fn windows_per_workspace(parking: &Parking) -> BTreeMap<u64, u64> {
+    let mut counts = BTreeMap::new();
+    for window in parking.lot(AUTO_WINDOWS).values() {
+        if let Some(id) = window.get("workspace_id").and_then(Value::as_u64) {
+            *counts.entry(id).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 fn workspace_state(workspace: &Value, facts: &WorkspaceFacts) -> Value {
     json!({
         "workspace_id": workspace.get("id").cloned().unwrap_or(Value::Null),
         "workspace_name": facts.name,
         "workspace_idx": facts.idx,
         "workspace_output": facts.output,
+        "workspace_empty": facts.empty,
         "is_focused": workspace.get("is_focused").cloned().unwrap_or(Value::Null),
         "is_active": workspace.get("is_active").cloned().unwrap_or(Value::Null),
         "is_urgent": workspace.get("is_urgent").cloned().unwrap_or(Value::Null),
@@ -371,6 +390,8 @@ pub struct WorkspaceFacts {
     pub name: Option<String>,
     pub idx: Option<u8>,
     pub output: Option<String>,
+    /// `None` when window tracking has not supplied a count.
+    pub empty: Option<bool>,
 }
 
 impl WorkspaceFacts {
@@ -385,6 +406,7 @@ impl WorkspaceFacts {
                 .get("output")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            empty: value.get("empty").and_then(Value::as_bool),
         }
     }
 }
@@ -445,7 +467,7 @@ fn validate_workspace_matcher(matcher: &Match) -> Result<(), String> {
     {
         return Err(
             "workspace rules can match workspace fields only (`workspace`, `workspace_name`, \
-             `workspace_name_regex`, `workspace_idx`, `workspace_output`)"
+             `workspace_name_regex`, `workspace_idx`, `workspace_output`, `workspace_empty`)"
                 .to_owned(),
         );
     }
@@ -566,6 +588,11 @@ pub fn rule_matches_in(
     }
     if let Some(output) = &matcher.workspace_output
         && !name_contains(workspace.and_then(|facts| facts.output.as_deref()), output)
+    {
+        return false;
+    }
+    if let Some(empty) = matcher.workspace_empty
+        && workspace.and_then(|facts| facts.empty) != Some(empty)
     {
         return false;
     }
@@ -1123,6 +1150,7 @@ mod tests {
                 name: Some("dev".into()),
                 idx: Some(1),
                 output: Some("eDP-1".into()),
+                empty: Some(false),
             }),
         ));
         assert!(!rule_matches_in(
@@ -1135,6 +1163,7 @@ mod tests {
                 name: Some("dev".into()),
                 idx: Some(1),
                 output: Some("eDP-1".into()),
+                empty: Some(false),
             }),
         ));
         assert!(!rule_matches_in(
@@ -1147,6 +1176,7 @@ mod tests {
                 name: Some("dev".into()),
                 idx: Some(1),
                 output: Some("eDP-1".into()),
+                empty: Some(false),
             }),
         ));
     }
@@ -1372,6 +1402,56 @@ mod tests {
         });
         assert!(matches!(ran, Response::Value { .. }), "{ran:?}");
         assert_eq!(*log.lock().unwrap(), ["dev"]);
+    }
+
+    #[test]
+    fn workspace_empty_matches_only_workspaces_without_windows() {
+        let parking = parking_with_windows("workspace-empty");
+        with_workspaces(&parking);
+        let mut spaces = parking.lot(AUTO_WORKSPACES);
+        spaces.insert(
+            "3".to_owned(),
+            json!({ "id": 3, "idx": 3, "name": "empty", "output": "HDMI-1" }),
+        );
+        parking.replace_lot(AUTO_WORKSPACES, spaces).unwrap();
+
+        let rules = Rules::load(
+            temp_dir("workspace-empty-store").join("rules.json"),
+            parking,
+        )
+        .unwrap();
+        rules
+            .call(
+                "set",
+                &json!({
+                    "name": "empty-workspace",
+                    "trigger": "workspace-activated",
+                    "match": { "workspace_empty": true },
+                    "steps": [{ "namespace": "system", "action": "ping" }]
+                }),
+            )
+            .unwrap();
+
+        let explained = rules
+            .call("explain", &json!({ "event": "workspace-activated" }))
+            .unwrap();
+        let matches = explained["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1, "{explained}");
+        assert_eq!(matches[0]["workspace"], 3);
+        assert_eq!(matches[0]["workspace_state"]["workspace_empty"], true);
+
+        let firefox = json!({ "id": 10, "workspace_id": 1 });
+        assert!(!rule_matches_in(
+            &Match {
+                workspace_empty: Some(true),
+                ..Match::default()
+            },
+            &firefox,
+            Some(&WorkspaceFacts {
+                empty: Some(false),
+                ..WorkspaceFacts::default()
+            }),
+        ));
     }
 
     #[test]

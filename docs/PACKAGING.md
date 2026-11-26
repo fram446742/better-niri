@@ -116,7 +116,7 @@ installing a subset never rebuilds niri or another Rust crate.
 | `better-audio` | `better-audio` | rule-based PipeWire routing and default sink | `libpipewire`, `gcc-libs`, `glibc`; optional `pipewire`, `wireplumber`, `libpulse`, `pulseaudio` |
 | `better-sidepanels` | `better-sidepanels` | layer-shell panels with exclusive zones | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
 | `better-noctalia-plugins` | — | Noctalia plugin source (Luau bar widgets) installed under `/usr/share/better-desktop/noctalia-plugins` | optional `noctalia`, `better-companion`, `better-monitor`, `better-session`, `better-shot`, `better-audio`, `better-wallpaper`, `better-sidepanels` |
-| `better-desktop` | — | meta package, post-install notes | depends on every package above |
+| `better-desktop` | `better` | meta package and unified tool selector, post-install notes | depends on every package above |
 
 `better-monitor`, `better-session` and `better-sidepanels` need no niri package
 beyond the IPC socket; `better-companion`, `better-shot`, `better-settings` and
@@ -156,7 +156,8 @@ Each package owns its own `/usr/share/doc/<package>/` README, license and
 component files. `better-portal` owns `better.portal`, its systemd/D-Bus files
 and `/usr/share/doc/better-portal/portals.conf.better.example`;
 `niri-better` owns `niri.portal` and `niri-portals.conf`. The `better-desktop`
-`.install` script only prints instructions; it never starts or enables a
+package installs the `better` selector (`better shot`, `better monitor`, …) and
+its `.install` script only prints instructions; it never starts or enables a
 service.
 
 ### Interaction with the profiles

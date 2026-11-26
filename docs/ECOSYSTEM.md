@@ -65,7 +65,7 @@ operate the desktop without the shell.
 | Shake-to-enlarge | niri-elite | Cursor effect | Module `cursor` |
 | Software EGL / multi-GPU | niri-elite | Backend support | Core |
 | Native portal | niri-elite | Separate daemon from the start | `better-portal` |
-| Window groups | Naxdy / upstream tabs | Upstream tabs are the base | Core; Naxdy refinements only if still missing |
+| Window groups | Naxdy / upstream tabs | Tile-group model with tab indicator | Core (`layout`) |
 | Sticky windows | better-nsticky, biri | Native primitive in core; workflow absorbed into better-companion | Core primitive + better-companion |
 | Focus-ring shaders | biri | Scope of `effects` | Module `effects` |
 | Scratchpads | Piri, niri-scratchpad-rs, nsticky | Companion feature | better-companion / nsticky |

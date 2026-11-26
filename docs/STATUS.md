@@ -84,6 +84,12 @@ Added on top of the elite base after the initial merge:
   focus/IPC/unhide rules) and sticky windows (`open-sticky`,
   `toggle-window-sticky`, monitor-level sticky space), plus
   `float-above-fullscreen`.
+- Real tile groups with tab titles/indicator, auto-grouping, expel-to-column and
+  group-aware movement; groups flatten under upstream tabbed columns.
+- Layer open/close fade animations with a Vulkan-aware closing snapshot, and the
+  KDE `org.kde.KWin.ScreenShot2` fd interface.
+- HDR scanout colour transforms, post-blend PQ encode and the HDR cursor-plane
+  transform in the TTY path (KMS validation still needs the hardware run).
 - Overview preset-based zoom cycling with `overview-zoom-cycle/in/out` and
   automatic overview open/close, the `overview-zoom` animation, and a zoom
   target that persists across close (clamped at the carousel assembled zoom).
@@ -105,8 +111,8 @@ Verified on this branch:
 | Check | Result |
 | --- | --- |
 | `scripts/test-all.sh` | **51/51 PASS** (compositor, feature matrix, visual-test build, 9 workspaces + sidepanel stack, packaging, completions, plugins, nsticky) |
-| `cargo test --workspace` | pass, 894 tests, 0 failed |
-| `cargo test -p niri --no-default-features` | pass, 425 tests, 0 failed |
+| `cargo test --workspace` | pass, 936 tests, 0 failed |
+| `cargo test -p niri --no-default-features` | pass, 455 tests, 0 failed |
 | Feature matrix | pass for agent, effects, navigation, cursor, kde, dbus, systemd, xdp-gnome-screencast, vulkan, and the full explicit set |
 | `cargo test -p niri-ipc --features clap` | pass |
 | `cargo build -p niri-visual-tests` | pass |
@@ -120,8 +126,8 @@ Verified on this branch:
 **Manual/remaining:** subjective full-client checks (tearing in a game, a
 commit-timing client, an output on the second GPU, rotated transitions, HDR
 mixed contrast, popups/animations, a real portal client), hardware profiling
-across DPMS cycles, and the remaining hardware-only item in
-`docs/UNIMPLEMENTED.md` (HDR scan-out colour pipelines/post-blend/HDR cursor). See
+across DPMS cycles, and the KMS validation of the HDR scan-out, post-blend and
+cursor-plane path in `docs/UNIMPLEMENTED.md`. See
 `docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published

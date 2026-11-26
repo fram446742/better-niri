@@ -27,7 +27,8 @@ licences behind the code. It is updated whenever a feature series is integrated.
 | https://github.com/losnoco/smithay | Christopher Snowhill (losnoco) and contributors | MIT | Colour management, DRM colour pipelines, SurfaceBarrier, async flips, tearing, Vulkan renderer |
 | https://github.com/MEKCCK/smithay | MEKCCK and contributors | MIT | Colour-management rebase onto newer Smithay, per-client seat filtering, GLES colour override |
 | https://github.com/dividebysandwich/niri | dividebysandwich | GPL-3.0-or-later | HDR/colour-management work used by the losnoco/niri-elite lineage |
-| https://github.com/Naxdy/niri | Naxdy and contributors | GPL-3.0-or-later | KDE blur protocol, KDE screenshot/colour-picker D-Bus, output order, window-group refinements, blur improvements |
+| https://github.com/Naxdy/niri | Naxdy and contributors | GPL-3.0-or-later | KDE blur protocol, KDE screenshot/colour-picker D-Bus, output order, window groups, layer fades, `org.kde.KWin.ScreenShot2`, blur improvements |
+| niri-spicy (spicy-main) | niri-spicy contributors | GPL-3.0-or-later | HDR peak-luminance override, tearing gate, suspended toplevels, NVIDIA fences, scanout colour transforms, post-blend PQ encode, HDR cursor plane |
 | https://github.com/demoj1/niri | demoj1 | GPL-3.0-or-later | `block-out-blur` privacy rule, overview focus-ring/shadow overrides, DPMS/frame-callback investigation |
 | https://github.com/zaroutt/Niri-glass | zaroutt | GPL-3.0-or-later | Liquid glass shader and parameters |
 | https://github.com/reverb256/smithay | reverb256 | MIT | `hdr-modern` reference for HDR colour handling (audited) |
@@ -36,6 +37,25 @@ licences behind the code. It is updated whenever a feature series is integrated.
 | https://github.com/lonerOrz/nsticky | lonerOrz | BSD-3-Clause | Sticky-window daemon that better-nsticky extends |
 | better-nsticky | fram446742 and contributors | BSD-3-Clause | Staging, scratchpads, rules, persistence, selector, compatibility integration |
 | https://github.com/zgavin/niri-sidepanels | zgavin and contributors | MIT | Floating sidepanel stacks (`toggle-window`/`send`/`flip`/`focus`/`reorder`/struts), ported into `better-sidepanels/stack` |
+
+The companion tools are original implementations. Their behaviour was informed
+by these projects, without vendoring their code:
+
+- Piri, niri-ror, niri-pip, niri-float-sticky, nsticky, niri-scratchpad,
+  niri-scratchpad-rs and ndrop for automation, staging, scratchpads,
+  run-or-raise, marks and swallowing.
+- niri-sidepanels for the floating side stacks.
+- nirinit, niri-session-manager and niri-companion for session capture and
+  restore.
+- NiriMod, niri_display_manager, nirimon, nirilayout and kanshi for settings,
+  monitor profiles and hotplug application.
+- PWSW for audio routing; iio-niri, stasis, niri-cwd and niri-screen-time for
+  rotation, idle inhibition, working directory and usage tracking.
+- Nirisnap, niri-shot and utsushot (considered) for capture, annotations, OCR,
+  redaction and pins.
+- hyprlax and Pandora (considered), plus Linux Wallpaper Engine for video
+  scenes.
+- Noctalia and its official/community plugins for the shell integration.
 
 Individual contributors visible in the audited histories include (non-exhaustive):
 alter, andriyDev, arthur-ba1, barrulus, bczhc, Carlos Ferrabone, cmeissl,

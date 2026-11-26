@@ -38,8 +38,10 @@ released on its own.
 The compositor is built from niri and the work of its community: niri-elite,
 biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
 Smithay forks. The companion tools follow ideas from Piri, nsticky,
-niri-sidepanels, nirinit, niri-session-manager, NiriMod, niri_display_manager,
-PWSW, Nirisnap, niri-shot, hyprlax and Noctalia. Documentation, provenance and the status of every reference project are in
+niri-float-sticky, niri-pip, niri-scratchpad, ndrop, niri-ror, niri-sidepanels,
+nirinit, niri-session-manager, niri_display_manager, NiriMod, kanshi, PWSW,
+iio-niri, stasis, niri-cwd, niri-screen-time, Nirisnap, niri-shot, hyprlax and
+Noctalia. Documentation, provenance and the status of every reference project are in
 `docs/ECOSYSTEM_RESEARCH.md` and `docs/ATTRIBUTION.md`. The research file also
 holds the permanent record of rejected ideas: nothing is dropped without a
 written reason and the conditions that would make us revisit it. Ported and
@@ -122,9 +124,21 @@ The talk is in Russian, but I prepared full English subtitles that you can find 
 ## Better Desktop companion tools
 
 The companion applications live as independent Cargo workspaces inside this
-repository (`better-companion/`, `better-portal/`, `better-monitor/`, ...).
+repository (`better-companion/`, `better-portal/`, ...).
 Their sources still build and package on their own, but for development you can
-run every tool from the repository root through small forwarding binaries:
+run every tool through the `better` command, which selects the right binary and
+falls back to the tool's own workspace:
+
+```sh
+cargo run --bin better -- --list
+cargo run --bin better -- shot screen --copy
+cargo run --bin better -- monitor list
+cargo run --bin better -- companion status
+```
+
+Installed packages put the same command in `/usr/bin/better`; it runs the
+individual `better-*` binaries, so each tool remains usable on its own. The
+direct shims are still available:
 
 ```sh
 cargo run --bin better-monitor -- --help
@@ -138,7 +152,7 @@ cargo run --bin better-sidepanels -- --check
 cargo run --bin better-portal -- --version
 ```
 
-Available bins: `better-companion`, `companionctl`, `better-portal`,
+Available bins: `better`, `better-companion`, `companionctl`, `better-portal`,
 `better-portal-picker`, `better-monitor`, `better-session`, `better-shot`,
 `better-wallpaper`, `better-settings`, `better-settingsctl`, `better-audio`,
 `better-sidepanels`. Each shim forwards its arguments and exit status to the
