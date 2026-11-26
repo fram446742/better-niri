@@ -274,6 +274,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn update_render_elements(
         &mut self,
         is_active: bool,
+        in_overview: bool,
         view_rect: Rectangle<f64, Logical>,
         layer: RenderLayer,
     ) {
@@ -289,7 +290,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
             let mut tile_view_rect = view_rect;
             tile_view_rect.loc -= offset + tile.render_offset();
-            tile.update_render_elements(is_active, tile_view_rect);
+            tile.update_render_elements(is_active, in_overview, tile_view_rect);
         }
     }
 
@@ -479,11 +480,22 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.tiles.is_empty()
     }
 
-    pub fn add_tile(&mut self, tile: Tile<W>, activate: bool) {
-        self.add_tile_at(0, tile, activate);
+    pub fn add_tile(
+        &mut self,
+        tile: Tile<W>,
+        activate: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
+    ) {
+        self.add_tile_at(0, tile, activate, cursor_pos);
     }
 
-    fn add_tile_at(&mut self, mut idx: usize, mut tile: Tile<W>, activate: bool) {
+    fn add_tile_at(
+        &mut self,
+        mut idx: usize,
+        mut tile: Tile<W>,
+        activate: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
+    ) {
         tile.update_config(self.view_size, self.scale, self.options.clone());
 
         // Restore the previous floating window size, and in case the tile is fullscreen,
@@ -521,9 +533,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         }
 
-        let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
-            center_preferring_top_left_in_area(self.working_area, tile.tile_size())
-        });
+        let pos = self
+            .stored_or_default_tile_pos(&tile, cursor_pos)
+            .unwrap_or_else(|| {
+                center_preferring_top_left_in_area(self.working_area, tile.tile_size())
+            });
 
         let data = Data::new(self.working_area, &tile, pos);
         self.data.insert(idx, data);
@@ -532,7 +546,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.bring_up_descendants_of(idx);
     }
 
-    pub fn add_tile_above(&mut self, above: &W::Id, mut tile: Tile<W>, activate: bool) {
+    pub fn add_tile_above(
+        &mut self,
+        above: &W::Id,
+        mut tile: Tile<W>,
+        activate: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
+    ) {
         let idx = self.idx_of(above).unwrap();
 
         let above_pos = self.data[idx].logical_pos;
@@ -542,7 +562,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let pos = self.clamp_within_working_area(pos, tile_size);
         tile.floating_pos = Some(self.logical_to_size_frac(pos));
 
-        self.add_tile_at(idx, tile, activate);
+        self.add_tile_at(idx, tile, activate, cursor_pos);
     }
 
     fn bring_up_descendants_of(&mut self, idx: usize) {
@@ -595,7 +615,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             if tile.window().id() == id {
                 let view_pos = Point::from((-tile_pos.x, -tile_pos.y));
                 let view_rect = Rectangle::new(view_pos, view_size);
-                tile.update_render_elements(false, view_rect);
+                tile.update_render_elements(false, tile.in_overview(), view_rect);
                 let xray_pos = xray_pos.offset(tile_pos);
                 tile.store_unmap_snapshot_if_empty(
                     renderer,
@@ -1529,7 +1549,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
         Size::from((width, height))
     }
 
-    pub fn stored_or_default_tile_pos(&self, tile: &Tile<W>) -> Option<Point<f64, Logical>> {
+    pub fn stored_or_default_tile_pos(
+        &self,
+        tile: &Tile<W>,
+        cursor_pos: Option<Point<f64, Logical>>,
+    ) -> Option<Point<f64, Logical>> {
         let pos = tile.floating_pos.map(|pos| self.scale_by_working_area(pos));
         pos.or_else(|| {
             tile.window().rules().default_floating_position.map(|pos| {
@@ -1538,6 +1562,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 let area = self.working_area;
 
                 let mut pos = Point::from((pos.x.0, pos.y.0));
+
+                if relative_to == RelativeTo::Cursor
+                    && let Some(cursor_pos) = cursor_pos
+                {
+                    pos.x += cursor_pos.x - (area.size.w - self.view_size.w).abs();
+                    pos.y += cursor_pos.y - (area.size.h - self.view_size.h).abs();
+                }
                 if relative_to == RelativeTo::TopRight
                     || relative_to == RelativeTo::BottomRight
                     || relative_to == RelativeTo::Right

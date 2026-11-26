@@ -1139,6 +1139,7 @@ impl<W: LayoutElement> Layout<W> {
                                 false,
                                 true,
                                 None,
+                                None,
                             );
                         }
                     }
@@ -1256,6 +1257,7 @@ impl<W: LayoutElement> Layout<W> {
             false,
             activate,
             false,
+            None,
         )
     }
 
@@ -1271,6 +1273,7 @@ impl<W: LayoutElement> Layout<W> {
         is_sticky: bool,
         activate: ActivateWindow,
         force_unhide_workspace: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
     ) -> Option<&Output> {
         let scrolling_height = height.map(SizeChange::from);
         let id = window.id().clone();
@@ -1356,6 +1359,7 @@ impl<W: LayoutElement> Layout<W> {
                     is_floating,
                     is_sticky,
                     force_unhide_workspace,
+                    cursor_pos,
                 );
 
                 if activate.map_smart(|| false) {
@@ -1440,6 +1444,7 @@ impl<W: LayoutElement> Layout<W> {
                     scrolling_width,
                     is_full_width,
                     is_floating || is_sticky,
+                    None,
                     None,
                 );
 
@@ -1658,6 +1663,15 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         None
+    }
+
+    /// Whether `window` currently sits on a hidden workspace.
+    ///
+    /// Used when placing a child window: a dialog must not follow its parent onto a hidden
+    /// workspace, where it would be invisible and unreachable.
+    pub fn window_is_on_hidden_workspace(&self, window: &W::Id) -> bool {
+        self.workspaces()
+            .any(|(_, _, ws)| ws.hidden && ws.has_window(window))
     }
 
     pub fn find_workspace_by_name(&self, workspace_name: &str) -> Option<(usize, &Workspace<W>)> {
@@ -3858,6 +3872,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn center_column(&mut self) {
+        if let Some(monitor) = self.active_monitor().filter(|mon| mon.sticky_is_active()) {
+            monitor.sticky.center_window(None);
+            return;
+        }
         let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
@@ -3878,13 +3896,14 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         if let Some(id) = id {
-            if self.is_sticky_window(id) {
-                return;
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+                if let Some(monitor) = monitors.iter_mut().find(|mon| mon.sticky_has_window(id)) {
+                    monitor.sticky.center_window(Some(id));
+                    return;
+                }
             }
-        } else if self
-            .active_monitor_ref()
-            .is_some_and(|mon| mon.sticky_is_active())
-        {
+        } else if let Some(monitor) = self.active_monitor().filter(|mon| mon.sticky_is_active()) {
+            monitor.sticky.center_window(None);
             return;
         }
 
@@ -3905,6 +3924,20 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
         workspace.center_visible_columns();
+    }
+
+    /// Whether focus currently belongs to a floating or sticky window.
+    pub fn is_focus_floating(&self) -> bool {
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &self.monitor_set
+        else {
+            return false;
+        };
+        let mon = &monitors[*active_monitor_idx];
+        mon.sticky_is_active() || mon.active_workspace_ref().floating_is_active()
     }
 
     pub fn focus(&self) -> Option<&W> {
@@ -4732,7 +4765,9 @@ impl<W: LayoutElement> Layout<W> {
                 Rectangle::new(pos_within_output.upscale(-1.), output_size(&move_.output))
                     .downscale(total_scale);
 
-            move_.tile.update_render_elements(true, view_rect);
+            move_
+                .tile
+                .update_render_elements(true, self.overview_open, view_rect);
         }
 
         self.update_insert_hint(output);
@@ -5380,6 +5415,7 @@ impl<W: LayoutElement> Layout<W> {
                             false,
                             None,
                             false,
+                            None,
                         );
                     } else {
                         monitors[target_mon_idx].add_tile(
@@ -5395,6 +5431,7 @@ impl<W: LayoutElement> Layout<W> {
                             false,
                             None,
                             false,
+                            None,
                         );
                     }
                 }
@@ -5412,6 +5449,7 @@ impl<W: LayoutElement> Layout<W> {
                         true,
                         None,
                         false,
+                        None,
                     );
                 }
             }
@@ -5516,24 +5554,27 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_floating(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.focus_floating();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_floating();
+        } else if let Some(workspace) = self.active_workspace_mut() {
+            workspace.focus_floating();
+        }
     }
 
     pub fn focus_tiling(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.focus_tiling();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_tiling();
+        } else if let Some(workspace) = self.active_workspace_mut() {
+            workspace.focus_tiling();
+        }
     }
 
     pub fn switch_focus_floating_tiling(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.switch_focus_floating_tiling();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.switch_focus_floating_tiling();
+        } else if let Some(workspace) = self.active_workspace_mut() {
+            workspace.switch_focus_floating_tiling();
+        }
     }
 
     pub fn move_floating_window(
@@ -5846,6 +5887,7 @@ impl<W: LayoutElement> Layout<W> {
                 removed.is_floating,
                 None,
                 false,
+                None,
             );
             // Give the window a cell in the target grid right away, rather than on its next
             // commit, and move the grid focus to it when it became active.
@@ -7206,6 +7248,7 @@ impl<W: LayoutElement> Layout<W> {
                             false,
                             None,
                             false,
+                            None,
                         );
                     }
                     InsertPosition::InColumn(column_idx, tile_idx) => {
@@ -7272,6 +7315,7 @@ impl<W: LayoutElement> Layout<W> {
                             true,
                             None,
                             false,
+                            None,
                         );
                     }
                 }
@@ -7349,6 +7393,7 @@ impl<W: LayoutElement> Layout<W> {
                     move_.width,
                     move_.is_full_width,
                     move_.is_floating,
+                    None,
                     None,
                 );
 
@@ -7827,7 +7872,10 @@ impl<W: LayoutElement> Layout<W> {
             let view_rect =
                 Rectangle::new(pos_within_output.upscale(-1.), output_size(&move_.output))
                     .downscale(total_scale);
-            move_.tile.update_render_elements(false, view_rect);
+            let in_overview = move_.tile.in_overview();
+            move_
+                .tile
+                .update_render_elements(false, in_overview, view_rect);
 
             move_.tile.store_unmap_snapshot_if_empty(
                 renderer,

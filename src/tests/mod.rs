@@ -29,6 +29,7 @@ mod keyboard_config;
 mod layer_shell;
 mod remove_output;
 mod renderer_cleanup;
+mod suspended;
 mod transactions;
 mod virtual_output;
 mod virtual_pointer;

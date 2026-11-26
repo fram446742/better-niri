@@ -44,6 +44,8 @@ pub struct Options {
     pub ignore_opacity: Option<f64>,
     pub noise: Option<f64>,
     pub saturation: Option<f64>,
+    pub brightness: Option<f64>,
+    pub contrast: Option<f64>,
     pub liquid_glass: Option<LiquidGlassOptions>,
 }
 
@@ -53,6 +55,8 @@ impl Options {
             || self.blur
             || self.noise.is_some_and(|x| x > 0.)
             || self.saturation.is_some_and(|x| x != 1.)
+            || self.brightness.is_some_and(|x| x != 1.)
+            || self.contrast.is_some_and(|x| x != 1.)
             || self.liquid_glass.is_some()
     }
 }
@@ -143,6 +147,8 @@ impl BackgroundEffect {
             ignore_opacity: effect.ignore_opacity,
             noise: effect.noise,
             saturation: effect.saturation,
+            brightness: effect.brightness,
+            contrast: effect.contrast,
             liquid_glass,
         };
 
@@ -197,6 +203,14 @@ impl BackgroundEffect {
             1.
         };
         let saturation = self.options.saturation.unwrap_or(saturation) as f32;
+        let brightness = if blur {
+            self.blur_config.brightness
+        } else {
+            1.
+        };
+        let brightness = self.options.brightness.unwrap_or(brightness) as f32;
+        let contrast = if blur { self.blur_config.contrast } else { 1. };
+        let contrast = self.options.contrast.unwrap_or(contrast) as f32;
 
         let alpha_mask = match (self.options.ignore_opacity, alpha_mask) {
             (Some(threshold), Some(mut m)) => {
@@ -243,6 +257,8 @@ impl BackgroundEffect {
                 blur,
                 noise,
                 saturation,
+                brightness,
+                contrast,
                 self.options.liquid_glass,
                 padding_pixels,
                 alpha_mask,
@@ -259,6 +275,8 @@ impl BackgroundEffect {
                 blur_options,
                 noise,
                 saturation,
+                brightness,
+                contrast,
                 self.options.liquid_glass,
                 padding_pixels,
                 alpha_mask,

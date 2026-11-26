@@ -52,6 +52,8 @@ pub struct FramebufferEffectElement {
     blur_options: Option<BlurOptions>,
     noise: f32,
     saturation: f32,
+    brightness: f32,
+    contrast: f32,
     liquid_glass: Option<LiquidGlassOptions>,
     padding_pixels: f32,
     alpha_mask: Option<AlphaMask>,
@@ -101,6 +103,8 @@ impl FramebufferEffect {
         blur_options: Option<BlurOptions>,
         noise: f32,
         saturation: f32,
+        brightness: f32,
+        contrast: f32,
         liquid_glass: Option<LiquidGlassOptions>,
         padding_pixels: f32,
         alpha_mask: Option<AlphaMask>,
@@ -125,6 +129,8 @@ impl FramebufferEffect {
             blur_options,
             noise,
             saturation,
+            brightness,
+            contrast,
             liquid_glass,
             padding_pixels,
             alpha_mask,
@@ -177,6 +183,8 @@ impl FramebufferEffectElement {
             mat3_uniform("input_to_geo", input_to_clip_geo),
             Uniform::new("noise", self.noise),
             Uniform::new("saturation", self.saturation),
+            Uniform::new("brightness", self.brightness),
+            Uniform::new("contrast", self.contrast),
             Uniform::new("bg_color", [0f32, 0., 0., 0.]),
             Uniform::new("lg_padding_pixels", self.padding_pixels),
         ];
@@ -854,6 +862,8 @@ mod vulkan_tests {
                 }),
                 0.0,
                 1.0,
+                1.0,
+                1.0,
                 None,
                 0.0,
                 None,
@@ -938,7 +948,18 @@ mod vulkan_tests {
                 scale: 1.0,
             };
             let effect = FramebufferEffect::new();
-            let element = effect.render(None, params, None, 0.0, 1.0, liquid_glass, 0.0, None);
+            let element = effect.render(
+                None,
+                params,
+                None,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                liquid_glass,
+                0.0,
+                None,
+            );
             let cache = UserDataMap::default();
             let src = element.src();
             element
@@ -1029,6 +1050,8 @@ mod vulkan_tests {
             effect.update_config(niri_config::Blur {
                 noise: 0.,
                 saturation: 1.,
+                brightness: 1.,
+                contrast: 1.,
                 ..Default::default()
             });
             effect.update_render_elements(

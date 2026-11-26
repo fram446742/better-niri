@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use knuffel::errors::DecodeError;
 
-use crate::appearance::{Color, DEFAULT_BACKDROP_COLOR, WorkspaceShadow, WorkspaceShadowPart};
+use crate::appearance::{
+    BorderRule, Color, DEFAULT_BACKDROP_COLOR, ShadowRule, WorkspaceShadow, WorkspaceShadowPart,
+};
 use crate::utils::{Flag, MergeWith, expect_only_children, parse_arg_node};
 use crate::{Action, Bind, BoundAction, FloatOrInt, Key, Trigger};
 
@@ -449,6 +451,10 @@ pub struct Overview {
     pub zoom: f64,
     pub backdrop_color: Color,
     pub workspace_shadow: WorkspaceShadow,
+    /// Focus-ring overrides used while the overview is open, merged on top of the layout ring.
+    pub focus_ring: BorderRule,
+    /// Window-shadow overrides used while the overview is open.
+    pub shadow: ShadowRule,
     /// Optional zoom presets for cycling. If None/empty, zoom cycling is disabled.
     pub zoom_presets: Option<Vec<f64>>,
     /// When Some, the consolidated carousel mode is enabled: the overview
@@ -463,6 +469,8 @@ impl Default for Overview {
             zoom: 0.5,
             backdrop_color: DEFAULT_BACKDROP_COLOR,
             workspace_shadow: WorkspaceShadow::default(),
+            focus_ring: BorderRule::default(),
+            shadow: ShadowRule::default(),
             zoom_presets: None,
             consolidated_carousel: None,
         }
@@ -497,6 +505,10 @@ pub struct OverviewPart {
     #[knuffel(child)]
     pub workspace_shadow: Option<WorkspaceShadowPart>,
     #[knuffel(child)]
+    pub focus_ring: Option<BorderRule>,
+    #[knuffel(child)]
+    pub shadow: Option<ShadowRule>,
+    #[knuffel(child)]
     pub zoom_presets: Option<ZoomPresets>,
     #[knuffel(child)]
     pub consolidated_carousel: Option<ConsolidatedCarouselPart>,
@@ -504,7 +516,7 @@ pub struct OverviewPart {
 
 impl MergeWith<OverviewPart> for Overview {
     fn merge_with(&mut self, part: &OverviewPart) {
-        merge!((self, part), zoom, workspace_shadow);
+        merge!((self, part), zoom, workspace_shadow, focus_ring, shadow);
         merge_clone!((self, part), backdrop_color);
         if let Some(presets) = &part.zoom_presets {
             self.zoom_presets = Some(presets.0.clone());

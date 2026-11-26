@@ -209,6 +209,17 @@ impl CompositorHandler for State {
                                 || output.is_none()
                                 || output.as_ref() == *parent_output
                         })
+                        // Don't follow the parent onto a hidden workspace. A hidden workspace is
+                        // somewhere the user is deliberately not looking, so a dialog opened there
+                        // is invisible and unreachable — for an authentication prompt that means
+                        // the prompt is simply lost. Fall through to the window rules and the
+                        // active workspace instead.
+                        .filter(|(mapped, _)| {
+                            !self
+                                .niri
+                                .layout
+                                .window_is_on_hidden_workspace(&mapped.window)
+                        })
                         .map(|(mapped, _)| mapped.window.clone());
 
                     // The default dmabuf pre-commit hook stays installed for mapped toplevels:
@@ -242,6 +253,11 @@ impl CompositorHandler for State {
                             .is_some_and(|(_, workspace)| workspace.hidden)
                     });
 
+                    let cursor_pos = self
+                        .niri
+                        .seat
+                        .get_pointer()
+                        .map(|pointer| pointer.current_location());
                     let output = self.niri.layout.add_window_with_flags(
                         mapped,
                         target,
@@ -256,6 +272,7 @@ impl CompositorHandler for State {
                             activate
                         },
                         false,
+                        cursor_pos,
                     );
                     let output = output.cloned();
 
@@ -286,7 +303,7 @@ impl CompositorHandler for State {
                         }
 
                         let new_focus = self.niri.layout.focus().map(|m| &m.window);
-                        if new_focus == Some(&window) {
+                        if new_focus == Some(&window) && !self.niri.layout.is_focus_floating() {
                             // We activated the newly opened window.
                             self.maybe_warp_cursor_to_focus();
                             self.niri.layer_shell_on_demand_focus = None;

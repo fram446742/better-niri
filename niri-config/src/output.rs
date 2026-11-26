@@ -72,6 +72,8 @@ pub struct Output {
     pub modeline: Option<Modeline>,
     #[knuffel(child)]
     pub variable_refresh_rate: Option<Vrr>,
+    #[knuffel(child, unwrap(argument), default)]
+    pub allow_tearing: TearingMode,
     #[knuffel(child)]
     pub drm_lease: bool,
     #[knuffel(child)]
@@ -122,11 +124,85 @@ impl Default for Output {
             mode: None,
             modeline: None,
             variable_refresh_rate: None,
+            allow_tearing: TearingMode::default(),
             background_color: None,
             backdrop_color: None,
             hot_corners: None,
             layout: None,
             shader: None,
+        }
+    }
+}
+
+/// Which windows may tear on an output.
+///
+/// This only gates tearing; it never requests it. A window still has to ask for a tearing
+/// presentation, either through the tearing-control protocol or through the `allow-tearing` window
+/// rule, before any of these modes let it through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TearingMode {
+    /// Never tear on this output, even when a window asks for it.
+    Never,
+    /// Only honor tearing requests from the focused fullscreen window.
+    ///
+    /// A tearing page flip updates the entire output, so a request coming from a window that
+    /// doesn't cover it (or that the user isn't looking at) would tear unrelated content too.
+    #[default]
+    Fullscreen,
+    /// Honor tearing requests from any window visible on this output.
+    Always,
+}
+
+impl FromStr for TearingMode {
+    type Err = miette::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "true" | "yes" | "always" => Ok(Self::Always),
+            "false" | "no" | "never" => Ok(Self::Never),
+            "fullscreen" => Ok(Self::Fullscreen),
+            _ => Err(miette::miette!(
+                r#"invalid tearing mode, can be true, false, or "fullscreen""#
+            )),
+        }
+    }
+}
+
+impl<S: ErrorSpan> knuffel::DecodeScalar<S> for TearingMode {
+    fn type_check(
+        type_name: &Option<knuffel::span::Spanned<knuffel::ast::TypeName, S>>,
+        ctx: &mut Context<S>,
+    ) {
+        if let Some(type_name) = &type_name {
+            ctx.emit_error(DecodeError::unexpected(
+                type_name,
+                "type name",
+                "no type name expected for this node",
+            ));
+        }
+    }
+
+    fn raw_decode(
+        value: &knuffel::span::Spanned<knuffel::ast::Literal, S>,
+        ctx: &mut Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        match &**value {
+            knuffel::ast::Literal::Bool(val) => Ok(if *val { Self::Always } else { Self::Never }),
+            // Also accept the booleans spelled out, so that "yes"/"no" work next to "fullscreen".
+            knuffel::ast::Literal::String(val) => match Self::from_str(val) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    ctx.emit_error(DecodeError::conversion(value, e.to_string()));
+                    Ok(Self::default())
+                }
+            },
+            _ => {
+                ctx.emit_error(DecodeError::conversion(
+                    value,
+                    r#"expected true, false, or "fullscreen""#,
+                ));
+                Ok(Self::default())
+            }
         }
     }
 }
@@ -171,6 +247,13 @@ pub struct Hdr {
     /// in HDR mode. Defaults to 203 cd/m² (the BT.2408 reference white) when unset.
     #[knuffel(child, unwrap(argument))]
     pub reference_luminance: Option<FloatOrInt<0, 10000>>,
+    /// Peak luminance of the display, in cd/m² (nits), overriding the value from its EDID.
+    ///
+    /// Meant for displays whose EDID lacks the HDR luminance data (many TVs): niri then assumes
+    /// a conservative 500 cd/m². It is used for tone mapping, the `HDR_OUTPUT_METADATA` sent to
+    /// the display, and the luminances advertised to clients.
+    #[knuffel(child, unwrap(argument))]
+    pub peak_luminance: Option<FloatOrInt<1, 10000>>,
 }
 
 /// When HDR engages on an `hdr`-enabled output.

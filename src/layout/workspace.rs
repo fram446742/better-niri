@@ -1624,16 +1624,25 @@ impl<W: LayoutElement> Workspace<W> {
         self.set_grid_focus_for_window(&id);
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        in_overview: bool,
+        layer: RenderLayer,
+    ) {
         self.remember_tile_above_floating();
         self.update_focus_rings_shown();
 
-        self.scrolling
-            .update_render_elements(is_active && !self.floating_is_active.get(), layer);
+        self.scrolling.update_render_elements(
+            is_active && !self.floating_is_active.get(),
+            in_overview,
+            layer,
+        );
 
         let view_rect = Rectangle::from_size(self.view_size);
         self.floating.update_render_elements(
             is_active && self.floating_is_active.get(),
+            in_overview,
             view_rect,
             layer,
         );
@@ -1660,7 +1669,7 @@ impl<W: LayoutElement> Workspace<W> {
                     .update_grid_item_render_elements(item, focused_window, view_rect);
                 for tile in self.floating.tiles_mut() {
                     if tile.window().id() == item.window_id() {
-                        tile.update_render_elements(is_grid_focused, view_rect);
+                        tile.update_render_elements(is_grid_focused, true, view_rect);
                         break;
                     }
                 }
@@ -2277,6 +2286,7 @@ impl<W: LayoutElement> Workspace<W> {
         is_full_width: bool,
         is_floating: bool,
         anim: Option<niri_config::Animation>,
+        cursor_pos: Option<Point<f64, Logical>>,
     ) {
         self.enter_output_for_window(tile.window());
         tile.restore_to_floating = is_floating;
@@ -2308,7 +2318,7 @@ impl<W: LayoutElement> Workspace<W> {
                 // If the tile is pending maximized or fullscreen, open it in the scrolling layout
                 // where it can do that.
                 if is_floating && tile.window().pending_sizing_mode().is_normal() {
-                    self.floating.add_tile(tile, activate);
+                    self.floating.add_tile(tile, activate, cursor_pos);
 
                     if activate || self.scrolling.active_window().is_none() {
                         self.activate_floating_space();
@@ -2361,7 +2371,8 @@ impl<W: LayoutElement> Workspace<W> {
 
                 if is_floating && tile.window().pending_sizing_mode().is_normal() {
                     if floating_has_window {
-                        self.floating.add_tile_above(next_to, tile, activate);
+                        self.floating
+                            .add_tile_above(next_to, tile, activate, cursor_pos);
                     } else {
                         // FIXME: use static pos
                         let (next_to_tile, render_pos, _visible) = self
@@ -2380,7 +2391,7 @@ impl<W: LayoutElement> Workspace<W> {
                         let pos = self.floating.logical_to_size_frac(pos);
                         tile.floating_pos = Some(pos);
 
-                        self.floating.add_tile(tile, activate);
+                        self.floating.add_tile(tile, activate, cursor_pos);
                     }
 
                     if activate || self.scrolling.active_window().is_none() {
@@ -3281,7 +3292,9 @@ impl<W: LayoutElement> Workspace<W> {
             removed.tile.stop_move_animations();
 
             // Come up with a default floating position close to the tile position.
-            let stored_or_default = self.floating.stored_or_default_tile_pos(&removed.tile);
+            let stored_or_default = self
+                .floating
+                .stored_or_default_tile_pos(&removed.tile, None);
             if stored_or_default.is_none() {
                 let offset =
                     if self.options.layout.center_focused_column == CenterFocusedColumn::Always {
@@ -3296,7 +3309,7 @@ impl<W: LayoutElement> Workspace<W> {
                 removed.tile.floating_pos = Some(pos);
             }
 
-            self.floating.add_tile(removed.tile, target_is_active);
+            self.floating.add_tile(removed.tile, target_is_active, None);
             self.lower_tiles_below_floating();
             if target_is_active {
                 self.activate_floating_space();
@@ -3376,7 +3389,7 @@ impl<W: LayoutElement> Workspace<W> {
                 return;
             };
 
-            let pos = self.floating.stored_or_default_tile_pos(tile);
+            let pos = self.floating.stored_or_default_tile_pos(tile, None);
 
             // If there's no stored floating position, we can only set both components at once, not
             // adjust.
@@ -4256,7 +4269,7 @@ impl<W: LayoutElement> Workspace<W> {
             if tile.window().id() == window {
                 let view_pos = Point::from((-tile_pos.x, -tile_pos.y));
                 let view_rect = Rectangle::new(view_pos, view_size);
-                tile.update_render_elements(false, view_rect);
+                tile.update_render_elements(false, tile.in_overview(), view_rect);
                 let xray_pos = xray_pos.offset(tile_pos);
                 tile.store_unmap_snapshot_if_empty(
                     renderer,

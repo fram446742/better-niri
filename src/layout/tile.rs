@@ -81,6 +81,9 @@ pub struct Tile<W: LayoutElement> {
     /// The shadow around the window.
     shadow: Shadow,
 
+    /// Whether the focus ring and shadow currently use the overview overrides.
+    in_overview: bool,
+
     /// This tile's current sizing mode.
     ///
     /// This will update only when the `window` actually goes maximized or fullscreen, rather than
@@ -275,6 +278,7 @@ impl<W: LayoutElement> Tile<W> {
             focus_ring_anim: None,
             focus_ring_was_active: false,
             shadow: Shadow::new(shadow_config),
+            in_overview: false,
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), fullscreen_backdrop_color),
             restore_to_floating: false,
@@ -333,19 +337,25 @@ impl<W: LayoutElement> Tile<W> {
         border_config.width = round_max1(border_config.width);
         self.border.update_config(border_config.into());
 
-        let mut focus_ring_config = self
-            .options
-            .layout
-            .focus_ring
-            .clone()
-            .merged_with(&rules.focus_ring);
-        focus_ring_config.width = round_max1(focus_ring_config.width);
-        self.focus_ring.update_config(focus_ring_config);
-
-        let shadow_config = self.options.layout.shadow.merged_with(&rules.shadow);
-        self.shadow.update_config(shadow_config);
+        self.update_focus_ring_and_shadow_config();
 
         self.window.update_config(self.options.blur);
+    }
+
+    fn update_focus_ring_and_shadow_config(&mut self) {
+        let round_max1 = |logical| round_logical_in_physical_max1(self.scale, logical);
+        let rules = self.window.rules();
+        let mut focus_ring = self.options.layout.focus_ring.clone();
+        let mut shadow = self.options.layout.shadow;
+        if self.in_overview {
+            focus_ring.merge_with(&self.options.overview.focus_ring);
+            shadow.merge_with(&self.options.overview.shadow);
+        }
+        focus_ring.merge_with(&rules.focus_ring);
+        shadow.merge_with(&rules.shadow);
+        focus_ring.width = round_max1(focus_ring.width);
+        self.focus_ring.update_config(focus_ring);
+        self.shadow.update_config(shadow);
     }
 
     pub fn update_shaders(&mut self) {
@@ -489,17 +499,7 @@ impl<W: LayoutElement> Tile<W> {
         border_config.width = round_max1(border_config.width);
         self.border.update_config(border_config.into());
 
-        let mut focus_ring_config = self
-            .options
-            .layout
-            .focus_ring
-            .clone()
-            .merged_with(&rules.focus_ring);
-        focus_ring_config.width = round_max1(focus_ring_config.width);
-        self.focus_ring.update_config(focus_ring_config);
-
-        let shadow_config = self.options.layout.shadow.merged_with(&rules.shadow);
-        self.shadow.update_config(shadow_config);
+        self.update_focus_ring_and_shadow_config();
 
         let window_size = self.window_size();
         let radius = self
@@ -627,7 +627,16 @@ impl<W: LayoutElement> Tile<W> {
                 .is_some_and(|anim| anim.is_between_workspaces)
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, view_rect: Rectangle<f64, Logical>) {
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        in_overview: bool,
+        view_rect: Rectangle<f64, Logical>,
+    ) {
+        if self.in_overview != in_overview {
+            self.in_overview = in_overview;
+            self.update_focus_ring_and_shadow_config();
+        }
         let time = if self.clock.should_complete_instantly() {
             Duration::ZERO
         } else {
@@ -1941,6 +1950,10 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn border(&self) -> &FocusRing {
         &self.border
+    }
+
+    pub fn in_overview(&self) -> bool {
+        self.in_overview
     }
 
     pub fn focus_ring(&self) -> &FocusRing {

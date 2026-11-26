@@ -549,6 +549,33 @@ impl<W: LayoutElement> Monitor<W> {
         self.active_space == ActiveSpace::Sticky
     }
 
+    pub fn focus_floating(&mut self) {
+        if self.sticky_is_active() {
+            return;
+        }
+        if !self.active_workspace_ref().floating().is_empty() {
+            self.active_workspace().focus_floating();
+        } else if !self.sticky.is_empty() {
+            self.active_space = ActiveSpace::Sticky;
+        }
+    }
+
+    pub fn focus_tiling(&mut self) {
+        if self.active_workspace_ref().scrolling().is_empty() {
+            return;
+        }
+        self.focus_workspace();
+        self.active_workspace().focus_tiling();
+    }
+
+    pub fn switch_focus_floating_tiling(&mut self) {
+        if self.sticky_is_active() || self.active_workspace_ref().floating_is_active() {
+            self.focus_tiling();
+        } else {
+            self.focus_floating();
+        }
+    }
+
     pub fn has_window(&self, window: &W::Id) -> bool {
         self.windows().any(|win| win.id() == window)
     }
@@ -689,6 +716,7 @@ impl<W: LayoutElement> Monitor<W> {
         is_floating: bool,
         is_sticky: bool,
         force_unhide_workspace: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
     ) {
         if is_sticky {
             let mut tile = self.make_tile(window);
@@ -696,7 +724,7 @@ impl<W: LayoutElement> Monitor<W> {
 
             let activate =
                 activate.map_smart(|| !self.active_workspace_ref().is_active_pending_fullscreen());
-            self.sticky.add_tile(tile, activate);
+            self.sticky.add_tile(tile, activate, cursor_pos);
             if activate {
                 self.active_space = ActiveSpace::Sticky;
             }
@@ -717,12 +745,13 @@ impl<W: LayoutElement> Monitor<W> {
             is_floating,
             None,
             force_unhide_workspace,
+            cursor_pos,
         );
     }
 
     pub fn add_sticky_tile(&mut self, mut tile: Tile<W>, activate: bool) {
         tile.restore_to_floating = true;
-        self.sticky.add_tile(tile, activate);
+        self.sticky.add_tile(tile, activate, None);
         if activate {
             self.active_space = ActiveSpace::Sticky;
         }
@@ -810,6 +839,7 @@ impl<W: LayoutElement> Monitor<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
         force_unhide_workspace: bool,
+        cursor_pos: Option<Point<f64, Logical>>,
     ) {
         let (mut workspace_idx, target) = self.resolve_add_window_target(target);
 
@@ -836,6 +866,7 @@ impl<W: LayoutElement> Monitor<W> {
             is_full_width,
             is_floating,
             anim,
+            cursor_pos,
         );
 
         // After adding a new window, workspace becomes this output's own.
@@ -1283,6 +1314,7 @@ impl<W: LayoutElement> Monitor<W> {
             removed.is_floating,
             Some(config),
             false,
+            None,
         );
 
         if self.workspace_switch.is_none() {
@@ -1660,7 +1692,9 @@ impl<W: LayoutElement> Monitor<W> {
             let active = ws.active_window().map(|win| win.id());
             ws.tiles_with_render_positions()
                 .any(|(tile, pos, visible)| {
-                    let focused = focus_ring && Some(tile.window().id()) == active;
+                    let focused = focus_ring
+                        && !self.sticky_is_active()
+                        && Some(tile.window().id()) == active;
                     visible
                         && tile.decorations_are_animating(focused)
                         && intersects(tile, pos, geo.loc)
@@ -1674,18 +1708,28 @@ impl<W: LayoutElement> Monitor<W> {
             .insert_hint
             .as_ref()
             .and_then(|hint| hint.workspace.existing_id());
+        let active_ws_id = self.active_workspace_ref().id();
+        let workspace_is_active = is_active && !self.sticky_is_active();
+        let in_overview = self.overview_open;
 
         for ws in &mut self.workspaces {
-            ws.update_render_elements(is_active, RenderLayer::MovingBetweenWorkspaces);
+            let is_active = workspace_is_active && ws.id() == active_ws_id;
+            ws.update_render_elements(is_active, in_overview, RenderLayer::MovingBetweenWorkspaces);
         }
 
         let sticky_active = is_active && self.active_space == ActiveSpace::Sticky;
         let view_rect = Rectangle::from_size(self.view_size);
-        self.sticky
-            .update_render_elements(sticky_active, view_rect, RenderLayer::Normal);
+        self.sticky.update_render_elements(
+            sticky_active,
+            in_overview,
+            view_rect,
+            RenderLayer::Normal,
+        );
 
         for (ws, geo) in self.workspaces_with_render_geo_mut(true) {
-            ws.update_render_elements(is_active, RenderLayer::Normal);
+            // The overview shows all workspaces, so only the focused one is active.
+            let is_active = workspace_is_active && ws.id() == active_ws_id;
+            ws.update_render_elements(is_active, in_overview, RenderLayer::Normal);
 
             if Some(ws.id()) == insert_hint_ws_id {
                 insert_hint_ws_geo = Some(geo);
@@ -2918,7 +2962,7 @@ impl<W: LayoutElement> Monitor<W> {
                         ws.render_floating(
                             ctx.r(),
                             xray_pos,
-                            focus_ring,
+                            focus_ring && !self.sticky_is_active(),
                             RenderLayer::MovingBetweenWorkspaces,
                             push!(),
                         );
@@ -2964,7 +3008,7 @@ impl<W: LayoutElement> Monitor<W> {
                         ws.render_scrolling(
                             ctx.r(),
                             xray_pos,
-                            focus_ring,
+                            focus_ring && !self.sticky_is_active(),
                             RenderLayer::MovingBetweenWorkspaces,
                             push!(),
                         );
@@ -3104,7 +3148,13 @@ impl<W: LayoutElement> Monitor<W> {
 
             let xray_pos = XrayPos::new(geo.loc, zoom);
 
-            ws.render_floating(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
+            ws.render_floating(
+                ctx.r(),
+                xray_pos,
+                focus_ring && !self.sticky_is_active(),
+                RenderLayer::Normal,
+                push!(),
+            );
 
             if let Some(loc) = insert_hint_render_loc
                 && loc.workspace == InsertWorkspace::Existing(ws.id())
@@ -3113,7 +3163,13 @@ impl<W: LayoutElement> Monitor<W> {
                     .render(ctx.renderer, loc.location, push!());
             }
 
-            ws.render_scrolling(ctx.r(), xray_pos, focus_ring, RenderLayer::Normal, push!());
+            ws.render_scrolling(
+                ctx.r(),
+                xray_pos,
+                focus_ring && !self.sticky_is_active(),
+                RenderLayer::Normal,
+                push!(),
+            );
         }
     }
 

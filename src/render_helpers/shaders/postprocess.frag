@@ -1,5 +1,7 @@
 uniform float noise;
 uniform float saturation;
+uniform float brightness;
+uniform float contrast;
 uniform vec4 bg_color;
 
 uniform sampler2D surface_tex;
@@ -37,6 +39,14 @@ vec4 postprocess(vec4 color) {
 
     if (saturation != 1.0) {
         color.rgb = saturate(color.rgb, saturation);
+    }
+
+    // Brightness/contrast around mid-grey, matching the KDE fork's blur options.
+    if (contrast != 1.0) {
+        color.rgb = clamp((color.rgb - 0.5) * contrast + 0.5, 0.0, 1.0);
+    }
+    if (brightness != 1.0) {
+        color.rgb = clamp(color.rgb * brightness, 0.0, 1.0);
     }
 
     if (noise > 0.0) {

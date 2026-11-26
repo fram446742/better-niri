@@ -64,7 +64,7 @@ pub use crate::input::{
 pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
 pub use crate::misc::*;
-pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
+pub use crate::output::{Output, OutputName, Outputs, Position, TearingMode, Vrr};
 pub use crate::output_shader::{
     OutputShaderPart, OutputShaderPassPart, OutputShaderPreset, OutputShadersPart,
 };
@@ -1606,8 +1606,10 @@ mod tests {
                 max-bpc 10
                 hdr mode="on" {
                     reference-luminance 203
+                    peak-luminance 800
                 }
                 variable-refresh-rate on-demand=true
+                allow-tearing true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
                     off
@@ -2072,6 +2074,11 @@ Config {
                                 203.0,
                             ),
                         ),
+                        peak_luminance: Some(
+                            FloatOrInt(
+                                800.0,
+                            ),
+                        ),
                     },
                 ),
                 mode: Some(
@@ -2092,6 +2099,7 @@ Config {
                         on_demand: true,
                     },
                 ),
+                allow_tearing: Always,
                 drm_lease: false,
                 focus_at_startup: true,
                 isolated: true,
@@ -2147,6 +2155,7 @@ Config {
                 ),
                 modeline: None,
                 variable_refresh_rate: None,
+                allow_tearing: Fullscreen,
                 drm_lease: false,
                 focus_at_startup: false,
                 isolated: false,
@@ -2182,6 +2191,7 @@ Config {
                     },
                 ),
                 variable_refresh_rate: None,
+                allow_tearing: Fullscreen,
                 drm_lease: false,
                 focus_at_startup: false,
                 isolated: false,
@@ -2675,6 +2685,8 @@ Config {
         offset: 3.0,
         noise: 0.02,
         saturation: 1.5,
+        brightness: 1.0,
+        contrast: 1.0,
     },
     gestures: Gestures {
         dnd_edge_view_scroll: DndEdgeViewScroll {
@@ -2731,6 +2743,29 @@ Config {
                 b: 0.0,
                 a: 0.3137255,
             },
+        },
+        focus_ring: BorderRule {
+            off: false,
+            on: false,
+            width: None,
+            active_color: None,
+            inactive_color: None,
+            urgent_color: None,
+            active_gradient: None,
+            inactive_gradient: None,
+            urgent_gradient: None,
+            rainbow_ripple: None,
+            shader: None,
+        },
+        shadow: ShadowRule {
+            off: false,
+            on: false,
+            offset: None,
+            softness: None,
+            spread: None,
+            draw_behind_window: None,
+            color: None,
+            inactive_color: None,
         },
         zoom_presets: None,
         consolidated_carousel: None,
@@ -2980,6 +3015,8 @@ Config {
                     ),
                     noise: None,
                     saturation: None,
+                    brightness: None,
+                    contrast: None,
                 },
             ),
             allow_tearing: None,
@@ -3017,6 +3054,8 @@ Config {
                 ignore_opacity: None,
                 noise: None,
                 saturation: None,
+                brightness: None,
+                contrast: None,
                 liquid_glass: None,
             },
             shader: None,
@@ -3029,6 +3068,8 @@ Config {
                     ignore_opacity: None,
                     noise: None,
                     saturation: None,
+                    brightness: None,
+                    contrast: None,
                     liquid_glass: None,
                 },
             },
@@ -3077,6 +3118,8 @@ Config {
                 ignore_opacity: None,
                 noise: None,
                 saturation: None,
+                brightness: None,
+                contrast: None,
                 liquid_glass: None,
             },
             popups: PopupsRule {
@@ -3088,6 +3131,8 @@ Config {
                     ignore_opacity: None,
                     noise: None,
                     saturation: None,
+                    brightness: None,
+                    contrast: None,
                     liquid_glass: None,
                 },
             },

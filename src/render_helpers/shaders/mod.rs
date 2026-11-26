@@ -220,6 +220,8 @@ impl Shaders {
                     UniformName::new("input_to_geo", UniformType::Matrix3x3),
                     UniformName::new("noise", UniformType::_1f),
                     UniformName::new("saturation", UniformType::_1f),
+                    UniformName::new("brightness", UniformType::_1f),
+                    UniformName::new("contrast", UniformType::_1f),
                     UniformName::new("bg_color", UniformType::_4f),
                     UniformName::new("lg_refraction_strength", UniformType::_1f),
                     UniformName::new("lg_power_factor", UniformType::_1f),
@@ -1136,10 +1138,12 @@ fn postprocess_vulkan_source() -> String {
 }
 
 /// The uniforms declared by `postprocess.frag` on top of the clipped-surface set.
-fn postprocess_uniform_names() -> [UniformName<'static>; 6] {
+fn postprocess_uniform_names() -> [UniformName<'static>; 8] {
     [
         UniformName::new("noise", UniformType::_1f),
         UniformName::new("saturation", UniformType::_1f),
+        UniformName::new("brightness", UniformType::_1f),
+        UniformName::new("contrast", UniformType::_1f),
         UniformName::new("bg_color", UniformType::_4f),
         UniformName::new("surface_to_geo", UniformType::Matrix3x3),
         UniformName::new("alpha_mask_enabled", UniformType::_1f),

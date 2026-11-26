@@ -544,7 +544,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || !self.closing_windows.is_empty()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        in_overview: bool,
+        layer: RenderLayer,
+    ) {
         let view_pos = Point::from((self.view_pos(), 0.));
         let view_size = self.view_size;
         let active_idx = self.active_column_idx;
@@ -558,7 +563,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             let col_off = Point::from((col_x, 0.));
             let col_pos = view_pos - col_off - col.render_offset();
             let view_rect = Rectangle::new(col_pos, view_size);
-            col.update_render_elements(is_active, view_rect);
+            col.update_render_elements(is_active, in_overview, view_rect);
         }
     }
 
@@ -771,7 +776,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
                 for tile in &mut col.tiles {
                     let is_active = focused_window == Some(tile.window().id());
-                    tile.update_render_elements(is_active, view_rect);
+                    tile.update_render_elements(is_active, true, view_rect);
                 }
             }
             GridItem::Tab { window_id, .. } => {
@@ -785,7 +790,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 };
 
                 let is_active = focused_window == Some(tile.window().id());
-                tile.update_render_elements(is_active, view_rect);
+                tile.update_render_elements(is_active, true, view_rect);
             }
             GridItem::Floating { .. } => (),
         }
@@ -5340,7 +5345,12 @@ impl<W: LayoutElement> Column<W> {
                 .any(|tile| tile.is_moving_between_workspaces())
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, view_rect: Rectangle<f64, Logical>) {
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        in_overview: bool,
+        view_rect: Rectangle<f64, Logical>,
+    ) {
         let active_idx = self.active_tile_idx;
         let axis = self.axis();
         for (tile_idx, (tile, tile_off)) in self.tiles_mut().enumerate() {
@@ -5349,7 +5359,7 @@ impl<W: LayoutElement> Column<W> {
             let mut tile_view_rect = view_rect;
             tile_view_rect.loc -= tile_off + tile.render_offset();
             // Tiles draw in physical coordinates; the column lays out in scrolling space.
-            tile.update_render_elements(is_active, axis.rect_out(tile_view_rect));
+            tile.update_render_elements(is_active, in_overview, axis.rect_out(tile_view_rect));
         }
 
         let config = self.tab_indicator.config();

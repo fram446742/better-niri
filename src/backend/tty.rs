@@ -49,8 +49,11 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
 use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::output::{Mode, Output, OutputModeSource, PhysicalProperties};
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{Dispatcher, LoopHandle, RegistrationToken};
+use smithay::reexports::calloop::{
+    Dispatcher, Interest, LoopHandle, Mode as EventMode, PostAction, RegistrationToken,
+};
 use smithay::reexports::drm::control::atomic::AtomicModeReq;
 use smithay::reexports::drm::control::dumbbuffer::DumbBuffer;
 use smithay::reexports::drm::control::{
@@ -79,7 +82,8 @@ use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use super::{
-    IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker, virtual_output,
+    IpcOutputMap, OutputHdrCaps, OutputId, RenderResult, VirtualOutputMarker,
+    override_peak_luminance, virtual_output,
 };
 use crate::frame_clock::FrameClock;
 #[cfg(feature = "effects")]
@@ -302,15 +306,48 @@ impl TtyGpuManager {
     }
 }
 
+type FrameUserData = (OutputPresentationFeedback, Duration, Vec<(Barrier, Client)>);
+
 type GbmDrmCompositor = DrmCompositor<
     GbmAllocator<DeviceFd>,
     GbmFramebufferExporter<DeviceFd>,
-    (OutputPresentationFeedback, Duration, Vec<(Barrier, Client)>),
+    FrameUserData,
     DeviceFd,
 >;
 
+/// Whether this DRM device is driven by NVIDIA (by PCI vendor or driver symlink).
+fn is_nvidia_device(fd: &smithay::backend::drm::DrmDeviceFd) -> bool {
+    let Ok(dev) = fd.dev_id() else {
+        return false;
+    };
+    let base = format!(
+        "/sys/dev/char/{}:{}/device",
+        libc::major(dev),
+        libc::minor(dev)
+    );
+    if let Ok(vendor) = std::fs::read_to_string(format!("{base}/vendor"))
+        && vendor.trim().eq_ignore_ascii_case("0x10de")
+    {
+        return true;
+    }
+    if let Ok(link) = std::fs::read_link(format!("{base}/driver")) {
+        return link
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .contains("nvidia");
+    }
+    false
+}
+
+struct PendingFrameSubmission {
+    remaining_sync_points: usize,
+    data: Option<FrameUserData>,
+}
+
 pub struct OutputDevice {
     token: RegistrationToken,
+    /// NVIDIA's KMS explicit-fence handling can occasionally scan out an unfinished frame.
+    is_nvidia: bool,
     // Can be None for display-only devices such as DisplayLink.
     render_node: Option<DrmNode>,
     drm_scanner: DrmScanner,
@@ -586,6 +623,8 @@ struct Surface {
     time_since_presentation_plot_name: tracy_client::PlotName,
     /// Plot name for the presentation misprediction plot.
     presentation_misprediction_plot_name: tracy_client::PlotName,
+    /// Plot of how long before the target presentation time all frame fences completed.
+    frame_completion_margin_plot_name: tracy_client::PlotName,
     sequence_delta_plot_name: tracy_client::PlotName,
 }
 
@@ -623,6 +662,20 @@ impl EdidHdrInfo {
             // EDID reports cd/m²; the infoframe field is in 0.0001 cd/m² units.
             min_luminance: lum_u16(hdr.desired_content_min_luminance * 10000.),
             max_frame_avg_luminance: lum_u16(hdr.desired_content_max_frame_avg_luminance),
+        }
+    }
+
+    /// Applies the `peak-luminance` override from the output's HDR config, if any.
+    fn with_peak_luminance(self, peak_luminance: Option<f64>) -> Self {
+        let Some(peak) = peak_luminance else {
+            return self;
+        };
+        let (max_luminance, max_frame_avg_luminance) =
+            override_peak_luminance(peak, self.max_frame_avg_luminance);
+        Self {
+            max_luminance,
+            max_frame_avg_luminance,
+            ..self
         }
     }
 }
@@ -1229,8 +1282,10 @@ impl Tty {
             .map_err(|err| warn!("error initializing DRM leasing for {node}: {err:?}"))
             .ok();
 
+        let is_nvidia = is_nvidia_device(drm.device_fd());
         let device = OutputDevice {
             token,
+            is_nvidia,
             render_node,
             drm,
             gbm,
@@ -2110,6 +2165,9 @@ impl Tty {
         let presentation_misprediction_plot_name = tracy_client::PlotName::new_leak(format!(
             "{connector_name} presentation misprediction, ms"
         ));
+        let frame_completion_margin_plot_name = tracy_client::PlotName::new_leak(format!(
+            "{connector_name} frame completion margin, ms"
+        ));
         let sequence_delta_plot_name =
             tracy_client::PlotName::new_leak(format!("{connector_name} sequence delta"));
 
@@ -2130,6 +2188,7 @@ impl Tty {
             vblank_frame_name,
             time_since_presentation_plot_name,
             presentation_misprediction_plot_name,
+            frame_completion_margin_plot_name,
             sequence_delta_plot_name,
         };
 
@@ -2324,6 +2383,11 @@ impl Tty {
 
         let redraw_needed = match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {
             RedrawState::WaitingForVBlank { redraw_needed } => redraw_needed,
+            state @ RedrawState::WaitingForFrameCompletion { .. } => {
+                error!("received vblank while waiting for frame completion");
+                output_state.redraw_state = state;
+                return;
+            }
             state @ (RedrawState::Idle
             | RedrawState::Queued
             | RedrawState::WaitingForEstimatedVBlank(_)
@@ -2441,6 +2505,7 @@ impl Tty {
                 output_state.redraw_state = RedrawState::Queued;
                 return output;
             }
+            RedrawState::WaitingForFrameCompletion { .. } => unreachable!(),
             // Unexpected states, but let's not crash the compositor.
             // https://github.com/niri-wm/niri/issues/4781
             state @ (RedrawState::Idle
@@ -2561,6 +2626,12 @@ impl Tty {
             let config = self.config.borrow();
             let output_config = config.outputs.find(&surface.name);
             let hdr_config = output_config.and_then(|o| o.hdr.clone());
+            let edid_hdr = surface.edid_hdr.with_peak_luminance(
+                hdr_config
+                    .as_ref()
+                    .and_then(|h| h.peak_luminance)
+                    .map(|v| v.0),
+            );
             let hdr_mode = hdr_config.as_ref().map(|h| h.mode).unwrap_or(HdrMode::Auto);
             let hdr_allowed = surface.hdr_supported && hdr_mode != HdrMode::Off;
             let max_bpc = output_config
@@ -2597,7 +2668,7 @@ impl Tty {
                 });
                 ConnectorColorState {
                     colorspace: Colorspace::Bt2020Rgb,
-                    hdr_metadata: Some(build_hdr_metadata(&desc, &surface.edid_hdr)),
+                    hdr_metadata: Some(build_hdr_metadata(&desc, &edid_hdr)),
                     max_bpc,
                 }
             } else {
@@ -2756,13 +2827,34 @@ impl Tty {
                     }
                 }
 
-                let needs_sync = res.needs_sync()
+                let wait_for_frame_completion = device.is_nvidia
                     || self
                         .config
                         .borrow()
                         .debug
                         .wait_for_frame_completion_before_queueing;
-                if needs_sync && let PrimaryPlaneElement::Swapchain(element) = res.primary_element {
+                let mut completion_fences = Vec::new();
+                if wait_for_frame_completion {
+                    // Take every plane's synchronization point out of Smithay. Once they have all
+                    // completed, queue_frame() will submit the frame without IN_FENCE_FD.
+                    for sync in drm_compositor.take_pending_frame_sync_points() {
+                        if sync.is_reached() {
+                            continue;
+                        }
+                        if let Some(fd) = sync.export() {
+                            completion_fences.push((fd, sync));
+                        } else {
+                            // An unexportable fence cannot be integrated into calloop. This should
+                            // be unusual, so retain the old blocking behavior as a safe fallback.
+                            let _span = tracy_client::span!("wait for completion fallback");
+                            if let Err(err) = sync.wait() {
+                                warn!("error waiting for frame completion: {err:?}");
+                            }
+                        }
+                    }
+                } else if res.needs_sync()
+                    && let PrimaryPlaneElement::Swapchain(element) = &res.primary_element
+                {
                     let _span = tracy_client::span!("wait for completion");
                     if let Err(err) = element.sync.wait() {
                         warn!("error waiting for frame completion: {err:?}");
@@ -2784,6 +2876,80 @@ impl Tty {
                         fifo_barriers,
                     );
 
+                    if !completion_fences.is_empty() {
+                        let node = tty_state.node;
+                        let crtc = tty_state.crtc;
+                        let pending = Rc::new(RefCell::new(PendingFrameSubmission {
+                            remaining_sync_points: completion_fences.len(),
+                            data: Some(data),
+                        }));
+                        let mut tokens = Vec::with_capacity(completion_fences.len());
+
+                        for (completion_fd, completion_sync) in completion_fences {
+                            let pending = pending.clone();
+                            let callback_output = output.clone();
+                            let source =
+                                Generic::new(completion_fd, Interest::READ, EventMode::OneShot);
+                            let token = niri
+                                .event_loop
+                                .insert_source(source, move |_, _, state| {
+                                    // The fd is the non-blocking wake-up mechanism. Verify the
+                                    // original sync point as well before considering this plane
+                                    // complete, in case a driver wakes the native fd prematurely.
+                                    let _span = tracy_client::span!("verify frame completion");
+                                    if !completion_sync.is_reached() {
+                                        debug!(
+                                            "native fence fd became readable before its sync point was signalled"
+                                        );
+                                    }
+                                    if let Err(err) = completion_sync.wait() {
+                                        warn!("error verifying frame completion: {err:?}");
+                                    }
+
+                                    let data = {
+                                        let mut pending = pending.borrow_mut();
+                                        pending.remaining_sync_points -= 1;
+                                        if pending.remaining_sync_points == 0 {
+                                            pending.data.take()
+                                        } else {
+                                            None
+                                        }
+                                    };
+
+                                    if let Some(data) = data {
+                                        state.backend.tty().queue_frame_after_completion(
+                                            &mut state.niri,
+                                            node,
+                                            crtc,
+                                            &callback_output,
+                                            data,
+                                        );
+                                    }
+                                    Ok(PostAction::Remove)
+                                })
+                                .unwrap();
+                            tokens.push(token);
+                        }
+
+                        let output_state = niri.output_state.get_mut(output).unwrap();
+                        let new_state = RedrawState::WaitingForFrameCompletion {
+                            tokens,
+                            redraw_needed: false,
+                        };
+                        match mem::replace(&mut output_state.redraw_state, new_state) {
+                            RedrawState::Idle => unreachable!(),
+                            RedrawState::Queued => (),
+                            RedrawState::WaitingForVBlank { .. } => unreachable!(),
+                            RedrawState::WaitingForFrameCompletion { .. } => unreachable!(),
+                            RedrawState::WaitingForEstimatedVBlank(_) => unreachable!(),
+                            RedrawState::WaitingForEstimatedVBlankAndQueued(token) => {
+                                niri.event_loop.remove(token);
+                            }
+                        }
+
+                        return RenderResult::Submitted;
+                    }
+
                     match drm_compositor.queue_frame(data) {
                         Ok(()) => {
                             let output_state = niri.output_state.get_mut(output).unwrap();
@@ -2794,6 +2960,7 @@ impl Tty {
                                 RedrawState::Idle => unreachable!(),
                                 RedrawState::Queued => (),
                                 RedrawState::WaitingForVBlank { .. } => unreachable!(),
+                                RedrawState::WaitingForFrameCompletion { .. } => unreachable!(),
                                 RedrawState::WaitingForEstimatedVBlank(_) => unreachable!(),
                                 RedrawState::WaitingForEstimatedVBlankAndQueued(token) => {
                                     niri.event_loop.remove(token);
@@ -2829,6 +2996,83 @@ impl Tty {
         queue_estimated_vblank_timer(niri, output.clone(), target_presentation_time);
 
         rv
+    }
+
+    fn queue_frame_after_completion(
+        &mut self,
+        niri: &mut Niri,
+        node: DrmNode,
+        crtc: crtc::Handle,
+        output: &Output,
+        data: FrameUserData,
+    ) {
+        let _span = tracy_client::span!("Tty::queue_frame_after_completion");
+        let name = output.name();
+
+        let Some(output_state) = niri.output_state.get_mut(output) else {
+            // The output was removed while its event source was ready to dispatch.
+            return;
+        };
+        let redraw_needed = match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {
+            RedrawState::WaitingForFrameCompletion { redraw_needed, .. } => redraw_needed,
+            state => {
+                error!("unexpected redraw state after frame completion on {name}: {state:?}");
+                output_state.redraw_state = state;
+                return;
+            }
+        };
+
+        let target_presentation_time = data.1;
+        let completion_margin_ms =
+            (target_presentation_time.as_secs_f64() - get_monotonic_time().as_secs_f64()) * 1000.;
+        let queue_result = self
+            .devices
+            .get_mut(&node)
+            .and_then(|device| device.surfaces.get_mut(&crtc))
+            .ok_or_else(|| anyhow!("output surface disappeared"))
+            .and_then(|surface| {
+                if let Some(client) = tracy_client::Client::running() {
+                    client.plot(
+                        surface.frame_completion_margin_plot_name,
+                        completion_margin_ms,
+                    );
+                }
+                surface
+                    .compositor
+                    .queue_frame(data)
+                    .map_err(anyhow::Error::from)
+            });
+
+        match queue_result {
+            Ok(()) => {
+                let output_state = niri.output_state.get_mut(output).unwrap();
+                output_state.redraw_state = RedrawState::WaitingForVBlank { redraw_needed };
+
+                // The client buffers are latched only now, at actual KMS submission time.
+                output_state.frame_callback_sequence =
+                    output_state.frame_callback_sequence.wrapping_add(1);
+                niri.send_frame_callbacks(output);
+            }
+            Err(err) => {
+                warn!("error queueing frame after completion on {name}: {err}");
+
+                if let Some(surface) = self
+                    .devices
+                    .get_mut(&node)
+                    .and_then(|device| device.surfaces.get_mut(&crtc))
+                {
+                    drop(surface.vblank_frame.take());
+                }
+
+                // Match the normal render failure path: throttle until the predicted vblank,
+                // while preserving a redraw requested during the fence wait.
+                niri.output_state.get_mut(output).unwrap().redraw_state = RedrawState::Queued;
+                queue_estimated_vblank_timer(niri, output.clone(), target_presentation_time);
+                if redraw_needed {
+                    niri.queue_redraw(output);
+                }
+            }
+        }
     }
 
     pub fn change_vt(&mut self, vt: i32) {
@@ -4172,6 +4416,7 @@ fn queue_estimated_vblank_timer(
         RedrawState::Idle => unreachable!(),
         RedrawState::Queued => (),
         RedrawState::WaitingForVBlank { .. } => unreachable!(),
+        RedrawState::WaitingForFrameCompletion { .. } => unreachable!(),
         RedrawState::WaitingForEstimatedVBlank(token)
         | RedrawState::WaitingForEstimatedVBlankAndQueued(token) => {
             output_state.redraw_state = RedrawState::WaitingForEstimatedVBlank(token);
@@ -4502,7 +4747,9 @@ fn build_hdr_metadata(desc: &ImageDescription, edid: &EdidHdrInfo) -> HdrOutputM
         .max_fall
         .map(|v| clamp_to(to_u16(v), edid.max_frame_avg_luminance))
         .or((edid.max_frame_avg_luminance > 0).then_some(edid.max_frame_avg_luminance))
-        .unwrap_or(500);
+        // The frame-average luminance can't exceed the content's max luminance, which matters
+        // for a configured peak-luminance below the placeholder.
+        .unwrap_or(max_cll.min(500));
 
     // ST 2086 mastering primaries: the client's target color volume, which may exceed the
     // container primaries (extended target volume). Without one, the target defaults to the
@@ -4697,12 +4944,14 @@ mod tests {
         output.hdr = Some(niri_config::output::Hdr {
             mode: HdrMode::Off,
             reference_luminance: None,
+            peak_luminance: None,
         });
         assert!(!is_hdr_enabled(&output, true), "off disables HDR");
 
         output.hdr = Some(niri_config::output::Hdr {
             mode: HdrMode::On,
             reference_luminance: None,
+            peak_luminance: None,
         });
         assert!(is_hdr_enabled(&output, true));
     }
@@ -4743,6 +4992,23 @@ mod tests {
         assert_eq!(meta.max_display_mastering_luminance, 800);
         assert_eq!(meta.min_display_mastering_luminance, 100);
         assert_eq!(meta.max_cll, 800);
+        assert_eq!(meta.max_fall, 600);
+
+        // A configured peak luminance replaces the EDID's (or the missing) max luminance, and
+        // caps the frame-average luminance.
+        let meta = build_hdr_metadata(
+            &pq_desc,
+            &EdidHdrInfo::default().with_peak_luminance(Some(350.)),
+        );
+        assert_eq!(meta.max_display_mastering_luminance, 350);
+        assert_eq!(meta.max_cll, 350);
+        assert_eq!(meta.max_fall, 350);
+        let meta = build_hdr_metadata(&pq_desc, &edid.with_peak_luminance(Some(400.4)));
+        assert_eq!(meta.max_display_mastering_luminance, 400);
+        assert_eq!(meta.max_cll, 400);
+        assert_eq!(meta.max_fall, 400);
+        let meta = build_hdr_metadata(&pq_desc, &edid.with_peak_luminance(Some(1500.)));
+        assert_eq!(meta.max_cll, 1500);
         assert_eq!(meta.max_fall, 600);
 
         // Client data within the sink's capabilities is used as-is.

@@ -241,6 +241,8 @@ pub enum RelativeTo {
     Bottom,
     Left,
     Right,
+    /// Relative to the pointer position when the window opens.
+    Cursor,
 }
 
 impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for VrrRule {

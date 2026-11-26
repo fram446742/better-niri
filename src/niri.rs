@@ -16,7 +16,7 @@ use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::gestures::HotCornerAction;
 use niri_config::input::XkbFile;
-use niri_config::output::{HdrMode, MaxBpc};
+use niri_config::output::{HdrMode, MaxBpc, TearingMode};
 use niri_config::window_rule::VrrRule;
 use niri_config::{
     Bind, Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
@@ -969,6 +969,11 @@ pub enum RedrawState {
     Queued,
     /// We submitted a frame to the KMS and waiting for it to be presented.
     WaitingForVBlank { redraw_needed: bool },
+    /// Rendering is complete, but KMS submission is deferred until the GPU fence signals.
+    WaitingForFrameCompletion {
+        tokens: Vec<RegistrationToken>,
+        redraw_needed: bool,
+    },
     /// We did not submit anything to KMS and made a timer to fire at the estimated VBlank.
     WaitingForEstimatedVBlank(RegistrationToken),
     /// A redraw is queued on top of the above.
@@ -1181,6 +1186,12 @@ impl RedrawState {
             RedrawState::WaitingForVBlank { .. } => RedrawState::WaitingForVBlank {
                 redraw_needed: true,
             },
+            RedrawState::WaitingForFrameCompletion { tokens, .. } => {
+                RedrawState::WaitingForFrameCompletion {
+                    tokens,
+                    redraw_needed: true,
+                }
+            }
         }
     }
 }
@@ -1835,6 +1846,27 @@ impl State {
 
             self.focus_window(&window);
         }
+    }
+
+    /// Confirm the carousel lens selection and hand both input devices to its output.
+    pub fn confirm_carousel_focus_jump(&mut self, uv: Option<(f64, f64)>) -> bool {
+        let jumped = match uv {
+            Some(uv) => self.niri.layout.carousel_focus_jump(uv),
+            None => self.niri.layout.carousel_focus_jump_to_focused(),
+        };
+        if !jumped {
+            return false;
+        }
+
+        // The event loop has not yet replaced overview keyboard focus with layout focus.
+        // Refresh it before warping, otherwise the focused-tile helper rejects the move.
+        self.update_keyboard_focus();
+        if !self.maybe_warp_cursor_to_focus_centered()
+            && let Some(output) = self.niri.layout.active_output().cloned()
+        {
+            self.move_cursor_to_output(&output);
+        }
+        true
     }
 
     pub fn maybe_warp_cursor_to_focus(&mut self) -> bool {
@@ -3025,6 +3057,10 @@ impl State {
                 config.hdr = Some(niri_config::output::Hdr {
                     mode,
                     reference_luminance: hdr.reference_luminance.map(FloatOrInt),
+                    peak_luminance: config
+                        .hdr
+                        .as_ref()
+                        .and_then(|current| current.peak_luminance),
                 });
             }
         });
@@ -4286,7 +4322,9 @@ impl Niri {
             .unwrap_or(niri_config::output::Hdr {
                 mode: HdrMode::Auto,
                 reference_luminance: None,
+                peak_luminance: None,
             });
+        let caps = caps.with_peak_luminance(hdr.peak_luminance.map(|v| v.0));
         Some((hdr, caps))
     }
 
@@ -5363,6 +5401,11 @@ impl Niri {
             RedrawState::Idle => (),
             RedrawState::Queued => (),
             RedrawState::WaitingForVBlank { .. } => (),
+            RedrawState::WaitingForFrameCompletion { tokens, .. } => {
+                for token in tokens {
+                    self.event_loop.remove(token);
+                }
+            }
             RedrawState::WaitingForEstimatedVBlank(token) => self.event_loop.remove(token),
             RedrawState::WaitingForEstimatedVBlankAndQueued(token) => self.event_loop.remove(token),
         }
@@ -7404,9 +7447,40 @@ impl Niri {
     pub fn refresh_window_states(&mut self) {
         let _span = tracy_client::span!("Niri::refresh_window_states");
 
+        // While the session is locked or the monitors are powered off, no window is visible, so
+        // tell clients they are suspended. This gives them a definitive signal instead of relying
+        // on frame-callback-starvation heuristics — notably, Chromium's self-drawn notification
+        // toasts get stuck open forever without it. Clearing the state on unlock/power-on is what
+        // resumes such clients. Windows on hidden workspaces are deliberately not suspended: they
+        // can become visible in the overview or through casts at any time.
+        //
+        // Cast targets are exempt: window casts keep streaming through lock and power-off, and
+        // output casts keep streaming the desktop while monitors are merely powered off (when
+        // locked, output casts show the lock screen, so their windows do suspend).
+        let is_locked = self.is_locked();
+        let suspend_all = is_locked || !self.monitors_active;
+        #[cfg(feature = "xdp-gnome-screencast")]
+        let casts = &self.casting.casts;
+
         let config = self.config.borrow();
-        self.layout.with_windows_mut(|mapped, _output| {
+        self.layout.with_windows_mut(|mapped, output| {
             mapped.update_tiled_state(config.prefer_no_csd);
+
+            #[allow(unused_mut)]
+            let mut suspended = suspend_all;
+            #[cfg(feature = "xdp-gnome-screencast")]
+            if suspended {
+                let id = mapped.id().get();
+                let exempt = casts.iter().any(|cast| match &cast.target {
+                    CastTarget::Window { id: cast_id } => *cast_id == id,
+                    CastTarget::Output { output: weak, .. } => {
+                        !is_locked && output.is_some_and(|o| *weak == o.downgrade())
+                    }
+                    CastTarget::Nothing => false,
+                });
+                suspended = !exempt;
+            }
+            mapped.set_suspended(suspended);
         });
         drop(config);
     }
@@ -9573,7 +9647,27 @@ impl Niri {
     }
 
     pub fn output_allows_tearing(&self, output: &Output) -> bool {
+        let name = output.user_data().get::<OutputName>().unwrap();
+        let mode = self
+            .config
+            .borrow()
+            .outputs
+            .find(name)
+            .map_or_else(TearingMode::default, |output| output.allow_tearing);
+
+        if mode == TearingMode::Never {
+            return false;
+        }
+
         self.layout.windows_for_output(output).any(|mapped| {
+            // A tearing page flip updates the whole output at once, so in the default mode we only
+            // let the window that covers it and that the user is actually looking at through.
+            if mode == TearingMode::Fullscreen
+                && !(mapped.is_focused() && mapped.sizing_mode().is_fullscreen())
+            {
+                return false;
+            }
+
             let mut visible = false;
             let mut hint = false;
             let mut content_type = ContentType::None;

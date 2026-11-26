@@ -955,9 +955,6 @@ impl XdgShellHandler for State {
             });
         }
 
-        let active_window = self.niri.layout.focus().map(|m| &m.window);
-        let was_active = active_window == Some(&window);
-
         self.niri.window_mru_ui.remove_window(id);
         #[cfg(feature = "xdp-gnome-screencast")]
         if self.niri.screen_cast_picker.remove_window(id.get()) {
@@ -974,10 +971,6 @@ impl XdgShellHandler for State {
         // need to set the timer.
         if !transaction.is_last() {
             transaction.register_deadline_timer(&self.niri.event_loop, &self.niri.display_handle);
-        }
-
-        if was_active {
-            self.maybe_warp_cursor_to_focus();
         }
 
         if let Some(output) = output {
@@ -1126,6 +1119,8 @@ impl State {
     pub fn send_initial_configure(&mut self, toplevel: &ToplevelSurface) {
         let _span = tracy_client::span!("State::send_initial_configure");
 
+        let suspended = self.niri.is_locked() || !self.niri.monitors_active;
+
         let Some(unmapped) = self.niri.unmapped_windows.get_mut(toplevel.wl_surface()) else {
             error!("window must be present in unmapped_windows in send_initial_configure()");
             return;
@@ -1263,6 +1258,16 @@ impl State {
 
         // Set the tiled state for the initial configure.
         update_tiled_state(toplevel, config.prefer_no_csd, rules.tiled_state);
+
+        // Windows opening while the session is locked or the monitors are powered off are not
+        // visible, so tell them upfront (Chromium notification toasts open like this). The state
+        // is cleared by refresh_window_states() when they become visible; cast exemptions don't
+        // apply here since an unmapped window cannot be a cast target yet.
+        if suspended {
+            toplevel.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Suspended);
+            });
+        }
 
         // Set the configured settings.
         *state = InitialConfigureState::Configured {

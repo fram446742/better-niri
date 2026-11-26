@@ -203,6 +203,7 @@ impl Layout {
             false,
             ActivateWindow::default(),
             false,
+            None,
         );
         self.windows.push(window);
     }
@@ -234,6 +235,7 @@ impl Layout {
             false,
             ActivateWindow::default(),
             false,
+            None,
         );
         self.windows.push(window);
     }
