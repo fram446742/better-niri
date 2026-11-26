@@ -706,7 +706,14 @@ impl FramebufferEffectElement {
             });
         }
         // The sampled framebuffer content is already in the frame blend space.
-        owned.extend(super::blend::vulkan_uniforms_for_blend_space(frame));
+        owned.extend(
+            super::blend::vulkan_blend_space_custom_uniforms(frame)
+                .into_iter()
+                .map(|u| smithay::backend::renderer::vulkan::OwnedCustomUniform {
+                    name: u.name.to_owned(),
+                    value: u.value,
+                }),
+        );
         let uniforms: Vec<CustomUniform<'_>> = owned.iter().map(|u| u.borrow()).collect();
 
         // The alpha-mask branch is disabled above, but the program still declares the sampler.

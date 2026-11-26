@@ -31,8 +31,6 @@ use smithay::utils::{
     Buffer as BufferCoord, DeviceFd, Physical, Point, Rectangle, Scale, Size, Transform,
 };
 
-use crate::render_helpers::blend;
-
 pub type GlesApi = GbmGlesBackend<GlesRenderer, DeviceFd>;
 pub type VulkanApi = VulkanBackend<DeviceFd>;
 
@@ -263,19 +261,9 @@ impl Renderer for TtyRenderer<'_> {
             (TtyRenderer::Gles(renderer), TtyFramebuffer::Gles(framebuffer)) => Ok(TtyFrame::Gles(
                 renderer.render(framebuffer, output_size, dst_transform)?,
             )),
-            (TtyRenderer::Vulkan(renderer), TtyFramebuffer::Vulkan(framebuffer)) => {
-                // The frame blend space is renderer state; read it before the frame borrows the
-                // renderer. On HDR frames the new frame starts with the blend-space texture
-                // program override, mirroring GLES `set_default_tex_program_override`.
-                let hdr = blend::VulkanFrameBlendState::values(renderer.as_ref()).0;
-                let mut frame = renderer.render(framebuffer, output_size, dst_transform)?;
-                if hdr {
-                    let vk_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
-                        frame.as_mut();
-                    blend::apply_vulkan_frame_blend(vk_frame);
-                }
-                Ok(TtyFrame::Vulkan(frame))
-            }
+            (TtyRenderer::Vulkan(renderer), TtyFramebuffer::Vulkan(framebuffer)) => Ok(
+                TtyFrame::Vulkan(renderer.render(framebuffer, output_size, dst_transform)?),
+            ),
             _ => unreachable!("mismatched TtyRenderer and TtyFramebuffer variants"),
         }
     }
@@ -313,12 +301,7 @@ impl Frame for TtyFrame<'_, '_, '_> {
     ) -> Result<(), Self::Error> {
         match self {
             TtyFrame::Gles(frame) => frame.clear(color, at).map_err(Into::into),
-            TtyFrame::Vulkan(frame) => {
-                // Solid colors bypass shaders; encode on the CPU for the frame blend space,
-                // like the GLES renderer-level solid color transform.
-                let color = blend::vulkan_encode_solid(frame.as_ref(), color);
-                frame.clear(color, at).map_err(Into::into)
-            }
+            TtyFrame::Vulkan(frame) => frame.clear(color, at).map_err(Into::into),
         }
     }
 
@@ -330,10 +313,7 @@ impl Frame for TtyFrame<'_, '_, '_> {
     ) -> Result<(), Self::Error> {
         match self {
             TtyFrame::Gles(frame) => frame.draw_solid(dst, damage, color).map_err(Into::into),
-            TtyFrame::Vulkan(frame) => {
-                let color = blend::vulkan_encode_solid(frame.as_ref(), color);
-                frame.draw_solid(dst, damage, color).map_err(Into::into)
-            }
+            TtyFrame::Vulkan(frame) => frame.draw_solid(dst, damage, color).map_err(Into::into),
         }
     }
 

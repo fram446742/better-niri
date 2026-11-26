@@ -23,6 +23,7 @@ use niri_config::{
     WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::drm::ScanoutColorTransform;
 use smithay::backend::input::{InputTime, Keycode};
 use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -83,7 +84,7 @@ use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::color::management::{
     ColorManagementState, ColorManagementSurfaceCachedState, Feature, ImageDescription,
     Primaries as CmPrimaries, PrimariesOption as CmPrimariesOption, RenderIntent as CmRenderIntent,
-    TransferFunction as CmTransferFunction,
+    TransferFunction as CmTransferFunction, get_surface_description,
 };
 use smithay::wayland::commit_timing::{
     CommitTimerBarrierStateUserData, CommitTimingManagerState, Timestamp,
@@ -189,7 +190,8 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyManagerState};
 use crate::render_helpers::blend::{
-    BlendSurfaceRenderElement, DEFAULT_REFERENCE_LUMINANCE, set_sdr_capture_blend,
+    BlendSurfaceRenderElement, ContentColor, DEFAULT_REFERENCE_LUMINANCE, scanout_color_transform,
+    set_sdr_capture_blend,
 };
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
@@ -4295,6 +4297,72 @@ impl Niri {
             return None;
         }
         surface_tree_hdr_description(window.toplevel().wl_surface())
+    }
+
+    /// Whether the current cursor image is plain sRGB SDR content, i.e. safe to place on the
+    /// cursor plane of an HDR output after the CPU sRGB-to-PQ encode (which assumes sRGB).
+    ///
+    /// Named/theme cursors always are; client cursor surfaces are checked against their
+    /// committed image description.
+    pub fn cursor_content_is_plain_sdr(&self) -> bool {
+        match self.cursor_manager.cursor_image() {
+            CursorImageStatus::Surface(surface) => {
+                let (desc, _) = get_surface_description(surface);
+                ContentColor::from_description(desc) == ContentColor::default()
+            }
+            _ => true,
+        }
+    }
+
+    /// The per-element color transforms for direct scanout on this output, mapping every
+    /// window surface to the plane color pipeline configuration that reproduces what the
+    /// blend shaders would do to it during composition, or `None` when no pipeline can (the
+    /// shaders tone map the content, which the parametric pipeline cannot express — the
+    /// element must stay composited).
+    ///
+    /// The TTY backend hands these to the `DrmCompositor` each frame; on HDR outputs it also
+    /// denies scanout for elements *not* in the map, so nothing can bypass the blend space
+    /// with raw values. Layer-shell and other non-window surfaces are not listed: they simply
+    /// stay composited on HDR outputs and scan out unconverted (correct, they are SDR) on SDR
+    /// outputs.
+    #[allow(clippy::mutable_key_type)] // Id's Eq/Hash are stable.
+    pub fn scanout_color_transforms(
+        &self,
+        output: &Output,
+        blend_hdr: bool,
+        reference_luminance: f64,
+        peak_luminance: f64,
+    ) -> HashMap<Id, Option<ScanoutColorTransform>> {
+        let mut transforms = HashMap::new();
+        for mapped in self.layout.windows_for_output(output) {
+            with_surface_tree_downward(
+                mapped.toplevel().wl_surface(),
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |surface, states, _| {
+                    // The traversal already locks the surface states; read the cached state
+                    // through them rather than via get_surface_description() (which would
+                    // re-lock and deadlock).
+                    let desc = states
+                        .cached_state
+                        .get::<ColorManagementSurfaceCachedState>()
+                        .current()
+                        .description;
+                    let content = ContentColor::from_description(desc);
+                    transforms.insert(
+                        Id::from_wayland_resource(surface),
+                        scanout_color_transform(
+                            content,
+                            blend_hdr,
+                            reference_luminance,
+                            peak_luminance,
+                        ),
+                    );
+                },
+                |_, _, _| true,
+            );
+        }
+        transforms
     }
 
     /// Returns the HDR config of an output, but only if the output can actually do HDR

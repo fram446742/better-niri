@@ -36,6 +36,7 @@ pub mod blur_vulkan;
 pub mod border;
 pub mod capture;
 pub mod clipped_surface;
+pub mod colorimetry;
 pub mod damage;
 pub mod debug;
 #[cfg(feature = "effects")]

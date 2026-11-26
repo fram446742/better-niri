@@ -9,6 +9,8 @@ pub struct Debug {
     pub wait_for_frame_completion_before_queueing: bool,
     pub enable_overlay_planes: bool,
     pub disable_cursor_plane: bool,
+    pub disable_cursor_plane_on_hdr: bool,
+    pub scanout_post_blend_encode: bool,
     pub disable_direct_scanout: bool,
     pub restrict_primary_scanout_to_matching_format: bool,
     pub force_disable_connectors_on_resume: bool,
@@ -42,6 +44,10 @@ pub struct DebugPart {
     pub enable_overlay_planes: Option<Flag>,
     #[knuffel(child)]
     pub disable_cursor_plane: Option<Flag>,
+    #[knuffel(child)]
+    pub disable_cursor_plane_on_hdr: Option<Flag>,
+    #[knuffel(child)]
+    pub scanout_post_blend_encode: Option<Flag>,
     #[knuffel(child)]
     pub disable_direct_scanout: Option<Flag>,
     #[knuffel(child)]
@@ -90,6 +96,8 @@ impl MergeWith<DebugPart> for Debug {
             wait_for_frame_completion_before_queueing,
             enable_overlay_planes,
             disable_cursor_plane,
+            disable_cursor_plane_on_hdr,
+            scanout_post_blend_encode,
             disable_direct_scanout,
             restrict_primary_scanout_to_matching_format,
             force_disable_connectors_on_resume,

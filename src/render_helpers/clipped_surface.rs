@@ -307,10 +307,14 @@ impl<'render> RenderElement<TtyRenderer<'render>>
                 .iter()
                 .filter_map(super::shader_element::uniform_to_custom_owned)
                 .collect();
-            uniforms.extend(super::blend::vulkan_uniforms_for_content(
-                vk_frame,
-                self.content,
-            ));
+            uniforms.extend(
+                super::blend::vulkan_blend_custom_uniforms(vk_frame, self.content)
+                    .into_iter()
+                    .map(|u| OwnedCustomUniform {
+                        name: u.name.to_owned(),
+                        value: u.value,
+                    }),
+            );
             let saved = vk_frame.take_tex_program_override();
             vk_frame.set_tex_program_override(Some((program.clone(), uniforms)));
             let res =

@@ -559,14 +559,10 @@ impl GlobalShaderElement {
         ];
         // The frame blend state feeds the pass's `niri_blend` stage (custom passes may call it;
         // the shipped passes write their shader output straight through).
-        uniforms.extend(
-            crate::render_helpers::blend::vulkan_blend_uniform_values(frame)
-                .into_iter()
-                .map(|(name, value)| CustomUniform {
-                    name,
-                    value: CustomUniformValue::Float(value),
-                }),
-        );
+        uniforms.extend(crate::render_helpers::blend::vulkan_blend_custom_uniforms(
+            frame,
+            crate::render_helpers::blend::ContentColor::default(),
+        ));
         uniforms
     }
 }

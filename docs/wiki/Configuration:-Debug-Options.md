@@ -15,6 +15,8 @@ debug {
     // preview-render "screen-capture"
     enable-overlay-planes
     disable-cursor-plane
+    disable-cursor-plane-on-hdr
+    scanout-post-blend-encode
     disable-direct-scanout
     restrict-primary-scanout-to-matching-format
     force-disable-connectors-on-resume
@@ -81,6 +83,37 @@ Useful to work around driver bugs on specific hardware.
 ```kdl
 debug {
     disable-cursor-plane
+}
+```
+
+### `disable-cursor-plane-on-hdr`
+
+Disable the cursor plane on outputs that blend in HDR.
+
+By default the cursor stays on its own plane under HDR: its contents are converted on the CPU
+with a LUT-accelerated sRGB-to-PQ encode. Compositing the cursor instead puts an extra element
+on top of fullscreen content, which prevents primary-plane direct scan-out while the cursor is
+visible. Disable the plane if animated or frequently-changing cursors stutter on your GPU
+(Nvidia's larger cursor planes are the usual case).
+
+```kdl
+debug {
+    disable-cursor-plane-on-hdr
+}
+```
+
+### `scanout-post-blend-encode`
+
+Move the PQ encode behind blending onto the CRTC gamma LUT, as an experimental
+fullscreen-scan-out mode.
+
+Planes whose color pipelines end in linear light (Nvidia's) otherwise cannot scan out SDR or
+non-BT.2020 fullscreen content on an HDR output. While this is enabled the compositor owns the
+gamma LUT, so a gamma-control ramp disables it for the next frame.
+
+```kdl
+debug {
+    scanout-post-blend-encode
 }
 ```
 

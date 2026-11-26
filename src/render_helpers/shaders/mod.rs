@@ -18,7 +18,20 @@ use smithay::utils::Size;
 
 use super::renderer::NiriRenderer;
 use super::shader_element::ShaderProgram;
+use crate::render_helpers::blend::FrameBlendState;
 use crate::render_helpers::blur::BlurProgram;
+
+/// A program's own uniform declarations followed by the shared `niri_blend` ones.
+///
+/// Every shader program whose fragment stage runs `niri_blend` (or sets gamut/tone mapping
+/// uniforms) must declare the full set: smithay rejects per-draw uniforms that were not
+/// declared when the program was compiled. Names the GLSL does not use resolve to location
+/// -1, which GL ignores.
+fn with_blend_uniform_names(specific: &[UniformName<'static>]) -> Vec<UniformName<'static>> {
+    let mut names = specific.to_vec();
+    names.extend(FrameBlendState::uniform_names());
+    names
+}
 
 pub struct Shaders {
     pub texture_hdr: Option<GlesTexProgram>,
@@ -76,14 +89,7 @@ impl Shaders {
         let texture_hdr = renderer
             .compile_custom_texture_shader(
                 concat!(include_str!("texture_hdr.frag"), include_str!("hdr.frag"),),
-                &[
-                    UniformName::new("niri_hdr_pq", UniformType::_1f),
-                    UniformName::new("niri_ref_lum_scale", UniformType::_1f),
-                    UniformName::new("niri_linear", UniformType::_1f),
-                    UniformName::new("niri_linear_scale", UniformType::_1f),
-                    UniformName::new("niri_linear_to_ref", UniformType::_1f),
-                    UniformName::new("niri_hdr_to_sdr", UniformType::_1f),
-                ],
+                &FrameBlendState::uniform_names(),
             )
             .map_err(|err| {
                 warn!("error compiling HDR texture shader: {err:?}");
@@ -93,7 +99,7 @@ impl Shaders {
         let texture_hdr_to_sdr = renderer
             .compile_custom_texture_shader(
                 include_str!("texture_hdr_to_sdr.frag"),
-                &[UniformName::new("niri_ref_lum_scale", UniformType::_1f)],
+                &FrameBlendState::uniform_names(),
             )
             .map_err(|err| {
                 warn!("error compiling HDR-to-SDR texture shader: {err:?}");
@@ -161,7 +167,7 @@ impl Shaders {
                     include_str!("hdr.frag"),
                     "\nvec4 postprocess(vec4 color) { return color; }",
                 ),
-                &[
+                &with_blend_uniform_names(&[
                     UniformName::new("niri_scale", UniformType::_1f),
                     UniformName::new("geo_size", UniformType::_2f),
                     UniformName::new("corner_radius", UniformType::_4f),
@@ -192,13 +198,7 @@ impl Shaders {
                     UniformName::new("lg_adaptive_boost", UniformType::_1f),
                     UniformName::new("lg_edge_thickness", UniformType::_1f),
                     UniformName::new("lg_padding_pixels", UniformType::_1f),
-                    UniformName::new("niri_hdr_pq", UniformType::_1f),
-                    UniformName::new("niri_ref_lum_scale", UniformType::_1f),
-                    UniformName::new("niri_linear", UniformType::_1f),
-                    UniformName::new("niri_linear_scale", UniformType::_1f),
-                    UniformName::new("niri_linear_to_ref", UniformType::_1f),
-                    UniformName::new("niri_hdr_to_sdr", UniformType::_1f),
-                ],
+                ]),
             )
             .map_err(|err| {
                 warn!("error compiling clipped surface shader: {err:?}");
@@ -213,7 +213,7 @@ impl Shaders {
                     include_str!("postprocess.frag"),
                     include_str!("hdr.frag"),
                 ),
-                &[
+                &with_blend_uniform_names(&[
                     UniformName::new("niri_scale", UniformType::_1f),
                     UniformName::new("geo_size", UniformType::_2f),
                     UniformName::new("corner_radius", UniformType::_4f),
@@ -249,17 +249,11 @@ impl Shaders {
                     UniformName::new("lg_adaptive_boost", UniformType::_1f),
                     UniformName::new("lg_edge_thickness", UniformType::_1f),
                     UniformName::new("lg_padding_pixels", UniformType::_1f),
-                    UniformName::new("niri_hdr_pq", UniformType::_1f),
-                    UniformName::new("niri_ref_lum_scale", UniformType::_1f),
-                    UniformName::new("niri_linear", UniformType::_1f),
-                    UniformName::new("niri_linear_scale", UniformType::_1f),
-                    UniformName::new("niri_linear_to_ref", UniformType::_1f),
-                    UniformName::new("niri_hdr_to_sdr", UniformType::_1f),
                     UniformName::new("surface_to_geo", UniformType::Matrix3x3),
                     UniformName::new("alpha_mask_enabled", UniformType::_1i),
                     UniformName::new("alpha_threshold", UniformType::_1f),
                     UniformName::new("surface_tex", UniformType::_1i),
-                ],
+                ]),
             )
             .map_err(|err| {
                 warn!("error compiling postprocess_and_clip shader: {err:?}");
@@ -275,15 +269,7 @@ impl Shaders {
         let gradient_fade = renderer
             .compile_custom_texture_shader(
                 concat!(include_str!("gradient_fade.frag"), include_str!("hdr.frag")),
-                &[
-                    UniformName::new("cutoff", UniformType::_2f),
-                    UniformName::new("niri_hdr_pq", UniformType::_1f),
-                    UniformName::new("niri_ref_lum_scale", UniformType::_1f),
-                    UniformName::new("niri_linear", UniformType::_1f),
-                    UniformName::new("niri_linear_scale", UniformType::_1f),
-                    UniformName::new("niri_linear_to_ref", UniformType::_1f),
-                    UniformName::new("niri_hdr_to_sdr", UniformType::_1f),
-                ],
+                &with_blend_uniform_names(&[UniformName::new("cutoff", UniformType::_2f)]),
             )
             .map_err(|err| {
                 warn!("error compiling gradient fade shader: {err:?}");
@@ -800,13 +786,6 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
 /// GLES path.
 #[cfg(feature = "vulkan")]
 pub struct VulkanShaders {
-    /// Blend-space texture program (`texture_hdr.frag` + `hdr.frag`): the Vulkan counterpart of
-    /// the GLES default-texture override installed on HDR outputs. Encodes SDR content into
-    /// PQ/BT.2020 (or applies the extended-linear mapping) and passes blend-space content
-    /// through numerically when its `niri_blend` uniforms are zeroed.
-    pub texture_hdr: Option<VulkanPixelProgram>,
-    /// HDR PQ -> electrical sRGB program for drawing HDR content into SDR capture buffers.
-    pub texture_hdr_to_sdr: Option<VulkanPixelProgram>,
     pub border: Option<VulkanPixelProgram>,
     pub shadow: Option<VulkanPixelProgram>,
     pub clipped_surface: Option<VulkanPixelProgram>,
@@ -841,35 +820,6 @@ pub struct VulkanShaders {
 impl VulkanShaders {
     fn compile(renderer: &mut VulkanRenderer) -> Self {
         let _span = tracy_client::span!("VulkanShaders::compile");
-
-        // The blend-space texture program used for every default texture draw on HDR outputs.
-        // Same GLSL as the GLES override; `compile_vulkan_program` appends `hdr.frag` (which
-        // defines `niri_blend`) and declares the six blend uniforms. `alpha`/`tint` are the
-        // built-in default-texture inputs that the Vulkan texture draw path supplies.
-        let texture_hdr = compile_vulkan_program(
-            renderer,
-            include_str!("texture_hdr.frag"),
-            &[
-                UniformName::new("alpha", UniformType::_1f),
-                UniformName::new("tint", UniformType::_1f),
-            ],
-            &["tex"],
-        )
-        .map_err(|err| warn!("error compiling Vulkan HDR texture shader: {err:?}"))
-        .ok();
-
-        let texture_hdr_to_sdr = compile_vulkan_program_without_blend(
-            renderer,
-            include_str!("texture_hdr_to_sdr.frag"),
-            &[
-                UniformName::new("alpha", UniformType::_1f),
-                UniformName::new("tint", UniformType::_1f),
-                UniformName::new("niri_ref_lum_scale", UniformType::_1f),
-            ],
-            &["tex"],
-        )
-        .map_err(|err| warn!("error compiling Vulkan HDR-to-SDR texture shader: {err:?}"))
-        .ok();
 
         let mut border_src = String::from(
             "#define WAX_STRENGTH rainbow_ripple.y\n\
@@ -1044,8 +994,6 @@ impl VulkanShaders {
             global_passes: RefCell::new(Vec::new()),
             global_buffers: RefCell::new(Vec::new()),
             scoped: RefCell::new(HashMap::new()),
-            texture_hdr,
-            texture_hdr_to_sdr,
             // 1×1 transparent black; sampled (clamped) it returns black for every uv.
             black_texture: renderer
                 .import_memory(&[0u8, 0, 0, 0], Fourcc::Abgr8888, Size::from((1, 1)), false)
@@ -1262,7 +1210,7 @@ pub fn init_vulkan(renderer: &mut VulkanRenderer, config: &niri_config::Config) 
     // shader element's Vulkan draw path.
     renderer
         .user_data()
-        .insert_if_missing(super::blend::VulkanFrameBlendState::default);
+        .insert_if_missing(super::blend::FrameBlendState::default);
 }
 
 #[cfg(feature = "vulkan")]
@@ -1496,19 +1444,6 @@ fn compile_vulkan_program_remap_uv(
     compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, true, true)
 }
 
-/// Compiles a program that does its own blend-space transform and must not receive the shared
-/// `hdr.frag` stage (e.g. `texture_hdr_to_sdr.frag`, whose `niri_pq_eotf` would collide with the
-/// one `hdr.frag` defines).
-#[cfg(feature = "vulkan")]
-fn compile_vulkan_program_without_blend(
-    renderer: &mut VulkanRenderer,
-    src: &str,
-    uniforms: &[UniformName<'_>],
-    texture_uniforms: &[&str],
-) -> anyhow::Result<VulkanPixelProgram> {
-    compile_vulkan_program_impl(renderer, src, uniforms, texture_uniforms, false, false)
-}
-
 #[cfg(feature = "vulkan")]
 fn compile_vulkan_program_impl(
     renderer: &mut VulkanRenderer,
@@ -1520,12 +1455,7 @@ fn compile_vulkan_program_impl(
 ) -> anyhow::Result<VulkanPixelProgram> {
     let mut uniforms = uniforms.to_vec();
     if append_hdr_blend {
-        uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
-        uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
-        uniforms.push(UniformName::new("niri_linear", UniformType::_1f));
-        uniforms.push(UniformName::new("niri_linear_scale", UniformType::_1f));
-        uniforms.push(UniformName::new("niri_linear_to_ref", UniformType::_1f));
-        uniforms.push(UniformName::new("niri_hdr_to_sdr", UniformType::_1f));
+        uniforms.extend(FrameBlendState::uniform_names());
     }
 
     let mut decls: Vec<CustomUniformDecl> =
@@ -1729,16 +1659,27 @@ mod tests {
             for (name, value) in [
                 ("niri_hdr_pq", 0.0),
                 ("niri_ref_lum_scale", 1.0),
+                ("niri_hdr_ref_scale", 1.0),
                 ("niri_linear", 0.0),
                 ("niri_linear_scale", 0.0),
                 ("niri_linear_to_ref", 0.0),
                 ("niri_hdr_to_sdr", 0.0),
+                ("niri_pq_gamut", 0.0),
+                ("niri_use_gamut", 0.0),
+                ("niri_tonemap", 0.0),
+                ("niri_tm_v", 0.0),
+                ("niri_tm_ref_scale", 0.0),
+                ("niri_tm_out_scale", 0.0),
             ] {
                 uniforms.push(CustomUniform {
                     name,
                     value: CustomUniformValue::Float(value),
                 });
             }
+            uniforms.push(CustomUniform {
+                name: "niri_gamut",
+                value: CustomUniformValue::Mat3([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            });
             frame
                 .render_custom(&program, dst, &damage, &uniforms, &[], 1.0)
                 .expect("custom draw");
@@ -1776,16 +1717,6 @@ mod tests {
             };
             init_vulkan(&mut renderer, &niri_config::Config::default());
             let shaders = renderer.user_data().get::<VulkanShaders>().unwrap();
-            assert!(
-                shaders.texture_hdr.is_some(),
-                "HDR texture shader failed to compile on {}",
-                device.name()
-            );
-            assert!(
-                shaders.texture_hdr_to_sdr.is_some(),
-                "HDR-to-SDR texture shader failed to compile on {}",
-                device.name()
-            );
             assert!(
                 shaders.border.is_some(),
                 "border shader failed to compile on {}",

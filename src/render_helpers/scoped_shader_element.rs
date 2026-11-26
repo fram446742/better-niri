@@ -418,14 +418,10 @@ impl ScopedShaderElement {
             },
         ];
         // The frame blend state feeds each pass's `niri_blend` stage.
-        uniforms.extend(
-            crate::render_helpers::blend::vulkan_blend_uniform_values(frame)
-                .into_iter()
-                .map(|(name, value)| CustomUniform {
-                    name,
-                    value: CustomUniformValue::Float(value),
-                }),
-        );
+        uniforms.extend(crate::render_helpers::blend::vulkan_blend_custom_uniforms(
+            frame,
+            crate::render_helpers::blend::ContentColor::default(),
+        ));
         uniforms
     }
 }

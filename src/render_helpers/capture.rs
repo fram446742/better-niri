@@ -212,16 +212,27 @@ mod vulkan_tests {
             for (name, value) in [
                 ("niri_hdr_pq", 0.0),
                 ("niri_ref_lum_scale", 1.0),
+                ("niri_hdr_ref_scale", 1.0),
                 ("niri_linear", 0.0),
                 ("niri_linear_scale", 0.0),
                 ("niri_linear_to_ref", 0.0),
                 ("niri_hdr_to_sdr", 0.0),
+                ("niri_pq_gamut", 0.0),
+                ("niri_use_gamut", 0.0),
+                ("niri_tonemap", 0.0),
+                ("niri_tm_v", 0.0),
+                ("niri_tm_ref_scale", 0.0),
+                ("niri_tm_out_scale", 0.0),
             ] {
                 uniforms.push(CustomUniform {
                     name,
                     value: CustomUniformValue::Float(value),
                 });
             }
+            uniforms.push(CustomUniform {
+                name: "niri_gamut",
+                value: CustomUniformValue::Mat3([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            });
             run_global_pass_vulkan(&mut frame, full, &capture, &program, &uniforms, 1.0)
                 .expect("global pass");
             frame.finish().expect("finish");

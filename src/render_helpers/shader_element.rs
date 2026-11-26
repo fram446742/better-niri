@@ -7,7 +7,7 @@ use smithay::backend::renderer::DebugFlags;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{
     Capability, GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform, UniformDesc, UniformName,
-    UniformType, ffi, link_program,
+    ffi, link_program,
 };
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::utils::user_data::UserDataMap;
@@ -248,12 +248,7 @@ impl GlesShaderProgram {
         let mut src = src.to_string();
         src.push_str(include_str!("shaders/hdr.frag"));
         let mut additional_uniforms = additional_uniforms.to_vec();
-        additional_uniforms.push(UniformName::new("niri_hdr_pq", UniformType::_1f));
-        additional_uniforms.push(UniformName::new("niri_ref_lum_scale", UniformType::_1f));
-        additional_uniforms.push(UniformName::new("niri_linear", UniformType::_1f));
-        additional_uniforms.push(UniformName::new("niri_linear_scale", UniformType::_1f));
-        additional_uniforms.push(UniformName::new("niri_linear_to_ref", UniformType::_1f));
-        additional_uniforms.push(UniformName::new("niri_hdr_to_sdr", UniformType::_1f));
+        additional_uniforms.extend(super::blend::FrameBlendState::uniform_names());
 
         renderer.with_context(move |gl| unsafe {
             compile_program(gl, &src, &additional_uniforms, texture_uniforms)
@@ -727,13 +722,16 @@ impl ShaderRenderElement {
             return Ok(());
         };
 
-        let blend_uniforms = super::blend::vulkan_uniforms(frame);
+        let blend_uniforms = super::blend::vulkan_blend_custom_uniforms(
+            frame,
+            super::blend::ContentColor::default(),
+        );
         let mut uniforms: Vec<CustomUniform<'_>> = self
             .additional_uniforms
             .iter()
             .filter_map(uniform_to_custom)
             .collect();
-        uniforms.extend(blend_uniforms.iter().map(|uniform| uniform.borrow()));
+        uniforms.extend(blend_uniforms);
         uniforms.push(CustomUniform {
             name: "niri_size",
             value: CustomUniformValue::Vec2([dst.size.w as f32, dst.size.h as f32]),

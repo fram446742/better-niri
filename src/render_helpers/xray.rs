@@ -640,8 +640,17 @@ impl XrayElement {
             });
         }
         // The shared backdrop buffer holds SDR content, encoded like any other frame draw.
-        let blend_uniforms = super::blend::vulkan_uniforms(frame);
-        owned.extend(blend_uniforms);
+        owned.extend(
+            super::blend::vulkan_blend_custom_uniforms(
+                frame,
+                super::blend::ContentColor::default(),
+            )
+            .into_iter()
+            .map(|u| OwnedCustomUniform {
+                name: u.name.to_owned(),
+                value: u.value,
+            }),
+        );
         let uniforms: Vec<CustomUniform<'_>> = owned.iter().map(|u| u.borrow()).collect();
 
         // The mask branch is disabled without a mask, but the sampler is still declared; sample

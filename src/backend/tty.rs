@@ -607,10 +607,12 @@ struct Surface {
     /// The last color state we tried to stage and the driver rejected. Tracked so a rejected
     /// state isn't re-tested every frame (each test is an atomic TEST_ONLY commit).
     failed_color_state: Option<ConnectorColorState>,
-    /// The blend space of the last rendered frame: `Some(reference luminance)` = HDR, `None`
-    /// = SDR. Blend changes alter shader output without damaging anything, so a change forces
-    /// a full redraw.
-    last_blend: Option<Option<f64>>,
+    /// The blend space of the last rendered frame: `Some((reference, peak luminance))` = HDR,
+    /// `None` = SDR. Blend changes alter shader output without damaging anything, so a change
+    /// forces a full redraw.
+    last_blend: Option<Option<(f64, f64)>>,
+    /// Whether we already logged that the post-blend encode offload is unsupported.
+    post_blend_unsupported_logged: bool,
     dmabuf_feedback: Option<SurfaceDmabufFeedback>,
     gamma_props: Option<GammaProps>,
     /// Gamma change to apply upon session resume.
@@ -2180,6 +2182,7 @@ impl Tty {
             max_bpc_range,
             failed_color_state: None,
             last_blend: None,
+            post_blend_unsupported_logged: false,
             compositor,
             dmabuf_feedback,
             gamma_props,
@@ -2462,6 +2465,21 @@ impl Tty {
             }
         }
 
+        // A gamma change deferred by the post-blend encode offload can go through once the
+        // compositor has committed a frame resetting the gamma LUT.
+        let gamma_deferred = surface.pending_gamma_change.is_some();
+        if gamma_deferred && !surface.compositor.post_blend_encode_owns_gamma() {
+            let ramp = surface.pending_gamma_change.take().unwrap();
+            match surface.gamma_props.as_mut() {
+                Some(gamma_props) => {
+                    if let Err(err) = gamma_props.set_gamma(&device.drm, ramp) {
+                        warn!("error applying deferred gamma change: {err:?}");
+                    }
+                }
+                None => warn!("deferred gamma change without gamma properties"),
+            }
+        }
+
         if let Some(last_sequence) = output_state.last_drm_sequence {
             let delta = meta.sequence as f64 - last_sequence as f64;
             tracy_client::Client::running()
@@ -2622,7 +2640,7 @@ impl Tty {
         // The connector state is only *staged* here; smithay applies it inside its own commit
         // as a single atomic modeset together with mode, CRTC and plane state (committing
         // connector color properties standalone hangs some drivers, notably nvidia).
-        let (blend_hdr, hdr_content, reference_luminance) = {
+        let (blend_hdr, reference_luminance, edid_hdr) = {
             let config = self.config.borrow();
             let output_config = config.outputs.find(&surface.name);
             let hdr_config = output_config.and_then(|o| o.hdr.clone());
@@ -2698,15 +2716,90 @@ impl Tty {
                 }
             }
 
-            (blend_hdr, hdr_desc.is_some(), reference_luminance)
+            (blend_hdr, reference_luminance, edid_hdr)
         };
 
+        // Per-element scanout color transforms: reproduce the blend shaders' conversions in
+        // the plane color pipeline (kernel 6.19+ drm_colorop) so color-mismatched fullscreen
+        // content can still be scanned out directly. On HDR outputs, unlisted elements are
+        // denied scanout entirely so raw values can never bypass the blend space. On SDR
+        // outputs the shaders assume the default reference white regardless of config.
+        // Content the shaders would tone map is denied scanout too (the parametric pipeline
+        // cannot express the curve), so composition and scanout never disagree.
+        let scanout_ref_lum = if blend_hdr {
+            reference_luminance
+        } else {
+            DEFAULT_REFERENCE_LUMINANCE
+        };
+        let peak_luminance =
+            blend::output_peak_luminance(blend_hdr, scanout_ref_lum, edid_hdr.max_luminance);
+        #[allow(clippy::mutable_key_type)] // Id's Eq/Hash are stable.
+        let transforms =
+            niri.scanout_color_transforms(output, blend_hdr, scanout_ref_lum, peak_luminance);
+
+        // Planes whose color pipelines can't apply the PQ encode (nvidia's always end in linear
+        // light) can still scan out a single fullscreen surface by moving the encode behind
+        // blending, onto the CRTC gamma LUT. The compositor owns the gamma LUT while this is
+        // enabled, so gamma-control ramps keep it disabled (see Tty::set_gamma).
+        let gamma_in_use = surface.pending_gamma_change.is_some()
+            || surface
+                .gamma_props
+                .as_ref()
+                .is_some_and(|props| props.owns_blob());
+        let post_blend =
+            (blend_hdr && !gamma_in_use && self.config.borrow().debug.scanout_post_blend_encode)
+                .then(|| blend::hdr_post_blend_encode(peak_luminance));
+        #[allow(clippy::mutable_key_type)] // Id's Eq/Hash are stable.
+        let linear_transforms = match post_blend {
+            Some(encode) => transforms
+                .iter()
+                .filter_map(|(id, transform)| {
+                    let linear = blend::post_blend_linear_transform((*transform)?, encode)?;
+                    Some((id.clone(), linear))
+                })
+                .collect(),
+            None => HashMap::new(),
+        };
+
+        surface
+            .compositor
+            .use_color_transforms(transforms, blend_hdr);
+        let post_blend_enabled = surface
+            .compositor
+            .use_post_blend_encode(post_blend, linear_transforms);
+        if post_blend.is_some() && !post_blend_enabled && !surface.post_blend_unsupported_logged {
+            surface.post_blend_unsupported_logged = true;
+            debug!(
+                connector = surface.name.connector,
+                "post-blend encode offload unsupported (no GAMMA_LUT or primary plane color pipelines)"
+            );
+        }
+
         // A blend-space change alters what every shader outputs without any element damage;
-        // force a full redraw.
-        let blend = blend_hdr.then_some(reference_luminance);
+        // force a full redraw. The cursor plane's contents bypass the renderer entirely, so
+        // they get the equivalent sRGB-to-PQ encode on the CPU instead.
+        let blend = blend_hdr.then_some((reference_luminance, peak_luminance));
         if surface.last_blend != Some(blend) {
             surface.last_blend = Some(blend);
             surface.compositor.reset_buffers();
+            surface
+                .compositor
+                .set_cursor_buffer_transform(blend.map(|(ref_lum, _)| {
+                    let encoder = blend::SrgbToPqEncoder::new((ref_lum / 10000.) as f32);
+                    Box::new(move |data: &mut [u8], stride: u32, size: (u32, u32)| {
+                        encoder.apply(data, stride, size);
+                    }) as Box<_>
+                }));
+            // Frames offloading the PQ encode to the gamma LUT (see use_post_blend_encode above)
+            // need the cursor in the same normalized linear light as the scanned out surface.
+            surface
+                .compositor
+                .set_cursor_buffer_transform_post_blend(blend.map(|(ref_lum, peak_lum)| {
+                    let encoder = blend::SrgbToPqEncoder::new_linear((ref_lum / peak_lum) as f32);
+                    Box::new(move |data: &mut [u8], stride: u32, size: (u32, u32)| {
+                        encoder.apply(data, stride, size);
+                    }) as Box<_>
+                }));
         }
 
         let mut renderer = match self.gpu_manager.renderer(
@@ -2773,15 +2866,24 @@ impl Tty {
             }
 
             if blend_hdr {
-                // The cursor plane is filled without going through GLES, so its content would
-                // bypass the blend transform; render the cursor on the primary plane instead.
-                flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
-                flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
-                if !hdr_content {
-                    // SDR content must go through the blend shader.
-                    flags.remove(FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT);
-                    flags.remove(FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY);
+                // The cursor plane is filled without going through GLES; its contents get a
+                // CPU blend-space encode on every cursor image change instead (see
+                // set_cursor_buffer_transform above). A composited cursor is an extra
+                // element on top of fullscreen content, blocking primary-plane direct
+                // scan-out whenever it's visible, so the plane stays on by default (the
+                // LUT-accelerated encode is cheap) with a debug opt-out.
+                if debug.disable_cursor_plane_on_hdr {
+                    flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
+                } else if !niri.cursor_content_is_plain_sdr() {
+                    // The CPU encode assumes plain sRGB content; the rare non-SDR client
+                    // cursor falls back to primary-plane composition.
+                    flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
                 }
+                // Primary- and overlay-plane scanout stay allowed: every window surface has a
+                // scanout color transform (see use_color_transforms above), so mismatched
+                // content is converted by the plane's color pipeline, composited when the
+                // hardware can't express the conversion, and unlisted elements are denied
+                // scanout.
             }
 
             (flags, presentation_mode)
@@ -2790,7 +2892,9 @@ impl Tty {
         // Hand them over to the DRM.
         set_frame_blend(renderer.as_gles_renderer(), blend);
         #[cfg(feature = "vulkan")]
-        blend::set_frame_blend_vulkan(renderer.as_vulkan_renderer(), blend);
+        if let Some(vulkan) = renderer.as_vulkan_renderer() {
+            blend::set_frame_blend_vulkan(vulkan, blend);
+        }
         let drm_compositor = &mut surface.compositor;
         let render_frame_result = drm_compositor.render_frame::<_, _>(
             &mut renderer,
@@ -2801,7 +2905,9 @@ impl Tty {
         );
         set_frame_blend(renderer.as_gles_renderer(), None);
         #[cfg(feature = "vulkan")]
-        blend::set_frame_blend_vulkan(renderer.as_vulkan_renderer(), None);
+        if let Some(vulkan) = renderer.as_vulkan_renderer() {
+            blend::set_frame_blend_vulkan(vulkan, None);
+        }
         match render_frame_result {
             Ok(res) => {
                 // Global post-process shader ping-pong: the element wrote each pass's captured
@@ -3153,6 +3259,15 @@ impl Tty {
         }
     }
 
+    /// Whether a gamma change is waiting for the compositor to give the gamma LUT back.
+    pub fn has_pending_gamma_change(&self, output: &Output) -> bool {
+        let tty_state = output.user_data().get::<TtyOutputState>().unwrap();
+        self.devices
+            .get(&tty_state.node)
+            .and_then(|device| device.surfaces.get(&tty_state.crtc))
+            .is_some_and(|surface| surface.pending_gamma_change.is_some())
+    }
+
     pub fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> anyhow::Result<()> {
         let tty_state = output.user_data().get::<TtyOutputState>().unwrap();
         let crtc = tty_state.crtc;
@@ -3163,8 +3278,11 @@ impl Tty {
             .context("missing device")?;
         let surface = device.surfaces.get_mut(&crtc).context("missing surface")?;
 
-        // Cannot change properties while the device is inactive.
-        if !self.session.is_active() {
+        // Cannot change properties while the device is inactive, nor while the compositor
+        // owns the gamma LUT for the post-blend encode offload. In the latter case the pending
+        // change disables the offload on the next frame, and is applied on the vblank after the
+        // gamma LUT was reset (see on_vblank).
+        if !self.session.is_active() || surface.compositor.post_blend_encode_owns_gamma() {
             surface.pending_gamma_change = Some(ramp);
             return Ok(());
         }
@@ -3940,6 +4058,16 @@ impl Tty {
 }
 
 impl GammaProps {
+    /// Whether a gamma blob set by us is still applied, i.e. the gamma LUT is in use.
+    fn owns_blob(&self) -> bool {
+        match &self.mode {
+            GammaMode::Lut { previous_blob, .. } | GammaMode::Ctm { previous_blob, .. } => {
+                previous_blob.is_some()
+            }
+            GammaMode::Legacy { .. } => false,
+        }
+    }
+
     fn new(device: &DrmDevice, crtc: crtc::Handle) -> anyhow::Result<Self> {
         let mut gamma_lut = None;
         let mut gamma_lut_size = None;
