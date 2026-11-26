@@ -6,6 +6,7 @@ use std::path::Path;
 use niri_ipc::{Output, OutputAction};
 use serde::Serialize;
 
+use crate::mirror::{self, MirrorStep};
 use crate::plan::{ConfigOnlyNote, Plan, PlannedAction, plan_profile, plan_snapshot, snapshot};
 use crate::schema::{Profile, Store};
 
@@ -49,6 +50,8 @@ pub struct ApplyReport {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub config_only: Vec<ConfigOnlyNote>,
+    /// `wl-mirror` children started, kept or stopped for this apply.
+    pub mirrors: Vec<MirrorStep>,
     /// Whether the pre-apply state was written to `__previous`.
     pub previous_saved: bool,
     /// The action that failed, if any.
@@ -79,6 +82,7 @@ impl ApplyReport {
             errors,
             warnings: Vec::new(),
             config_only: Vec::new(),
+            mirrors: Vec::new(),
             previous_saved: false,
             failed_action: None,
             rollback_actions: Vec::new(),
@@ -107,6 +111,7 @@ impl ApplyReport {
             errors: plan.errors,
             warnings: plan.warnings,
             config_only: plan.config_only,
+            mirrors: Vec::new(),
             previous_saved: false,
             failed_action: None,
             rollback_actions: Vec::new(),
@@ -161,7 +166,7 @@ pub fn apply_named(
     dry_run: bool,
 ) -> Result<ApplyReport, String> {
     if name == "__previous" {
-        return restore(socket, store, dry_run);
+        return restore(socket, store, path, dry_run);
     }
     let profile = store
         .get(name)
@@ -184,6 +189,7 @@ pub fn apply_profile_object(
 ) -> Result<ApplyReport, String> {
     let current = query_outputs(socket)?;
     let plan = plan_profile(profile, &current, forced_target);
+    let desired_mirrors = mirror::desired_from(&plan.desired);
     let mut report = ApplyReport::from_plan(label, dry_run, plan);
 
     if !report.errors.is_empty() || dry_run {
@@ -202,6 +208,10 @@ pub fn apply_profile_object(
         Ok(applied) => {
             report.applied = applied;
             report.status = ApplyStatus::Applied;
+            // The mirror field is applied by the external wl-mirror backend,
+            // so it is no longer a config-only note.
+            report.config_only.retain(|note| note.field != "mirror");
+            report.mirrors = mirror::sync(path, &desired_mirrors, &current);
         }
         Err((applied, failed, message)) => {
             report.applied = applied;
@@ -257,6 +267,7 @@ pub fn apply_actions(
         errors: Vec::new(),
         warnings: Vec::new(),
         config_only: Vec::new(),
+        mirrors: Vec::new(),
         previous_saved: false,
         failed_action: None,
         rollback_actions: Vec::new(),
@@ -310,12 +321,22 @@ pub fn apply_actions(
 }
 
 /// Restores the `__previous` profile without overwriting it.
-pub fn restore(socket: &Path, store: &Store, dry_run: bool) -> Result<ApplyReport, String> {
+///
+/// `profiles` is the profile store path, used to find the mirror state file:
+/// restoring stops the `wl-mirror` children started by the profile being
+/// rolled back, because the `__previous` snapshot has no mirror relations.
+pub fn restore(
+    socket: &Path,
+    store: &Store,
+    profiles: &Path,
+    dry_run: bool,
+) -> Result<ApplyReport, String> {
     let previous = store
         .get("__previous")
         .cloned()
         .ok_or_else(|| "no previous profile; apply one first".to_owned())?;
     let current = query_outputs(socket)?;
+    let desired_mirrors = mirror::desired_from(&previous.outputs);
     let actions = plan_snapshot(&previous);
     let mut report = ApplyReport {
         profile: "__previous".to_owned(),
@@ -335,6 +356,7 @@ pub fn restore(socket: &Path, store: &Store, dry_run: bool) -> Result<ApplyRepor
         errors: Vec::new(),
         warnings: Vec::new(),
         config_only: Vec::new(),
+        mirrors: Vec::new(),
         previous_saved: false,
         failed_action: None,
         rollback_actions: Vec::new(),
@@ -351,6 +373,7 @@ pub fn restore(socket: &Path, store: &Store, dry_run: bool) -> Result<ApplyRepor
         Ok(applied) => {
             report.applied = applied;
             report.status = ApplyStatus::Restored;
+            report.mirrors = mirror::sync(profiles, &desired_mirrors, &current);
         }
         Err((applied, failed, message)) => {
             report.applied = applied;

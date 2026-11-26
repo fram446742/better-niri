@@ -6,8 +6,9 @@ Output profiles, rules and watch mode for niri, with validation, safe apply and
 rollback. It is its own Cargo workspace with its own lockfile and build.
 
 `better-monitor` talks to niri through the IPC socket only. Fields that niri
-does not expose over IPC (HDR, startup focus, isolation, mirroring) are stored,
-validated and reported as **config-only**; see
+does not expose over IPC (HDR, startup focus, isolation) are stored, validated
+and reported as **config-only**; a profile `mirror` is applied by the external
+`wl-mirror` client. See
 [IPC-visible vs config-only fields](#ipc-visible-vs-config-only-fields).
 
 ## Features
@@ -19,6 +20,11 @@ validated and reported as **config-only**; see
   make/model/serial/name.
 - Apply through niri's IPC (`Request::Output`) as an ordered action list:
   on → mode → scale → transform → position → VRR → max BPC → off.
+- Apply `mirror` relations with the external `wl-mirror` client
+  (`wl-mirror <source> --fullscreen-output <target>`). Children are tracked in
+  `mirrors.json` so a later apply, restore or watch cycle stops exactly the
+  processes this tool started; a missing `wl-mirror` is reported as a failed
+  mirror step and the rest of the apply still runs.
 - Validate the resulting layout first: refuse a layout with no enabled output,
   overlapping positions, a mirror of a missing/disabled output, mirror + isolated,
   duplicate matches, or invalid scale/mode.
@@ -46,6 +52,7 @@ better-monitor save desk          # all outputs
 better-monitor save desk eDP-1    # just one output
 better-monitor apply desk --dry-run
 better-monitor apply desk
+BETTER_MONITOR_WL_MIRROR=/usr/local/bin/wl-mirror better-monitor apply desk
 better-monitor apply desk --confirm-timeout 20   # roll back unless `confirm`
 better-monitor confirm            # keep the profile applied
 better-monitor cancel             # restore __previous now
@@ -153,8 +160,9 @@ Profiles and rules default to `$XDG_STATE_HOME/better-monitor/` (see
 - `transform` is one of `Normal`, `90`, `180`, `270`, `Flipped`, `Flipped90`,
   `Flipped180`, `Flipped270`.
 - `hdr.mode` is `auto` or `on`; `reference_luminance` is in cd/m².
-- `mirror` names another output (a profile key or connector). It is validated
-  as a relationship but not applied over IPC (see limitations).
+- `mirror` names another output (a profile key or connector) whose content is
+  shown on this output. It is validated as a relationship and applied with the
+  external `wl-mirror` client (see [Mirroring](#mirroring)).
 
 ### Matching
 
@@ -185,7 +193,7 @@ apply report contains a warning; add `name` or `serial` to disambiguate.
 | `hdr` | **no** | config file only |
 | `focus_at_startup` | **no** | startup behaviour, config only |
 | `isolated` | **no** | config file only |
-| `mirror` | **no** | this niri tree does not implement output mirroring |
+| `mirror` | **no** (niri IPC) | applied through `wl-mirror`, see [Mirroring](#mirroring) |
 
 IPC output changes are temporary: niri does not write them into the config.
 `save` can only capture IPC-visible fields, so HDR, startup focus, isolation
@@ -204,9 +212,38 @@ output "DP-1" {
 }
 ```
 
-`mirror` cannot be expressed in this tree's niri config either. A profile that
-mirrors an isolated output is refused; a valid mirror is recorded and reported
-as config-only rather than silently pretended to be applied.
+### Mirroring
+
+niri in this tree has no output-mirror primitive, so `better-monitor` uses the
+external [`wl-mirror`](https://github.com/Ferdi265/wl-mirror) client. For a
+profile entry on `eDP-1` with `"mirror": "DP-1"`, apply runs:
+
+```sh
+wl-mirror DP-1 --fullscreen-output eDP-1
+```
+
+The `wl-mirror` binary must be on `PATH` (or set `BETTER_MONITOR_WL_MIRROR` to
+its path). Children are tracked in `mirrors.json` next to the profile store
+with their output, source, target and PID:
+
+- Re-applying an unchanged relation keeps the running child.
+- Changing the source or removing the field stops the old child; the new
+  relation (if any) is spawned.
+- `restore`, `cancel` and an expired `--confirm-timeout` rollback stop the
+  children started by the applied profile, because `__previous` snapshots do
+  not record mirror relations.
+- `watch` reaps children whose process exited or whose output/source is no
+  longer connected.
+- A missing binary or a failed spawn produces a `failed` field in the report's
+  `mirrors` array with the reason, leaves no PID in the state file, and does
+  not stop the rest of the apply.
+- `--dry-run` spawns nothing and keeps the `config_only` note for `mirror`.
+
+Only PIDs recorded in `mirrors.json` whose `/proc/<pid>/cmdline` still carries
+both output names are signalled, so a recycled PID is left alone.
+
+A profile that mirrors an isolated output is refused; a mirror of a
+disconnected output is reported as a failed mirror step.
 
 ## Safe apply with a confirmation window
 
@@ -415,23 +452,32 @@ it debounces hotplug churn and holds the loop lock.
 | --- | --- |
 | `$XDG_STATE_HOME/better-monitor/profiles.json` | profile store (`version`, `profiles`) |
 | `$XDG_STATE_HOME/better-monitor/rules.json` | rules (`version`, `rules`) |
+| `$XDG_STATE_HOME/better-monitor/mirrors.json` | tracked `wl-mirror` children (`output`, `source`, `target`, `pid`) |
 | `$XDG_STATE_HOME/better-monitor/watch.lock` | PID lock for continuous watch |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state`. `BETTER_MONITOR_STATE` can point
-`profiles.json` elsewhere; rules then default to `rules.json` beside it.
-`BETTER_MONITOR_RULES` overrides the rules path. Writes use a temporary file and
-rename.
+`profiles.json` elsewhere; rules then default to `rules.json` beside it and the
+mirror state to `mirrors.json` beside it. `BETTER_MONITOR_RULES` overrides the
+rules path; `BETTER_MONITOR_WL_MIRROR` overrides the `wl-mirror` binary. Writes
+use a temporary file and rename.
 
 ## Limitations
 
 - **Output topology events do not exist in niri's IPC event stream here.** Watch
   polls `Request::Outputs`; the event stream only wakes it earlier. On a niri
   version with output events, the poll can be increased or removed.
-- **Config-only fields are not applied.** HDR, `focus_at_startup`, `isolated`
-  and `mirror` require config edits or are unsupported in this tree. They are
+- **Config-only fields are not applied.** HDR, `focus_at_startup` and
+  `isolated` require config edits or are unsupported in this tree. They are
   stored, validated where possible and reported, never faked.
-- **Mirroring is not implemented by niri here.** `mirror` exists in the schema
-  for relationships and future use; applying it produces a config-only note.
+- **Mirroring needs `wl-mirror`.** niri here has no mirror primitive, so
+  `mirror` is delegated to the external `wl-mirror` client. Without it the
+  apply still succeeds but the mirror step is reported `failed`.
+- **`wl-mirror` is a separate fullscreen client.** niri places its window; the
+  tool cannot guarantee it lands on the target output if a window rule
+  interferes. `--fullscreen-output` is what pins it in practice.
+- **Mirror cleanup is PID-based.** A child whose process was replaced by an
+  unrelated process (recycled PID) fails the cmdline check and is left alone.
+  Its PID is then dropped from `mirrors.json` so it is never signalled later.
 - **Overlap detection needs known geometry.** An output that is newly connected
   and has no mode/position yet cannot be checked; niri will place it. Check with
   `--dry-run` after the output appears.

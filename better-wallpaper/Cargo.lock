@@ -27,6 +27,7 @@ dependencies = [
  "serde_json",
  "smithay-client-toolkit",
  "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

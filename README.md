@@ -32,8 +32,19 @@ This tree is the Better Desktop fork of niri. Alongside the compositor it ships
 a set of small, independent tools that share niri's IPC and configuration
 conventions: companion (automation, scratchpads, sticky workflow), session,
 monitor, settings, shot, audio, wallpaper, sidepanels and the Noctalia plugin
-source. They live here as separate workspaces so each can be built, tested and
-released on its own.
+source. They are maintained as separate workspaces and mirrored to their own
+repositories, so each can be built, tested and released on its own:
+[better-desktop](https://github.com/fram446742/better-desktop),
+[better-companion](https://github.com/fram446742/better-companion),
+[better-session](https://github.com/fram446742/better-session),
+[better-monitor](https://github.com/fram446742/better-monitor),
+[better-settings](https://github.com/fram446742/better-settings),
+[better-shot](https://github.com/fram446742/better-shot),
+[better-audio](https://github.com/fram446742/better-audio),
+[better-wallpaper](https://github.com/fram446742/better-wallpaper),
+[better-sidepanels](https://github.com/fram446742/better-sidepanels),
+[better-portal](https://github.com/fram446742/better-portal) and
+[better-noctalia-plugins](https://github.com/fram446742/better-noctalia-plugins).
 
 The compositor is built from niri and the work of its community: niri-elite,
 biri, SHORiN, urayde, niri-spicy, Naxdy, demoji, Niri-glass and the corresponding
@@ -45,7 +56,8 @@ Noctalia. Documentation, provenance and the status of every reference project ar
 `docs/ECOSYSTEM_RESEARCH.md` and `docs/ATTRIBUTION.md`. The research file also
 holds the permanent record of rejected ideas: nothing is dropped without a
 written reason and the conditions that would make us revisit it. Ported and
-adapted reference tests are listed in `docs/REFERENCE_TESTS.md`.
+adapted reference tests are listed in `docs/REFERENCE_TESTS.md`; the HDR
+pipeline and its remaining hardware checks are in `docs/HDR.md`.
 
 ## Features
 

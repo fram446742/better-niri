@@ -4979,7 +4979,12 @@ impl Niri {
             SessionLockManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
         let shm_state = ShmState::new::<State>(
             &display_handle,
-            vec![wl_shm::Format::Xbgr8888, wl_shm::Format::Abgr8888],
+            vec![
+                wl_shm::Format::Xbgr8888,
+                wl_shm::Format::Abgr8888,
+                wl_shm::Format::Xrgb2101010,
+                wl_shm::Format::Xbgr2101010,
+            ],
         );
         let output_manager_state =
             OutputManagerState::new_with_xdg_output::<State>(&display_handle);

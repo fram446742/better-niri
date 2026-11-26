@@ -16,6 +16,7 @@ use niri_ipc::{Output, Request, Response};
 use serde::Serialize;
 
 use crate::ipc::{ApplyReport, ApplyStatus, apply_named, apply_profile_object, query_outputs};
+use crate::mirror::{self, MirrorStep};
 use crate::rules::{RuleDecision, RuleStore, build_rules_profile};
 use crate::schema::Store;
 
@@ -292,7 +293,15 @@ pub fn watch_once(
     let current = query_outputs(socket)?;
     let fingerprint = topology_fingerprint(&current);
     let outcome = apply_for_cycle(socket, store, rules, profiles_path, options, &current)?;
-    Ok(build_cycle(true, fingerprint, true, &current, outcome))
+    let mut cycle = build_cycle(true, fingerprint, true, &current, outcome);
+    if !options.dry_run {
+        cycle.warnings.extend(
+            mirror::reap(profiles_path, &current)
+                .iter()
+                .map(MirrorStep::describe),
+        );
+    }
+    Ok(cycle)
 }
 
 /// Runs watch forever, invoking `on_cycle` for every evaluated cycle.
@@ -315,9 +324,17 @@ pub fn run_watch(
     let event_flag = Arc::new(AtomicBool::new(false));
     let _waker = spawn_event_waker(socket.to_path_buf(), Arc::clone(&event_flag));
     let mut state = WatchState::default();
+    let mut mirror_warnings: Vec<String> = Vec::new();
 
     loop {
         let current = query_outputs(socket)?;
+        if !options.dry_run {
+            mirror_warnings.extend(
+                mirror::reap(profiles_path, &current)
+                    .iter()
+                    .map(MirrorStep::describe),
+            );
+        }
         let fingerprint = topology_fingerprint(&current);
         let changed = state.last_fingerprint.as_deref() != Some(&fingerprint);
         let now = Instant::now();
@@ -331,7 +348,8 @@ pub fn run_watch(
                     .map(|outputs| topology_fingerprint(&outputs))
                     .unwrap_or_else(|_| fingerprint.clone());
                 state.mark_applied(post, Instant::now(), options.cooldown);
-                let cycle = build_cycle(false, fingerprint, changed, &current, outcome);
+                let mut cycle = build_cycle(false, fingerprint, changed, &current, outcome);
+                cycle.warnings.append(&mut mirror_warnings);
                 on_cycle(&cycle);
             }
             WatchDecision::Debouncing { .. } | WatchDecision::Idle => {}

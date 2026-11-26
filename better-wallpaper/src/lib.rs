@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod backend;
 pub mod geom;
+pub mod hdr;
 pub mod images;
 pub mod native;
 pub mod schedule;

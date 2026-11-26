@@ -12,6 +12,7 @@
 
 pub mod arrange;
 pub mod ipc;
+pub mod mirror;
 pub mod plan;
 pub mod rules;
 pub mod safe;
@@ -26,6 +27,7 @@ pub use ipc::{
     ApplyReport, ApplyStatus, apply_actions, apply_named, apply_profile_object, query_outputs,
     restore, send_action,
 };
+pub use mirror::{MirrorChild, MirrorRelation, MirrorStatus, MirrorStep};
 pub use plan::{
     ActionPhase, ConfigOnlyNote, Plan, PlannedAction, action_description, plan_profile,
     plan_snapshot, snapshot, validate_layout,

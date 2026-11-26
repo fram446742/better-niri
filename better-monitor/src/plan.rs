@@ -613,12 +613,12 @@ fn config_only_notes(desired: &BTreeMap<String, OutputProfile>) -> Vec<ConfigOnl
                 ),
             });
         }
-        if entry.mirror.is_some() {
+        if let Some(source) = &entry.mirror {
             notes.push(ConfigOnlyNote {
                 output: output.clone(),
                 field: "mirror".to_owned(),
                 detail: format!(
-                    "output mirroring is not exposed over niri IPC in this tree; the mirror relationship for `{output}` is validated and recorded but not applied."
+                    "output mirroring is not an niri IPC action; a real apply runs `wl-mirror {source} --fullscreen-output {output}`. Nothing is spawned for this note (dry run, refusal or explain)."
                 ),
             });
         }

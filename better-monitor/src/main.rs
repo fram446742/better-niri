@@ -47,7 +47,8 @@ fn usage() -> &'static str {
        --make NAME --model NAME --serial NAME   Rule output matches\n\
        --output NAME                Filter rules explain\n\
        --debounce-ms N --poll-ms N --cooldown-ms N   Watch timings\n\n\
-     Socket defaults to $NIRI_SOCKET; state to $XDG_STATE_HOME/better-monitor/."
+     Socket defaults to $NIRI_SOCKET; state to $XDG_STATE_HOME/better-monitor/.\n\
+     `mirror` uses wl-mirror from PATH; set BETTER_MONITOR_WL_MIRROR to override."
 }
 
 #[derive(Debug)]
@@ -394,7 +395,7 @@ fn run(cli: &mut Cli) -> Result<bool, String> {
             Ok(true)
         }
         "restore" => {
-            let report = restore(cli.socket()?, &store, cli.dry_run)?;
+            let report = restore(cli.socket()?, &store, &cli.state, cli.dry_run)?;
             Ok(emit_report(cli, "restore", &report))
         }
         "position" => run_position(cli, &mut store),
@@ -760,6 +761,9 @@ fn print_report_default(report: &ApplyReport) {
             "config-only: {} `{}`: {}",
             note.output, note.field, note.detail
         );
+    }
+    for step in &report.mirrors {
+        eprintln!("{}", step.describe());
     }
     for error in &report.errors {
         eprintln!("error: {error}");

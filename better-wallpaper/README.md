@@ -11,8 +11,9 @@ own lockfile and build.
   video) to file paths, with free-form `metadata` and JSON import/export.
 - **Video wallpapers** on the native backend: `.mp4`, `.mkv`, `.webm`, `.mov`,
   `.m4v` and `.avi` are decoded by `ffmpeg` at the output's buffer size and
-  committed through the same shm path as images. HDR video is tone-mapped to
-  SDR (zscale + Hable); the surface itself stays SDR.
+  committed through the same shm path as images. HDR sources play as PQ/BT.2020
+  on an HDR-active output when the compositor offers `wp_color_manager_v1`;
+  otherwise they are tone-mapped to SDR (zscale + Hable).
 - Optional **playlists** (ordered or deterministically shuffled, with an
   interval), **time rules** (`HH:MM` day/night ranges, including ranges that
   wrap midnight) and **random** scene selection.
@@ -170,6 +171,7 @@ Behaviour:
 | `--backend=auto` but no layer-shell | warning, command backend is used |
 | New output / monitor plugged in | background surface created for it |
 | Output mode or scale change | buffer is re-rendered at the new geometry |
+| Output HDR mode toggles (video playing) | decoder restarts within a second in 10-bit PQ or SDR |
 | Output removed | surface is dropped; the process keeps running |
 | Focused workspace changes (`watch`) | each output re-resolves its workspace image |
 | Output has no named workspace | scene `default` is used |
@@ -179,11 +181,15 @@ Behaviour:
 | Compositor disconnects | session is rebuilt every second until it is back |
 | Image missing or undecodable | dark fallback colour, retried when the file changes |
 
-The native backend commits **SDR sRGB** pixels in `Xrgb8888` (`wl_shm`). It does
-not advertise or convert HDR/wide-gamut content; on an HDR-enabled output the
-compositor tone-maps this SDR surface like any other SDR client. True HDR
-wallpapers would need a `wp_color_management`/`wp_color` surface and a
-`wl_shm`/DMA-BUF format negotiation layer this crate does not implement.
+The native backend commits 8-bit `Xrgb8888` for images and SDR video. HDR video
+gets a 10-bit `Xrgb2101010` surface with a parametric PQ/BT.2020 image
+description (BT.2408 203-nit reference white) attached through
+`wp_color_management_surface_v1`, but only when niri reports the output as
+HDR-active, the compositor advertises the global, and the compositor accepts
+10-bit shm buffers. Any of those missing keeps the SDR path: HDR video is
+tone-mapped to SDR and the compositor treats the surface like any other SDR
+client. Images always stay SDR, which the compositor encodes into its blend
+space itself.
 
 `apply` with the native backend renders every output and **keeps running** so
 the surfaces stay mapped (like `swaybg`); use `watch` to also follow workspace
@@ -204,8 +210,9 @@ Limitations (native backend):
   restart `watch` to pick it up (same as the command backend).
 - Per-output images come from the scene of each output's active workspace; there
   is no per-output override file yet.
-- HDR output is not implemented: the surface is SDR sRGB. HDR *videos* are
-  tone-mapped to SDR; they are never scanned out as PQ/BT.2020.
+- HDR video plays as PQ/BT.2020 only on an HDR-active output with colour
+  management; everything else stays SDR and is tone-mapped. A video is decoded
+  at most once per output, so toggling HDR restarts its decoder.
 - Video wallpapers need `ffmpeg` (and `ffprobe` for HDR detection) in `PATH` or
   `BETTER_WALLPAPER_FFMPEG`/`BETTER_WALLPAPER_FFPROBE`. Decoding is CPU-side at
   30 fps; a 4K video costs more than a static image.

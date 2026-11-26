@@ -230,7 +230,7 @@ fn restore_reapplies_previous_without_overwriting_it() {
     assert_eq!(fake.output("eDP-1").logical.unwrap().scale, 1.5);
     fake.clear_recorded();
 
-    let report = restore(&fake.path, &store, false).unwrap();
+    let report = restore(&fake.path, &store, &temp.profiles, false).unwrap();
 
     assert_eq!(report.status, ApplyStatus::Restored, "{:?}", report.errors);
     assert_eq!(fake.output("eDP-1").logical.unwrap().scale, 1.0);

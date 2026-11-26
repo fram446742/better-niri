@@ -7,10 +7,16 @@
 //! cover the surface and centered; the image for an output is the one resolved
 //! for that output's active workspace, falling back to the scene `default`.
 //!
+//! Images and SDR video use 8-bit `Xrgb8888`. When niri reports the output as
+//! HDR-active and the compositor advertises `wp_color_manager_v1` with a
+//! parametric PQ/BT.2020 description, HDR video is decoded to 10-bit
+//! `Xrgb2101010` and that description is attached to the surface; everything
+//! else keeps the SDR path, which the compositor tone-maps itself.
+//!
 //! niri events arrive on a dedicated thread that reconnects on its own and
 //! feeds a calloop channel, so the Wayland event loop never blocks on IPC. A
-//! one-second timer catches image file changes and retries draws that could not
-//! use a buffer because the compositor still had it.
+//! one-second timer catches image file changes, output HDR toggles and retries
+//! draws that could not use a buffer because the compositor still had it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -37,13 +43,21 @@ use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_output::Transform;
 use wayland_client::protocol::{wl_output, wl_registry, wl_shm, wl_surface};
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_protocols::wp::color_management::v1::client::wp_color_management_surface_v1::WpColorManagementSurfaceV1;
+use wayland_protocols::wp::color_management::v1::client::wp_color_manager_v1::{
+    self, Feature, Primaries, RenderIntent, TransferFunction, WpColorManagerV1,
+};
+use wayland_protocols::wp::color_management::v1::client::wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1;
+use wayland_protocols::wp::color_management::v1::client::wp_image_description_v1::{
+    self, WpImageDescriptionV1,
+};
 
 use crate::geom::{Rotation, Size};
 use crate::images::{self, FileStamp, ImageCache, needs_reload};
 use crate::schedule::{FRAME_MS, TransitionState};
-use crate::video::{self, Video};
-use crate::{Scene, active_workspaces, resolve_at};
+use crate::video::{self, DecodeFormat, Video};
+use crate::{Scene, active_workspaces, hdr, resolve_at};
 
 /// Layer-shell namespace, visible in compositor debugging tools.
 pub const NAMESPACE: &str = "better-wallpaper";
@@ -165,8 +179,14 @@ struct Wallpaper {
     layer_shell: LayerShell,
     output_state: OutputState,
     scene: Scene,
+    /// niri IPC socket, used to poll per-output HDR state.
+    socket: Option<PathBuf>,
     /// Workspace name that is active on each output name.
     active: BTreeMap<String, String>,
+    /// Whether niri reports the output as currently signalling HDR.
+    hdr: BTreeMap<String, bool>,
+    /// `wp_color_manager_v1` state, `None` when HDR content is not usable.
+    color: Option<Color>,
     cache: ImageCache,
     surfaces: Vec<Surface>,
     frame_sender: Sender<()>,
@@ -174,11 +194,48 @@ struct Wallpaper {
     exit: bool,
 }
 
+/// `wp_color_manager_v1` and the shared parametric PQ/BT.2020 description.
+struct Color {
+    manager: WpColorManagerV1,
+    /// Whether the compositor supports the exact description we need.
+    perceptual: bool,
+    parametric: bool,
+    luminances: bool,
+    pq: bool,
+    bt2020: bool,
+    done: bool,
+    description: Option<WpImageDescriptionV1>,
+    ready: bool,
+}
+
+impl Color {
+    fn new(manager: WpColorManagerV1) -> Self {
+        Self {
+            manager,
+            perceptual: false,
+            parametric: false,
+            luminances: false,
+            pq: false,
+            bt2020: false,
+            done: false,
+            description: None,
+            ready: false,
+        }
+    }
+
+    /// The compositor advertised everything the PQ/BT.2020 description needs.
+    fn supported(&self) -> bool {
+        self.done && self.perceptual && self.parametric && self.pq && self.bt2020
+    }
+}
+
 struct Surface {
     output: wl_output::WlOutput,
     layer: LayerSurface,
     pool: SlotPool,
     buffers: Vec<Buffer>,
+    /// Format of the buffers in `buffers`; a change drops them all.
+    buffer_format: Option<wl_shm::Format>,
     /// Logical (surface-local) size from the last configure.
     logical: Size,
     configured: bool,
@@ -195,8 +252,26 @@ struct Surface {
     pending: bool,
     /// Decoder for a video wallpaper on this output.
     video: Option<Video>,
+    /// Decode format of `video`, so a format change restarts it.
+    video_format: DecodeFormat,
+    /// The 10-bit buffer could not be created; keep this output on SDR.
+    hdr_failed: bool,
+    /// The colour management object for this surface, when available.
+    color_surface: Option<WpColorManagementSurfaceV1>,
+    /// Whether the PQ description is currently attached (pending or committed).
+    color_set: bool,
     /// Last frame committed, so a 30 Hz timer does not recopy a slower video.
     last_frame: Option<Arc<Vec<u8>>>,
+}
+
+impl Surface {
+    /// Destroys the per-surface colour management object.
+    fn destroy_color(&mut self) {
+        if let Some(color_surface) = self.color_surface.take() {
+            color_surface.destroy();
+        }
+        self.color_set = false;
+    }
 }
 
 enum NiriEvent {
@@ -220,12 +295,28 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
     let layer_shell = LayerShell::bind(&globals, &qh)
         .map_err(|err| NativeError::Unsupported(format!("zwlr_layer_shell_v1: {err}")))?;
     let output_state = OutputState::new(&globals, &qh);
+    // Version 1 keeps the original `ready` event; every request used here
+    // exists since then. Absent (or refused) means HDR video stays SDR.
+    let color = globals
+        .bind::<WpColorManagerV1, _, _>(&qh, 1..=1, ())
+        .ok()
+        .map(Color::new);
 
     let active = match socket {
         Some(socket) => match query_active(socket) {
             Ok(active) => active,
             Err(err) => {
                 eprintln!("better-wallpaper: {err}; using the scene default for now");
+                BTreeMap::new()
+            }
+        },
+        None => BTreeMap::new(),
+    };
+    let hdr = match socket {
+        Some(socket) => match query_hdr(socket) {
+            Ok(hdr) => hdr,
+            Err(err) => {
+                eprintln!("better-wallpaper: {err}; HDR video will stay on the SDR path");
                 BTreeMap::new()
             }
         },
@@ -240,7 +331,10 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
         layer_shell,
         output_state,
         scene: scene.clone(),
+        socket: socket.map(Path::to_path_buf),
         active,
+        hdr,
+        color,
         cache: ImageCache::new(),
         surfaces: Vec::new(),
         frame_sender,
@@ -251,6 +345,21 @@ fn session(scene: &Scene, socket: Option<&Path>, mode: Mode) -> Result<(), Nativ
     queue
         .roundtrip(&mut state)
         .map_err(|err| NativeError::Failed(format!("initial roundtrip: {err}")))?;
+    state.setup_color(&qh);
+    // The image description becomes usable only after the compositor answers
+    // with `ready`; block here, before anything is drawn, so every later commit
+    // can trust `color_ready()`.
+    queue
+        .roundtrip(&mut state)
+        .map_err(|err| NativeError::Failed(format!("colour roundtrip: {err}")))?;
+    if !state.color_ready() {
+        if state.color.is_some() {
+            debug_log(format_args!(
+                "no parametric PQ/BT.2020 image description; HDR video will be tone-mapped"
+            ));
+        }
+        state.drop_color();
+    }
     let outputs: Vec<_> = state.output_state.outputs().collect();
     for output in outputs {
         state.ensure_surface(&qh, output);
@@ -422,6 +531,17 @@ fn query_active(socket: &Path) -> Result<BTreeMap<String, String>, String> {
     }
 }
 
+/// Whether niri is signalling HDR on each output, keyed by output name.
+fn query_hdr(socket: &Path) -> Result<BTreeMap<String, bool>, String> {
+    match crate::send(socket, Request::Outputs)? {
+        Response::Outputs(outputs) => Ok(outputs
+            .into_iter()
+            .map(|(name, output)| (name, output.hdr_active))
+            .collect()),
+        other => Err(format!("unexpected niri response: {other:?}")),
+    }
+}
+
 impl Wallpaper {
     fn scale_of(&self, output: &wl_output::WlOutput) -> u32 {
         self.output_state
@@ -451,6 +571,70 @@ impl Wallpaper {
             .position(|entry| entry.output == *output)
     }
 
+    /// Whether niri currently signals HDR on this output.
+    fn hdr_active(&self, output: &wl_output::WlOutput) -> bool {
+        self.output_state
+            .info(output)
+            .and_then(|info| info.name)
+            .is_some_and(|name| self.hdr.get(&name).copied().unwrap_or(false))
+    }
+
+    /// Whether a ready PQ/BT.2020 image description can be attached.
+    fn color_ready(&self) -> bool {
+        self.color
+            .as_ref()
+            .is_some_and(|color| color.supported() && color.ready && color.description.is_some())
+    }
+
+    /// Creates the shared parametric description once the manager's advertised
+    /// capabilities are known. The `ready` event arrives on a later roundtrip.
+    fn setup_color(&mut self, qh: &QueueHandle<Self>) {
+        let Some(color) = self.color.as_mut() else {
+            return;
+        };
+        if !color.supported() || color.description.is_some() {
+            return;
+        }
+        let creator = color.manager.create_parametric_creator(qh, ());
+        creator.set_tf_named(TransferFunction::St2084Pq);
+        creator.set_primaries_named(Primaries::Bt2020);
+        if color.luminances {
+            creator.set_luminances(hdr::MIN_LUMINANCE, hdr::MAX_LUMINANCE, hdr::REFERENCE_WHITE);
+        }
+        color.description = Some(creator.create(qh, ()));
+    }
+
+    /// Drops every colour management object and falls back to SDR.
+    fn drop_color(&mut self) {
+        let Some(mut color) = self.color.take() else {
+            return;
+        };
+        if let Some(description) = color.description.take() {
+            description.destroy();
+        }
+        for surface in &mut self.surfaces {
+            surface.destroy_color();
+        }
+        color.manager.destroy();
+    }
+
+    /// Re-reads per-output HDR state; cheap enough to run with a video active.
+    fn refresh_hdr(&mut self) {
+        let Some(socket) = self.socket.as_deref() else {
+            return;
+        };
+        let Ok(hdr) = query_hdr(socket) else {
+            return;
+        };
+        if hdr == self.hdr {
+            return;
+        }
+        self.hdr = hdr;
+        for surface in &mut self.surfaces {
+            surface.pending = true;
+        }
+    }
+
     fn ensure_surface(&mut self, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
         if self.index_of_output(&output).is_some() {
             return;
@@ -471,6 +655,10 @@ impl Wallpaper {
         layer.set_size(0, 0);
         layer.commit();
 
+        let color_surface = self
+            .color
+            .as_ref()
+            .map(|color| color.manager.get_surface(layer.wl_surface(), qh, ()));
         let pool = match SlotPool::new(1 << 20, &self.shm) {
             Ok(pool) => pool,
             Err(err) => {
@@ -483,6 +671,7 @@ impl Wallpaper {
             layer,
             pool,
             buffers: Vec::new(),
+            buffer_format: None,
             logical: Size::default(),
             configured: false,
             current: None,
@@ -493,6 +682,10 @@ impl Wallpaper {
             transition: None,
             pending: false,
             video: None,
+            video_format: DecodeFormat::Sdr,
+            hdr_failed: false,
+            color_surface,
+            color_set: false,
             last_frame: None,
         });
     }
@@ -545,16 +738,20 @@ impl Wallpaper {
         if path.as_deref().is_some_and(video::is_video) {
             let video_path = path.clone().expect("video path");
             self.ensure_video(index, &video_path, buffer);
+            let format = self.surfaces[index].video_format;
             let frame = self.surfaces[index].video.as_ref().and_then(Video::frame);
             let fallback;
             let pixels: &[u8] = match frame.as_ref() {
                 Some(frame) => frame,
                 None => {
-                    fallback = images::render_solid(buffer, FALLBACK_COLOR);
+                    fallback = match format {
+                        DecodeFormat::Hdr => hdr::render_solid(buffer, FALLBACK_COLOR),
+                        DecodeFormat::Sdr => images::render_solid(buffer, FALLBACK_COLOR),
+                    };
                     &fallback
                 }
             };
-            self.commit(index, scale, buffer, pixels, path);
+            self.commit(index, scale, buffer, pixels, path, format);
             if let Some(surface) = self.surfaces.get_mut(index) {
                 surface.transition = None;
                 surface.last_pixels = None;
@@ -613,25 +810,39 @@ impl Wallpaper {
                 return;
             }
         }
-        self.commit(index, scale, buffer, &pixels, path);
+        self.commit(index, scale, buffer, &pixels, path, DecodeFormat::Sdr);
         if let Some(surface) = self.surfaces.get_mut(index) {
             surface.last_pixels = Some(pixels);
         }
     }
 
     fn ensure_video(&mut self, index: usize, path: &Path, size: Size) {
+        let color_ready = self.color_ready();
+        let ten_bit = self.shm.formats().contains(&wl_shm::Format::Xrgb2101010);
+        let output = self
+            .surfaces
+            .get(index)
+            .map(|surface| surface.output.clone());
+        let hdr_active = output
+            .as_ref()
+            .is_some_and(|output| self.hdr_active(output));
         let Some(surface) = self.surfaces.get_mut(index) else {
             return;
         };
-        let matches = surface
-            .video
-            .as_ref()
-            .is_some_and(|video| video.path() == path && video.size() == size);
+        let format = if surface.hdr_failed || surface.color_surface.is_none() {
+            DecodeFormat::Sdr
+        } else {
+            video::decode_format(video::source(path), hdr_active, color_ready, ten_bit)
+        };
+        let matches = surface.video.as_ref().is_some_and(|video| {
+            video.path() == path && video.size() == size && video.format() == format
+        });
         if !matches {
-            surface.video = Video::start(path, size);
+            surface.video = Video::start(path, size, format);
+            surface.video_format = format;
             surface.last_frame = None;
             debug_log(format_args!(
-                "video wallpaper: {} at {}x{}",
+                "video wallpaper: {} at {}x{} ({format:?})",
                 path.display(),
                 size.width,
                 size.height
@@ -651,18 +862,19 @@ impl Wallpaper {
             if self.surfaces[index].transition.is_some() {
                 continue;
             }
-            let (buffer, scale, path) = {
+            let (buffer, scale, path, format) = {
                 let surface = &self.surfaces[index];
                 (
                     surface.current_buffer,
                     surface.current_scale,
                     surface.current.clone(),
+                    surface.video_format,
                 )
             };
             let Some(frame) = self.surfaces[index].video.as_ref().and_then(Video::frame) else {
                 continue;
             };
-            self.commit(index, scale, buffer, &frame, path);
+            self.commit(index, scale, buffer, &frame, path, format);
         }
         self.schedule_frames();
     }
@@ -699,7 +911,7 @@ impl Wallpaper {
             let Some(frame) = frame else {
                 continue;
             };
-            self.commit(index, scale, buffer, &frame, path);
+            self.commit(index, scale, buffer, &frame, path, DecodeFormat::Sdr);
             let Some(surface) = self.surfaces.get_mut(index) else {
                 continue;
             };
@@ -720,13 +932,27 @@ impl Wallpaper {
         buffer_size: Size,
         pixels: &[u8],
         path: Option<PathBuf>,
+        format: DecodeFormat,
     ) {
+        let hdr = format == DecodeFormat::Hdr;
+        let shm_format = if hdr {
+            wl_shm::Format::Xrgb2101010
+        } else {
+            wl_shm::Format::Xrgb8888
+        };
+        let color = if hdr { self.color.as_ref() } else { None };
         let Some(surface) = self.surfaces.get_mut(index) else {
             return;
         };
         let width = buffer_size.width as i32;
         let height = buffer_size.height as i32;
         let stride = width.saturating_mul(4);
+
+        if surface.buffer_format != Some(shm_format) {
+            // Buffers of the other format cannot be attached to this one.
+            surface.buffers.clear();
+            surface.buffer_format = Some(shm_format);
+        }
 
         // Reuse a buffer the compositor has released, so a redraw never
         // overwrites pixels that may still be on screen.
@@ -750,10 +976,9 @@ impl Wallpaper {
                     // the storage alive until it has released it.
                     surface.buffers.remove(0);
                 }
-                let created =
-                    surface
-                        .pool
-                        .create_buffer(width, height, stride, wl_shm::Format::Xrgb8888);
+                let created = surface
+                    .pool
+                    .create_buffer(width, height, stride, shm_format);
                 match created {
                     Ok((buffer, canvas)) => {
                         let len = pixels.len().min(canvas.len());
@@ -763,12 +988,34 @@ impl Wallpaper {
                     }
                     Err(err) => {
                         eprintln!("better-wallpaper: cannot create a shm buffer: {err}");
+                        if hdr {
+                            // Keep the last frame on screen and re-decode this
+                            // output through the SDR path on the next draw.
+                            surface.hdr_failed = true;
+                        }
                         surface.pending = true;
                         return;
                     }
                 }
             }
         };
+
+        // The description travels with the surface commit, so switch it in the
+        // same commit as the pixel format.
+        if hdr {
+            if !surface.color_set
+                && let (Some(color), Some(color_surface)) = (color, surface.color_surface.as_ref())
+                && let Some(description) = color.description.as_ref()
+            {
+                color_surface.set_image_description(description, RenderIntent::Perceptual);
+                surface.color_set = true;
+            }
+        } else if surface.color_set {
+            if let Some(color_surface) = surface.color_surface.as_ref() {
+                color_surface.unset_image_description();
+            }
+            surface.color_set = false;
+        }
 
         let wl_surface = surface.layer.wl_surface().clone();
         wl_surface.set_buffer_scale(scale as i32);
@@ -797,6 +1044,11 @@ impl Wallpaper {
 
     /// Periodic maintenance: redraw changed image files and retry deferred draws.
     fn tick(&mut self) {
+        // HDR toggles are not part of niri's event stream; poll them while a
+        // video is playing so a mode switch is picked up within a second.
+        if self.has_videos() {
+            self.refresh_hdr();
+        }
         for index in 0..self.surfaces.len() {
             if self.surfaces[index]
                 .video
@@ -919,7 +1171,10 @@ impl OutputHandler for Wallpaper {
         _: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        self.surfaces.retain(|surface| surface.output != output);
+        if let Some(index) = self.index_of_output(&output) {
+            let mut surface = self.surfaces.remove(index);
+            surface.destroy_color();
+        }
     }
 }
 
@@ -983,8 +1238,10 @@ impl LayerShellHandler for Wallpaper {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         // The compositor dismissed the background surface (for example because
         // its output went away): drop it. A later `new_output` recreates it.
-        self.surfaces
-            .retain(|surface| surface.layer.wl_surface() != layer.wl_surface());
+        if let Some(index) = self.index_of(layer.wl_surface()) {
+            let mut surface = self.surfaces.remove(index);
+            surface.destroy_color();
+        }
     }
 
     fn configure(
@@ -1019,6 +1276,86 @@ impl LayerShellHandler for Wallpaper {
             surface.pending = true;
             self.draw(index);
         }
+    }
+}
+
+impl Dispatch<WpColorManagerV1, ()> for Wallpaper {
+    fn event(
+        state: &mut Self,
+        _: &WpColorManagerV1,
+        event: <WpColorManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(color) = state.color.as_mut() else {
+            return;
+        };
+        match event {
+            wp_color_manager_v1::Event::SupportedIntent { render_intent } => {
+                color.perceptual |= matches!(render_intent, WEnum::Value(RenderIntent::Perceptual));
+            }
+            wp_color_manager_v1::Event::SupportedFeature { feature } => match feature {
+                WEnum::Value(Feature::Parametric) => color.parametric = true,
+                WEnum::Value(Feature::SetLuminances) => color.luminances = true,
+                _ => {}
+            },
+            wp_color_manager_v1::Event::SupportedTfNamed { tf } => {
+                color.pq |= matches!(tf, WEnum::Value(TransferFunction::St2084Pq));
+            }
+            wp_color_manager_v1::Event::SupportedPrimariesNamed { primaries } => {
+                color.bt2020 |= matches!(primaries, WEnum::Value(Primaries::Bt2020));
+            }
+            wp_color_manager_v1::Event::Done => color.done = true,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpImageDescriptionCreatorParamsV1, ()> for Wallpaper {
+    fn event(
+        _: &mut Self,
+        _: &WpImageDescriptionCreatorParamsV1,
+        _: <WpImageDescriptionCreatorParamsV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpImageDescriptionV1, ()> for Wallpaper {
+    fn event(
+        state: &mut Self,
+        _: &WpImageDescriptionV1,
+        event: <WpImageDescriptionV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(color) = state.color.as_mut() else {
+            return;
+        };
+        match event {
+            wp_image_description_v1::Event::Ready { .. } => color.ready = true,
+            wp_image_description_v1::Event::Failed { cause, msg } => {
+                eprintln!("better-wallpaper: HDR image description rejected ({cause:?}): {msg}");
+                color.ready = false;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpColorManagementSurfaceV1, ()> for Wallpaper {
+    fn event(
+        _: &mut Self,
+        _: &WpColorManagementSurfaceV1,
+        _: <WpColorManagementSurfaceV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 

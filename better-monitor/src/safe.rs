@@ -115,7 +115,7 @@ pub fn cancel(pending_path: &Path) -> Result<bool, String> {
         return Ok(false);
     };
     let store = Store::load(&pending.state).map_err(|err| format!("cannot load state: {err}"))?;
-    restore(&pending.socket, &store, false)?;
+    restore(&pending.socket, &store, &pending.state, false)?;
     clear_pending(pending_path)?;
     Ok(true)
 }
@@ -140,7 +140,7 @@ pub fn expire_pending(
         return Ok(None);
     }
     let store = Store::load(&pending.state).map_err(|err| format!("cannot load state: {err}"))?;
-    let report = restore(&pending.socket, &store, false)?;
+    let report = restore(&pending.socket, &store, &pending.state, false)?;
     clear_pending(pending_path)?;
     Ok(Some(report))
 }
