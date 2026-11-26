@@ -121,8 +121,8 @@ Verified on this branch:
 commit-timing client, an output on the second GPU, rotated transitions, HDR
 mixed contrast, popups/animations, a real portal client), hardware profiling
 across DPMS cycles, and the deferred ports in `docs/UNIMPLEMENTED.md` (window
-groups, layer fades, HDR scan-out colour pipelines/post-blend/HDR cursor,
-Screenshot2). See `docs/validation/hardware.md` and `docs/TESTING.md`.
+groups, layer fades, HDR scan-out colour pipelines/post-blend/HDR cursor). See
+`docs/validation/hardware.md` and `docs/TESTING.md`.
 
 ## What is published
 

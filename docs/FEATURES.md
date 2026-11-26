@@ -123,7 +123,7 @@ state.
 | Region capture | Upstream (image copy) | upstream | upstream | Upstream | Verify HDR→SDR conversion. |
 | Window capture | Upstream (image copy) | upstream + urayde | upstream | Upstream | urayde has cursor-session rework; compare before porting. |
 | Cursor capture | Upstream | urayde | urayde | Integrated | ext-image-copy cursor session refinements. |
-| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur`, KDE output order, colorpicker and the `org.kde.kwin.Screenshot` interface (fullscreen/area/window/interactive, saved-path replies) integrated. |
+| KDE integration | Partial (D-Bus) | kde-niri | kde-niri | Integrated | `org_kde_kwin_blur`, KDE output order, colorpicker, the `org.kde.kwin.Screenshot` interface (fullscreen/area/window/interactive, saved-path replies) and the fd-based `org.kde.KWin.ScreenShot2` interface. |
 | Spectacle support | Absent | kde-niri | kde-niri | Integrated | Through KDE screenshot D-Bus. |
 | PipeWire | Upstream | upstream | upstream | Upstream |  |
 | DMA-BUF → SHM fallback | Upstream | upstream | upstream | Upstream | niri-elite's fallback was merged upstream. |
@@ -147,7 +147,7 @@ state.
 | Blur brightness/contrast | Naxdy | Integrated |
 | Layer fade in/out | Naxdy | Deferred — see `UNIMPLEMENTED.md` |
 | HDR scanout colour pipelines, post-blend encode, HDR cursor plane | niri-spicy | Deferred — see `UNIMPLEMENTED.md` |
-| Screenshot2 `CaptureWorkspace` | Naxdy | Deferred — old interface captures all outputs; see `UNIMPLEMENTED.md` |
+| KDE Screenshot2 fd interface | Naxdy | Integrated | `org.kde.KWin.ScreenShot2` with `CaptureWorkspace`/`CaptureActiveScreen`/`CaptureScreen`/`CaptureActiveWindow`/`CaptureArea`/`CaptureInteractive`, raw RGBA8888 through the client pipe. |
 
 ## Architecture, configuration, tooling
 

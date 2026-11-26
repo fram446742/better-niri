@@ -75,6 +75,8 @@ pub mod click_grab;
 pub mod magnifier_center_grab;
 pub mod move_grab;
 pub mod pick_color_grab;
+#[cfg(feature = "kde")]
+pub mod pick_output_grab;
 pub mod pick_window_grab;
 pub mod resize_grab;
 pub mod scroll_swipe_gesture;

@@ -155,6 +155,11 @@ use crate::dbus::gnome_shell::{GlobalShortcutsPortalBinds, ShellToNiri};
 use crate::dbus::gnome_shell_introspect::{self, IntrospectToNiri, NiriToIntrospect};
 #[cfg(feature = "dbus")]
 use crate::dbus::gnome_shell_screenshot::ScreenshotToNiri;
+#[cfg(feature = "kde")]
+use crate::dbus::kwin_screenshot2::{
+    CaptureTarget as Screenshot2Target, CapturedScreenshot, KwinScreenshot2ToNiri,
+    Screenshot2ReplySender,
+};
 use crate::frame_clock::FrameClock;
 use crate::handlers::image_copy_capture::{
     self as image_copy_capture_impl, CursorCaptureGeometry, ImageCopyCursorSession,
@@ -163,6 +168,10 @@ use crate::handlers::image_copy_capture::{
 use crate::handlers::virtual_keyboard::VirtualKeyboardKeymap;
 use crate::handlers::{XDG_ACTIVATION_TOKEN_TIMEOUT, configure_lock_surface};
 use crate::input::pick_color_grab::PickColorGrab;
+#[cfg(feature = "kde")]
+use crate::input::pick_output_grab::PickOutputGrab;
+#[cfg(feature = "kde")]
+use crate::input::pick_window_grab::PickWindowGrab;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
 use crate::input::{
@@ -591,6 +600,8 @@ pub struct Niri {
     pub screen_cast_picker: ScreenCastPickerUi,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
+    #[cfg(feature = "kde")]
+    pub pick_output: Option<async_channel::Sender<Option<String>>>,
     pub pick_color: Option<async_channel::Sender<Option<niri_ipc::PickedColor>>>,
 
     pub debug_draw_opaque_regions: bool,
@@ -1249,6 +1260,53 @@ impl KeyboardFocus {
 pub struct State {
     pub backend: Backend,
     pub niri: Niri,
+}
+
+#[cfg(feature = "kde")]
+fn send_screenshot2_error(reply: Screenshot2ReplySender, message: impl Into<String>) {
+    let _ = reply.try_send(Err(ScreenshotPortalError::Failed(message.into())));
+}
+
+/// Waits for the encoded PNG in a thread of its own and pairs it with the metadata that was known
+/// when the capture was requested. The capture functions report errors both through their return
+/// value and by dropping the reply sender, so exactly one reply is sent.
+#[cfg(feature = "kde")]
+fn finish_screenshot2(
+    result: Option<anyhow::Result<()>>,
+    png_tx: async_channel::Sender<Result<Arc<[u8]>, String>>,
+    png_rx: async_channel::Receiver<Result<Arc<[u8]>, String>>,
+    reply: Screenshot2ReplySender,
+    scale: f64,
+    screen: Option<String>,
+    window_id: Option<String>,
+) {
+    match result {
+        None => {
+            let _ = png_tx.try_send(Err(String::from("primary renderer is not available")));
+        }
+        Some(Err(err)) => {
+            warn!("error taking a screenshot: {err:?}");
+            let _ = png_tx.try_send(Err(err.to_string()));
+        }
+        Some(Ok(())) => (),
+    }
+    drop(png_tx);
+
+    std::thread::spawn(move || {
+        let result = match png_rx.recv_blocking() {
+            Ok(Ok(png)) => Ok(CapturedScreenshot {
+                png,
+                scale,
+                screen,
+                window_id,
+            }),
+            Ok(Err(message)) => Err(ScreenshotPortalError::Failed(message)),
+            Err(err) => Err(ScreenshotPortalError::Failed(format!(
+                "screenshot reply channel closed: {err}"
+            ))),
+        };
+        let _ = reply.send_blocking(result);
+    });
 }
 
 impl State {
@@ -3972,8 +4030,12 @@ impl State {
 
         let reply_fallback = reply.clone();
         let rv = self.with_screenshot_renderer(
-            |niri, renderer| niri.screenshot_all_outputs(renderer, include_cursor, reply.clone()),
-            |niri, renderer| niri.screenshot_all_outputs(renderer, include_cursor, reply_fallback),
+            |niri, renderer| {
+                niri.screenshot_all_outputs(renderer, include_cursor, None, Some(reply.clone()))
+            },
+            |niri, renderer| {
+                niri.screenshot_all_outputs(renderer, include_cursor, None, Some(reply_fallback))
+            },
         );
 
         match rv {
@@ -4081,9 +4143,17 @@ impl State {
         let reply_on_error = reply.clone();
         let reply_fallback = reply.clone();
         let result = self.with_screenshot_renderer(
-            |niri, renderer| niri.screenshot_area_with_reply(renderer, &output, local_area, reply),
             |niri, renderer| {
-                niri.screenshot_area_with_reply(renderer, &output, local_area, reply_fallback)
+                niri.screenshot_area_with_reply(renderer, &output, local_area, None, Some(reply))
+            },
+            |niri, renderer| {
+                niri.screenshot_area_with_reply(
+                    renderer,
+                    &output,
+                    local_area,
+                    None,
+                    Some(reply_fallback),
+                )
             },
         );
 
@@ -4100,6 +4170,279 @@ impl State {
             }
             Some(Ok(())) => (),
         }
+    }
+
+    #[cfg(feature = "kde")]
+    pub fn on_kwin_screenshot2_msg(&mut self, msg: KwinScreenshot2ToNiri) {
+        match msg {
+            KwinScreenshot2ToNiri::Capture {
+                target,
+                include_cursor,
+                reply,
+            } => match target {
+                Screenshot2Target::Workspace => {
+                    self.handle_screenshot2_workspace(include_cursor, reply);
+                }
+                Screenshot2Target::ActiveScreen => {
+                    match self.niri.layout.active_output().cloned() {
+                        Some(output) => {
+                            self.handle_screenshot2_output(output, include_cursor, reply);
+                        }
+                        None => send_screenshot2_error(reply, "no active output"),
+                    }
+                }
+                Screenshot2Target::Output(name) => {
+                    let output = self
+                        .niri
+                        .global_space
+                        .outputs()
+                        .find(|output| output_matches_name(output, &name))
+                        .cloned();
+                    match output {
+                        Some(output) => {
+                            self.handle_screenshot2_output(output, include_cursor, reply);
+                        }
+                        None => send_screenshot2_error(reply, format!("unknown output: {name}")),
+                    }
+                }
+                Screenshot2Target::ActiveWindow => {
+                    self.handle_screenshot2_window(None, include_cursor, reply);
+                }
+                Screenshot2Target::Window(id) => {
+                    self.handle_screenshot2_window(Some(id), include_cursor, reply);
+                }
+                Screenshot2Target::Area {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => self.handle_screenshot2_area(x, y, width, height, reply),
+            },
+            KwinScreenshot2ToNiri::PickWindow(tx) => {
+                let pointer = self.niri.seat.get_pointer().unwrap();
+                let start_data = PointerGrabStartData {
+                    focus: None,
+                    button: 0,
+                    location: pointer.current_location(),
+                };
+                let grab = PickWindowGrab::new(start_data);
+                pointer.set_grab(self, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
+                self.niri.pick_window = Some(tx);
+                self.niri
+                    .cursor_manager
+                    .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
+                self.niri.queue_redraw_all();
+            }
+            KwinScreenshot2ToNiri::PickOutput(tx) => {
+                let pointer = self.niri.seat.get_pointer().unwrap();
+                let start_data = PointerGrabStartData {
+                    focus: None,
+                    button: 0,
+                    location: pointer.current_location(),
+                };
+                let grab = PickOutputGrab::new(start_data);
+                pointer.set_grab(self, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
+                self.niri.pick_output = Some(tx);
+                self.niri
+                    .cursor_manager
+                    .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
+                self.niri.queue_redraw_all();
+            }
+        }
+    }
+
+    #[cfg(feature = "kde")]
+    fn handle_screenshot2_workspace(
+        &mut self,
+        include_cursor: bool,
+        reply: Screenshot2ReplySender,
+    ) {
+        // All outputs are composited at the highest output scale.
+        let Some(scale) = self
+            .niri
+            .global_space
+            .outputs()
+            .map(|output| output.current_scale().fractional_scale())
+            .max_by(f64::total_cmp)
+        else {
+            send_screenshot2_error(reply, "no outputs");
+            return;
+        };
+
+        let (png_tx, png_rx) = async_channel::bounded(1);
+        let tx = png_tx.clone();
+        let tx_fallback = png_tx.clone();
+        let result = self.with_screenshot_renderer(
+            move |niri, renderer| {
+                niri.screenshot_all_outputs(renderer, include_cursor, Some(tx), None)
+            },
+            move |niri, renderer| {
+                niri.screenshot_all_outputs(renderer, include_cursor, Some(tx_fallback), None)
+            },
+        );
+
+        finish_screenshot2(result, png_tx, png_rx, reply, scale, None, None);
+    }
+
+    #[cfg(feature = "kde")]
+    fn handle_screenshot2_output(
+        &mut self,
+        output: Output,
+        include_cursor: bool,
+        reply: Screenshot2ReplySender,
+    ) {
+        let scale = output.current_scale().fractional_scale();
+        let screen = Some(output.name());
+
+        let (png_tx, png_rx) = async_channel::bounded(1);
+        let tx = png_tx.clone();
+        let tx_fallback = png_tx.clone();
+        let output_fallback = output.clone();
+        let result = self.with_screenshot_renderer(
+            move |niri, renderer| {
+                niri.screenshot_with_replies(
+                    renderer,
+                    &output,
+                    false,
+                    include_cursor,
+                    None,
+                    Some(tx),
+                    None,
+                )
+            },
+            move |niri, renderer| {
+                niri.screenshot_with_replies(
+                    renderer,
+                    &output_fallback,
+                    false,
+                    include_cursor,
+                    None,
+                    Some(tx_fallback),
+                    None,
+                )
+            },
+        );
+
+        finish_screenshot2(result, png_tx, png_rx, reply, scale, screen, None);
+    }
+
+    #[cfg(feature = "kde")]
+    fn handle_screenshot2_window(
+        &mut self,
+        id: Option<MappedId>,
+        include_cursor: bool,
+        reply: Screenshot2ReplySender,
+    ) {
+        let target = match id {
+            Some(id) => self.niri.find_mapped_output_by_id(id),
+            None => self
+                .niri
+                .layout
+                .focus_with_output()
+                .map(|(mapped, output)| (mapped, Some(output))),
+        };
+        let Some((mapped, output)) = target else {
+            send_screenshot2_error(reply, "no window to screenshot");
+            return;
+        };
+        let Some(output) = output else {
+            send_screenshot2_error(reply, "window is not visible");
+            return;
+        };
+
+        // KWin reports window screenshots with a scale of 1 and the window id as metadata.
+        let window_id = Some(mapped.id().get().to_string());
+
+        let (png_tx, png_rx) = async_channel::bounded(1);
+        let tx = png_tx.clone();
+        let tx_fallback = png_tx.clone();
+        let mut result = self.backend.with_primary_renderer(|renderer| {
+            self.niri.screenshot_window_with_replies(
+                renderer,
+                output,
+                mapped,
+                false,
+                include_cursor,
+                None,
+                Some(tx),
+                None,
+            )
+        });
+        if result.is_none() {
+            // Vulkan-only TTY session: no GLES primary renderer.
+            result = self.backend.with_primary_tty_renderer(|renderer| {
+                self.niri.screenshot_window_with_replies(
+                    renderer,
+                    output,
+                    mapped,
+                    false,
+                    include_cursor,
+                    None,
+                    Some(tx_fallback),
+                    None,
+                )
+            });
+        }
+
+        finish_screenshot2(result, png_tx, png_rx, reply, 1.0, None, window_id);
+    }
+
+    #[cfg(feature = "kde")]
+    fn handle_screenshot2_area(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        reply: Screenshot2ReplySender,
+    ) {
+        let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
+            send_screenshot2_error(reply, "screenshot area is too large");
+            return;
+        };
+        if width <= 0 || height <= 0 {
+            send_screenshot2_error(reply, "screenshot area is empty");
+            return;
+        }
+
+        let area = Rectangle::new(Point::from((x, y)), Size::from((width, height)));
+        let Some((output, output_geo)) = self.niri.global_space.outputs().find_map(|output| {
+            let geo = self.niri.global_space.output_geometry(output)?;
+            let right = area.loc.x.checked_add(area.size.w)?;
+            let bottom = area.loc.y.checked_add(area.size.h)?;
+            (area.loc.x >= geo.loc.x
+                && area.loc.y >= geo.loc.y
+                && right <= geo.loc.x + geo.size.w
+                && bottom <= geo.loc.y + geo.size.h)
+                .then(|| (output.clone(), geo))
+        }) else {
+            send_screenshot2_error(reply, "screenshot area must be contained by one output");
+            return;
+        };
+
+        let local_area = Rectangle::new(area.loc - output_geo.loc, area.size);
+        let scale = output.current_scale().fractional_scale();
+
+        let (png_tx, png_rx) = async_channel::bounded(1);
+        let tx = png_tx.clone();
+        let tx_fallback = png_tx.clone();
+        let output_fallback = output.clone();
+        let result = self.with_screenshot_renderer(
+            move |niri, renderer| {
+                niri.screenshot_area_with_reply(renderer, &output, local_area, Some(tx), None)
+            },
+            move |niri, renderer| {
+                niri.screenshot_area_with_reply(
+                    renderer,
+                    &output_fallback,
+                    local_area,
+                    Some(tx_fallback),
+                    None,
+                )
+            },
+        );
+
+        finish_screenshot2(result, png_tx, png_rx, reply, scale, None, None);
     }
 
     #[cfg(feature = "dbus")]
@@ -5112,6 +5455,8 @@ impl Niri {
             screen_cast_picker,
 
             pick_window: None,
+            #[cfg(feature = "kde")]
+            pick_output: None,
             pick_color: None,
 
             debug_draw_opaque_regions: false,
@@ -11806,7 +12151,8 @@ impl Niri {
         renderer: &mut R,
         output: &Output,
         area: Rectangle<i32, Logical>,
-        path_reply: ScreenshotPathReplySender,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
     ) -> anyhow::Result<()>
     where
         OutputRenderElements<R>: RenderElement<R>,
@@ -11879,10 +12225,10 @@ impl Niri {
         self.save_screenshot_with_replies(
             physical_area.size,
             cropped,
-            true,
+            ipc_reply.is_none(),
             None,
-            None,
-            Some(path_reply),
+            ipc_reply,
+            path_reply,
         )
         .context("error saving screenshot area")
     }
@@ -12053,7 +12399,8 @@ impl Niri {
         &mut self,
         renderer: &mut R,
         include_pointer: bool,
-        path_reply: ScreenshotPathReplySender,
+        ipc_reply: Option<ScreenshotReplySender>,
+        path_reply: Option<ScreenshotPathReplySender>,
     ) -> anyhow::Result<()>
     where
         OutputRenderElements<R>: RenderElement<R>,
@@ -12155,8 +12502,15 @@ impl Niri {
         )
         .context("error copying framebuffer")?;
 
-        self.save_screenshot_with_replies(geo.size, pixels, true, None, None, Some(path_reply))
-            .context("error saving screenshot")
+        self.save_screenshot_with_replies(
+            geo.size,
+            pixels,
+            ipc_reply.is_none(),
+            None,
+            ipc_reply,
+            path_reply,
+        )
+        .context("error saving screenshot")
     }
 
     pub fn clear_input_state(&mut self) {

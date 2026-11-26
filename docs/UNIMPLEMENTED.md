@@ -98,23 +98,21 @@ into a per-output closing list instead of dropping it, (4) advance/remove in
 `advance_animations`, (5) add config parsing and tests. Reference:
 `Naxdy/niri` `4df357ee`, `230e5705`.
 
-## 4. KDE Screenshot2 `CaptureWorkspace` / Plasma portal
+## 4. KDE Screenshot2 — landed
 
-**Missing:** the newer KDE Screenshot2 fd-based interface with
-`CaptureWorkspace`. The old `org.kde.kwin.Screenshot` interface we implement
-already captures all outputs through `screenshotFullscreen`, so Spectacle’s
-main path works, but Plasma’s portal talks to the newer interface.
+`org.kde.KWin.ScreenShot2` is served from its own connection at
+`/org/kde/KWin/ScreenShot2` alongside the old `org.kde.kwin.Screenshot`
+interface. It implements `CaptureWorkspace`, `CaptureActiveScreen`,
+`CaptureScreen`, `CaptureActiveWindow`, `CaptureArea` and `CaptureInteractive`
+on top of niri's screenshot pipeline: capture replies with the encoded PNG in
+memory (no file is written), which is decoded to RGBA8888 and written into the
+client's pipe after the metadata reply, as KWin does. Metadata includes
+`type`/`width`/`height`/`stride`/`scale`/`format`, plus `screen` or `windowId`
+where they apply.
 
-**Why it is not a method alias:** Screenshot2 passes a writable pipe fd and
-returns image metadata; it needs a screenshot-output adapter around our
-`ScreenshotPathReplySender` pipeline and a second D-Bus object/name setup.
-That is a contained port but it should be validated against a real Plasma
-portal, which is not installed here.
-
-**Plan:** port `kwin_screenshot2.rs` from `Naxdy/niri`, adapt
-`ScreenshotOutput` to write into the supplied fd, expose `captureWorkspace` as
-`ScreenshotTarget::AllOutputs`, and add a D-Bus smoke test with a private bus
-(no compositor). Validate with Spectacle + the Plasma portal afterwards.
+Interactive screen picks use a new `PickOutputGrab`; window picks reuse the
+existing `PickWindowGrab`. Validation against a real Plasma portal or Spectacle
+is still pending because no Plasma session is installed here.
 
 ## 5. better-shot true layer-shell pins — landed
 

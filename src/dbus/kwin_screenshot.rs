@@ -28,7 +28,7 @@ impl KwinScreenshot {
     }
 }
 
-fn portal_error(error: ScreenshotPortalError) -> fdo::Error {
+pub(super) fn portal_error(error: ScreenshotPortalError) -> fdo::Error {
     match error {
         ScreenshotPortalError::Cancelled => {
             fdo::Error::Failed("screenshot was canceled".to_owned())

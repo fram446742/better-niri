@@ -305,7 +305,8 @@ compositor IPC fallback.
 ## Cargo features implemented so far
 
 - `kde` (default on): `org_kde_kwin_blur`, `kde_output_order_v1`, the KDE colour
-  picker and `org.kde.kwin.Screenshot`.
+  picker, `org.kde.kwin.Screenshot` and the fd-based
+  `org.kde.KWin.ScreenShot2` screenshot interface.
 - `cursor` (default on): SVG/scalable cursor rendering (`resvg`/`usvg` are
   optional dependencies) and shake-to-enlarge. Off builds fall back to XCursor
   bitmaps and compile the shake path out.

@@ -19,6 +19,8 @@ pub mod gnome_shell_screenshot;
 pub mod kwin_colorpicker;
 #[cfg(feature = "kde")]
 pub mod kwin_screenshot;
+#[cfg(feature = "kde")]
+pub mod kwin_screenshot2;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
 
@@ -50,6 +52,8 @@ pub struct DBusServers {
     pub conn_kde_colorpicker: Option<Connection>,
     #[cfg(feature = "kde")]
     pub conn_kde_screenshot: Option<Connection>,
+    #[cfg(feature = "kde")]
+    pub conn_kde_screenshot2: Option<Connection>,
     pub conn_gnome_shell: Option<Connection>,
     pub conn_introspect: Option<Connection>,
     #[cfg(feature = "xdp-gnome-screencast")]
@@ -130,6 +134,19 @@ impl DBusServers {
             {
                 let screenshot = kwin_screenshot::KwinScreenshot::new(to_niri_kde_screenshot);
                 dbus.conn_kde_screenshot = try_start(screenshot, is_session_instance);
+            }
+
+            #[cfg(feature = "kde")]
+            {
+                let (to_niri, from_screenshot2) = calloop::channel::channel();
+                niri.event_loop
+                    .insert_source(from_screenshot2, move |event, _, state| match event {
+                        calloop::channel::Event::Msg(msg) => state.on_kwin_screenshot2_msg(msg),
+                        calloop::channel::Event::Closed => (),
+                    })
+                    .unwrap();
+                let screenshot = kwin_screenshot2::KwinScreenshot2::new(to_niri);
+                dbus.conn_kde_screenshot2 = try_start(screenshot, is_session_instance);
             }
 
             #[cfg(feature = "kde")]
