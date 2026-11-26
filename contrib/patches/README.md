@@ -2,11 +2,11 @@
 
 ## `nsticky-native-sticky.patch`
 
-better-nsticky is an independent repository, so its native-sticky delegation is
+loom-nsticky is an independent repository, so its native-sticky delegation is
 kept here as a patch against the `source/` tree:
 
 ```sh
-cd /path/to/better-nsticky/source
+cd /path/to/loom-nsticky/source
 patch -p1 < /path/to/better-niri/contrib/patches/nsticky-native-sticky.patch
 cargo test --all-targets
 ```

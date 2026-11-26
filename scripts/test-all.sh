@@ -121,7 +121,8 @@ run packaging-verify bash "$ROOT/packaging/scripts/verify.sh"
 run completions-check python3 "$ROOT/packaging/scripts/generate-completions.py" --check
 run noctalia-plugins bash "$ROOT/loom-noctalia-plugins/verify.sh"
 
-NSTICKY=${NSTICKY_SOURCE:-/home/franc/Projects/better-nsticky/source}
+NSTICKY=${NSTICKY_SOURCE:-$HOME/Projects/loom-nsticky/source}
+[ -f "$NSTICKY/Cargo.toml" ] || NSTICKY=$HOME/Projects/better-nsticky/source
 if [ -f "$NSTICKY/Cargo.toml" ]; then
     run_in "$NSTICKY" nsticky-tests cargo test --all-targets
     run_in "$NSTICKY" nsticky-fmt cargo fmt --check
