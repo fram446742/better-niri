@@ -682,7 +682,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         if let Some(window) = tab_window {
             for (tile_idx, (tile, tile_off)) in col.tiles().enumerate() {
-                if tile.window().id() == window {
+                if tile.has_window(window) {
                     let base_pos = view_off + col_off + tile_off;
                     let pos = base_pos + col_render_off + tile.render_offset();
                     let pos = pos.to_physical_precise_round(scale).to_logical(scale);
@@ -784,7 +784,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     .columns
                     .iter_mut()
                     .flat_map(|col| col.tiles.iter_mut())
-                    .find(|tile| tile.window().id() == window_id)
+                    .find(|tile| tile.has_window(window_id))
                 else {
                     return;
                 };
@@ -839,6 +839,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let col = &self.columns[self.active_column_idx];
         col.pending_sizing_mode().is_fullscreen()
+    }
+
+    /// Whether the active tile is a group, i.e. a new tiled window should join it.
+    pub fn active_tile_is_grouped(&self) -> bool {
+        self.columns
+            .get(self.active_column_idx)
+            .is_some_and(|col| col.tiles[col.active_tile_idx].is_grouped_tile())
+    }
+
+    /// Adds a window to the active tile's group as a new tab and focuses it.
+    pub fn add_window_to_active_group(&mut self, window: W) {
+        let col = &mut self.columns[self.active_column_idx];
+        let tile = &mut col.tiles[col.active_tile_idx];
+        tile.add_window(window);
+        tile.start_tab_indicator_open_animation();
+        col.update_tile_sizes(false);
     }
 
     pub fn deactivate_fullscreen(&mut self) {
@@ -1767,8 +1783,19 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .tiles
             .iter_mut()
             .enumerate()
-            .find(|(_, tile)| tile.window().id() == window)
+            .find(|(_, tile)| tile.has_window(window))
             .unwrap();
+
+        // Only the active tab of a group affects the layout; a background window's commit just
+        // gets its transaction acked.
+        if tile.focused_window().id() != window {
+            if let Some(serial) = serial
+                && let Some(w) = tile.window_mut_by_id(window)
+            {
+                w.on_commit(serial);
+            }
+            return;
+        }
 
         let resize = tile.window_mut().interactive_resize_data();
 
@@ -2046,7 +2073,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     {
         let (tile, mut tile_pos) = self
             .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == window)
+            .find(|(tile, _)| tile.has_window(window))
             .unwrap();
 
         let Some(snapshot) = tile.take_unmap_snapshot() else {
@@ -2062,7 +2089,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .find_map(|(col_idx, col)| {
                 col.tiles
                     .iter()
-                    .position(|tile| tile.window().id() == window)
+                    .position(|tile| tile.has_window(window))
                     .map(move |tile_idx| (col_idx, tile_idx))
             })
             .unwrap();
@@ -2111,7 +2138,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     {
         let Some(snapshot) = self
             .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == window)
+            .find(|(tile, _)| tile.has_window(window))
             .and_then(|(tile, _)| tile.take_unmap_snapshot())
         else {
             return;
@@ -2314,6 +2341,298 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns[self.active_column_idx].focus_index(index);
     }
 
+    /// Turns the focused tile into a group of one, or spreads a group's windows into tiles.
+    pub fn toggle_group(&mut self, window: Option<&W::Id>) -> bool {
+        if self.interactive_resize.is_some() {
+            return false;
+        }
+
+        let Some((col_idx, tile_idx)) = self.position_of_window(window) else {
+            return false;
+        };
+
+        // A tabbed column already uses its tab indicator; don't nest a group inside a tab.
+        if self.columns[col_idx].display_mode == ColumnDisplay::Tabbed {
+            return false;
+        }
+
+        if self.columns[col_idx].tiles[tile_idx].is_grouped_tile() {
+            // Ungroup in place: the extra windows become tiles below their group.
+            let new_tiles = self.columns[col_idx].tiles[tile_idx].ungroup_all();
+            for (offset, tile) in new_tiles.into_iter().enumerate() {
+                self.add_tile_to_column(col_idx, Some(tile_idx + 1 + offset), tile, false);
+            }
+            self.columns[col_idx].update_tile_sizes(true);
+            return true;
+        }
+
+        let column = &mut self.columns[col_idx];
+        let tile = &mut column.tiles[tile_idx];
+        tile.group();
+        tile.start_tab_indicator_open_animation();
+        let id = tile.focused_window().id().clone();
+        column.update_tile_sizes(false);
+        self.update_window(&id, None);
+        true
+    }
+
+    /// Focuses the next tab of the active tile, if it is a group.
+    pub fn focus_next_tab(&mut self) -> bool {
+        if self.interactive_resize.is_some() || self.columns.is_empty() {
+            return false;
+        }
+
+        let column = &mut self.columns[self.active_column_idx];
+        let tile = &mut column.tiles[column.active_tile_idx];
+        if !tile.is_grouped_tile() {
+            return false;
+        }
+
+        let id = tile.focus_next().id().clone();
+        self.update_window(&id, None);
+        true
+    }
+
+    /// Focuses the previous tab of the active tile, if it is a group.
+    pub fn focus_prev_tab(&mut self) -> bool {
+        if self.interactive_resize.is_some() || self.columns.is_empty() {
+            return false;
+        }
+
+        let column = &mut self.columns[self.active_column_idx];
+        let tile = &mut column.tiles[column.active_tile_idx];
+        if !tile.is_grouped_tile() {
+            return false;
+        }
+
+        let id = tile.focus_prev().id().clone();
+        self.update_window(&id, None);
+        true
+    }
+
+    /// Moves the window into the group in `direction`, or out of its group.
+    ///
+    /// Moving onto a grouped tile joins that group. Moving a group's tab away from any group
+    /// makes it a tile of its own, next to the group for up/down and in a new column for
+    /// left/right.
+    pub fn move_window_into_or_out_of_group(
+        &mut self,
+        window: Option<&W::Id>,
+        direction: niri_config::WindowMoveDirection,
+    ) {
+        use niri_config::WindowMoveDirection;
+
+        if self.columns.is_empty() || self.interactive_resize.is_some() {
+            return;
+        }
+
+        let Some((src_col, src_tile)) = self.position_of_window(window) else {
+            return;
+        };
+        let id = self.columns[src_col].tiles[src_tile]
+            .focused_window()
+            .id()
+            .clone();
+
+        let src_grouped = self.columns[src_col].tiles[src_tile].is_grouped_tile();
+        let source_pos = self.tile_render_pos(src_col, src_tile);
+
+        // Pick the neighbouring tile, treating left/right as "the other column".
+        let (target_col, mut target_tile, can_move) = match direction {
+            WindowMoveDirection::Up => (src_col, src_tile.saturating_sub(1), src_tile != 0),
+            WindowMoveDirection::Down => {
+                let last = self.columns[src_col].tiles.len() - 1;
+                (src_col, min(src_tile + 1, last), src_tile != last)
+            }
+            WindowMoveDirection::Left => (src_col.saturating_sub(1), 0, src_col != 0),
+            WindowMoveDirection::Right => {
+                let last = self.columns.len() - 1;
+                (min(src_col + 1, last), 0, src_col != last)
+            }
+        };
+
+        // Horizontally, prefer joining an existing group in the target column.
+        if target_col != src_col && !src_grouped {
+            match self.columns[target_col]
+                .tiles
+                .iter()
+                .position(|tile| tile.is_grouped_tile())
+            {
+                Some(idx) => target_tile = idx,
+                None => {
+                    // Nothing to join: fall back to the plain move.
+                    match direction {
+                        WindowMoveDirection::Left => self.consume_or_expel_window_left(Some(&id)),
+                        _ => self.consume_or_expel_window_right(Some(&id)),
+                    }
+                    return;
+                }
+            }
+        }
+
+        let target_grouped = self.columns[target_col].tiles[target_tile].is_grouped_tile();
+
+        if can_move && target_grouped {
+            let Some((window, removed)) = self.detach_window(&id) else {
+                return;
+            };
+            let (target_col, target_tile) =
+                self.group_target_after_detach(src_col, src_tile, target_col, direction, removed);
+
+            let tile = &mut self.columns[target_col].tiles[target_tile];
+            tile.add_window(window);
+            tile.start_tab_indicator_open_animation();
+            self.columns[target_col].update_tile_sizes(false);
+            self.activate_window(&id);
+            self.update_window(&id, None);
+            return;
+        }
+
+        if !src_grouped {
+            // Neither side is grouped: move the whole tile like the plain actions do.
+            match direction {
+                WindowMoveDirection::Up => {
+                    self.columns[src_col].move_up(false);
+                }
+                WindowMoveDirection::Down => {
+                    self.columns[src_col].move_down(false);
+                }
+                WindowMoveDirection::Left => self.consume_or_expel_window_left(Some(&id)),
+                WindowMoveDirection::Right => self.consume_or_expel_window_right(Some(&id)),
+            }
+            return;
+        }
+
+        // Expel the tab out of its group, as a tile of its own.
+        let Some((window, _removed)) = self.detach_window(&id) else {
+            return;
+        };
+        let new_tile = Tile::new(
+            window,
+            self.view_size,
+            self.scale,
+            self.clock.clone(),
+            self.options.clone(),
+        );
+        let width = ColumnWidth::Fixed(new_tile.tile_size().w);
+
+        let anim = Some(self.options.animations.window_movement.0);
+        let (col_idx, tile_idx) = match direction {
+            // The group stayed where it was when it had more windows, otherwise it shrank.
+            WindowMoveDirection::Up => {
+                let idx = src_tile;
+                self.add_tile_to_column(src_col, Some(idx), new_tile, true);
+                (src_col, idx)
+            }
+            WindowMoveDirection::Down => {
+                let idx = min(src_tile + 1, self.columns[src_col].tiles.len());
+                self.add_tile_to_column(src_col, Some(idx), new_tile, true);
+                (src_col, idx)
+            }
+            WindowMoveDirection::Left => {
+                self.add_tile(Some(src_col), new_tile, true, width, false, anim);
+                (src_col, 0)
+            }
+            WindowMoveDirection::Right => {
+                self.add_tile(Some(src_col + 1), new_tile, true, width, false, anim);
+                (src_col + 1, 0)
+            }
+        };
+
+        if let (Some(source), Some(target)) = (source_pos, self.tile_render_pos(col_idx, tile_idx))
+        {
+            let mut from = source - target;
+            // Expelling left puts the new column where the group was, so without this the tab
+            // would appear in place; start it where the group moved to instead.
+            if matches!(direction, WindowMoveDirection::Left) && col_idx + 1 < self.columns.len() {
+                from.x += self.column_x(col_idx + 1) - self.column_x(col_idx);
+            }
+            self.columns[col_idx].tiles[tile_idx].animate_move_from(from);
+        }
+        self.update_window(&id, None);
+    }
+
+    /// Finds (column, tile) of a window, or of the active tile when `window` is `None`.
+    fn position_of_window(&self, window: Option<&W::Id>) -> Option<(usize, usize)> {
+        match window {
+            Some(window) => self.position_of(window),
+            None => {
+                let column = self.columns.get(self.active_column_idx)?;
+                Some((self.active_column_idx, column.active_tile_idx))
+            }
+        }
+    }
+
+    fn tile_render_pos(&self, col_idx: usize, tile_idx: usize) -> Option<Point<f64, Logical>> {
+        let column = self.columns.get(col_idx)?;
+        let tile = column.tiles.get(tile_idx)?;
+        let source_x = self.column_x(col_idx) + column.render_offset().x;
+        let tile_offset = column.tile_offset(tile_idx) + tile.render_offset();
+        Some(Point::new(source_x + tile_offset.x, tile_offset.y))
+    }
+
+    /// Takes a window out of its tile, removing the tile if that was its only window.
+    ///
+    /// Returns the window and whether a tile was removed.
+    fn detach_window(&mut self, id: &W::Id) -> Option<(W, bool)> {
+        let (col_idx, tile_idx) = self.position_of(id)?;
+
+        if self.columns[col_idx].tiles[tile_idx].windows().count() == 1 {
+            let removed = self.remove_tile_by_idx(
+                col_idx,
+                tile_idx,
+                Transaction::new(),
+                Some(self.options.animations.window_movement.0),
+            );
+            return Some((removed.tile.take_window(), true));
+        }
+
+        let window = self.columns[col_idx].tiles[tile_idx].ungroup_single(id)?;
+        Some((window, false))
+    }
+
+    /// Where the target group ended up after a window was detached from `src`.
+    fn group_target_after_detach(
+        &self,
+        src_col: usize,
+        src_tile: usize,
+        target_col: usize,
+        direction: niri_config::WindowMoveDirection,
+        removed: bool,
+    ) -> (usize, usize) {
+        use niri_config::WindowMoveDirection;
+
+        let mut target_col = target_col;
+        if removed && src_col < target_col {
+            target_col = target_col.saturating_sub(1);
+        }
+
+        if target_col != src_col {
+            if let Some(idx) = self.columns[target_col]
+                .tiles
+                .iter()
+                .position(|tile| tile.is_grouped_tile())
+            {
+                return (target_col, idx);
+            }
+            return (target_col, 0);
+        }
+
+        // Same column: find the nearest group in the direction of the move.
+        let start = min(
+            src_tile,
+            self.columns[src_col].tiles.len().saturating_sub(1),
+        );
+        let idx = match direction {
+            WindowMoveDirection::Up => (0..start)
+                .rev()
+                .find(|&i| self.columns[src_col].tiles[i].is_grouped_tile()),
+            _ => (start..self.columns[src_col].tiles.len())
+                .find(|&i| self.columns[src_col].tiles[i].is_grouped_tile()),
+        };
+        (src_col, idx.unwrap_or(start))
+    }
+
     pub fn focus_down(&mut self) -> bool {
         if self.columns.is_empty() {
             return false;
@@ -2470,6 +2789,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some((col_idx, tile_idx)) = self.position_of(window) else {
             return false;
         };
+        // Minimizing one tab would take the rest of the group out of the layout.
+        if self.columns[col_idx].tiles[tile_idx].is_grouped_tile() {
+            return false;
+        }
         if self.columns[col_idx].tiles[tile_idx]
             .window()
             .is_minimized()
@@ -2691,6 +3014,99 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns[self.active_column_idx].move_up(focus)
     }
 
+    /// Consumes the window into the adjacent column's group, or expels the tab as a new column.
+    ///
+    /// Returns whether it handled the move. When neither side is grouped, the caller's plain
+    /// tile-based consume/expel is the right behavior.
+    fn move_window_to_neighbor_group(&mut self, id: &W::Id, direction: ScrollDirection) -> bool {
+        let Some((src_col, src_tile)) = self.position_of(id) else {
+            return false;
+        };
+        let src_grouped = self.columns[src_col].tiles[src_tile].is_grouped_tile();
+
+        let neighbor = match direction {
+            ScrollDirection::Left => self.prev_interactive_column(src_col),
+            ScrollDirection::Right => self.next_interactive_column(src_col),
+        };
+
+        if let Some(neighbor_col) = neighbor
+            && self.columns[neighbor_col]
+                .tiles
+                .iter()
+                .any(|tile| tile.is_grouped_tile())
+        {
+            let source_pos = self.tile_render_pos(src_col, src_tile);
+            let Some((window, removed)) = self.detach_window(id) else {
+                return true;
+            };
+
+            // Removing the source column shifts a neighbor on its right left by one.
+            let target_col = if removed && src_col < neighbor_col {
+                neighbor_col - 1
+            } else {
+                neighbor_col
+            };
+
+            let target_tile = self.columns[target_col]
+                .tiles
+                .iter()
+                .position(|tile| tile.is_grouped_tile())
+                .expect("the neighbor column had a group");
+            let target_pos = self.tile_render_pos(target_col, target_tile);
+
+            let tile = &mut self.columns[target_col].tiles[target_tile];
+            tile.add_window(window);
+            tile.start_tab_indicator_open_animation();
+            self.columns[target_col].update_tile_sizes(false);
+
+            // The joined window slides from where its old tile was.
+            if let (Some(source), Some(target)) = (source_pos, target_pos) {
+                self.columns[target_col].tiles[target_tile].animate_move_from(source - target);
+            }
+
+            self.activate_window(id);
+            self.update_window(id, None);
+            return true;
+        }
+
+        if !src_grouped {
+            return false;
+        }
+
+        // A tab leaving its group becomes its own column.
+        let source_pos = self.tile_render_pos(src_col, src_tile);
+        let Some((window, _removed)) = self.detach_window(id) else {
+            return true;
+        };
+        let new_tile = Tile::new(
+            window,
+            self.view_size,
+            self.scale,
+            self.clock.clone(),
+            self.options.clone(),
+        );
+        let width = ColumnWidth::Fixed(new_tile.tile_size().w);
+        let insert_col = match direction {
+            ScrollDirection::Left => src_col,
+            ScrollDirection::Right => src_col + 1,
+        };
+
+        self.add_tile(
+            Some(insert_col),
+            new_tile,
+            true,
+            width,
+            false,
+            Some(self.options.animations.window_movement.0),
+        );
+
+        if let (Some(source), Some(target)) = (source_pos, self.tile_render_pos(insert_col, 0)) {
+            self.columns[insert_col].tiles[0].animate_move_from(source - target);
+        }
+        self.update_window(id, None);
+        true
+    }
+
     pub fn consume_or_expel_window_left(&mut self, window: Option<&W::Id>) {
         if self.columns.is_empty() {
             return;
@@ -2703,7 +3119,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|(col_idx, col)| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col_idx, tile_idx))
                 })
                 .unwrap()
@@ -2713,13 +3129,26 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             (source_col_idx, source_tile_idx)
         };
 
-        let source_column = &self.columns[source_col_idx];
+        {
+            let source_column = &self.columns[source_col_idx];
 
-        // Minimized windows are never moved by layout operations.
-        if source_column.tiles[source_tile_idx].window().is_minimized() {
-            return;
+            // Minimized windows are never moved by layout operations.
+            if source_column.tiles[source_tile_idx].window().is_minimized() {
+                return;
+            }
+
+            let id = window.cloned().unwrap_or_else(|| {
+                source_column.tiles[source_tile_idx]
+                    .focused_window()
+                    .id()
+                    .clone()
+            });
+            if self.move_window_to_neighbor_group(&id, ScrollDirection::Left) {
+                return;
+            }
         }
 
+        let source_column = &self.columns[source_col_idx];
         let prev_off = source_column.tile_offset(source_tile_idx);
 
         let source_tile_was_active = self.active_column_idx == source_col_idx
@@ -2816,7 +3245,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|(col_idx, col)| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col_idx, tile_idx))
                 })
                 .unwrap()
@@ -2828,12 +3257,26 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let cur_x = self.column_x(source_col_idx);
 
-        let source_column = &self.columns[source_col_idx];
-        // Minimized windows are never moved by layout operations.
-        if source_column.tiles[source_tile_idx].window().is_minimized() {
-            return;
+        {
+            let source_column = &self.columns[source_col_idx];
+
+            // Minimized windows are never moved by layout operations.
+            if source_column.tiles[source_tile_idx].window().is_minimized() {
+                return;
+            }
+
+            let id = window.cloned().unwrap_or_else(|| {
+                source_column.tiles[source_tile_idx]
+                    .focused_window()
+                    .id()
+                    .clone()
+            });
+            if self.move_window_to_neighbor_group(&id, ScrollDirection::Right) {
+                return;
+            }
         }
 
+        let source_column = &self.columns[source_col_idx];
         let mut offset = source_column.render_offset();
         let prev_off = source_column.tile_offset(source_tile_idx);
 
@@ -2926,6 +3369,37 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         };
 
+        // If the target column has a group, the window joins it rather than becoming a tile.
+        if let Some(target_tile_idx) = self.columns[target_column_idx]
+            .tiles
+            .iter()
+            .position(|tile| tile.is_grouped_tile())
+        {
+            let id = self.columns[source_column_idx].tiles[source_tile_idx]
+                .focused_window()
+                .id()
+                .clone();
+            let source_pos = self.tile_render_pos(source_column_idx, source_tile_idx);
+            let Some((window, _)) = self.detach_window(&id) else {
+                return;
+            };
+
+            let target_pos = self.tile_render_pos(target_column_idx, target_tile_idx);
+            let tile = &mut self.columns[target_column_idx].tiles[target_tile_idx];
+            tile.add_window(window);
+            tile.start_tab_indicator_open_animation();
+            self.columns[target_column_idx].update_tile_sizes(false);
+
+            if let (Some(source), Some(target)) = (source_pos, target_pos) {
+                self.columns[target_column_idx].tiles[target_tile_idx]
+                    .animate_move_from(source - target);
+            }
+
+            self.activate_window(&id);
+            self.update_window(&id, None);
+            return;
+        }
+
         let mut offset = self.columns[source_column_idx].render_offset();
         offset.x += self.column_x(source_column_idx);
         offset.x -= self.column_x(target_column_idx);
@@ -2951,6 +3425,47 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let source_col_idx = self.active_column_idx;
         let target_col_idx = self.active_column_idx + 1;
         let cur_x = self.column_x(source_col_idx);
+
+        // Expelling a grouped tile's active tab sends that tab out, leaving the group in place.
+        let active_tile = {
+            let col = &self.columns[source_col_idx];
+            col.active_tile_idx
+        };
+        if self.columns[source_col_idx].tiles[active_tile].is_grouped_tile() {
+            let id = self.columns[source_col_idx].tiles[active_tile]
+                .focused_window()
+                .id()
+                .clone();
+            let source_pos = self.tile_render_pos(source_col_idx, active_tile);
+            let Some((window, _)) = self.detach_window(&id) else {
+                return;
+            };
+
+            let new_tile = Tile::new(
+                window,
+                self.view_size,
+                self.scale,
+                self.clock.clone(),
+                self.options.clone(),
+            );
+            let width = ColumnWidth::Fixed(new_tile.tile_size().w);
+            self.add_tile(
+                Some(target_col_idx),
+                new_tile,
+                false,
+                width,
+                false,
+                Some(self.options.animations.window_movement.0),
+            );
+
+            if let (Some(source), Some(target)) =
+                (source_pos, self.tile_render_pos(target_col_idx, 0))
+            {
+                self.columns[target_col_idx].tiles[0].animate_move_from(source - target);
+            }
+            self.update_window(&id, None);
+            return;
+        }
 
         let source_column = &self.columns[self.active_column_idx];
 
@@ -3157,16 +3672,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        let col = &mut self.columns[self.active_column_idx];
-        if col.display_mode == display {
+        let col_idx = self.active_column_idx;
+        if self.columns[col_idx].display_mode == display {
             return;
         }
 
+        // A tabbed column and a grouped tile are two tab systems; keep only the column's.
+        if display == ColumnDisplay::Tabbed {
+            self.flatten_groups(col_idx);
+        }
+
+        let col = &mut self.columns[col_idx];
         cancel_resize_for_column(&mut self.interactive_resize, col);
         col.set_column_display(display);
 
         // With place_within_column, the tab indicator changes the column size immediately.
-        self.data[self.active_column_idx].update(col);
+        self.data[col_idx].update(col);
         col.update_tile_sizes(true);
 
         // Disable fullscreen if needed.
@@ -3175,6 +3696,25 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.set_fullscreen(&window, false);
             self.set_maximized(&window, false);
         }
+    }
+
+    /// Spreads every group in the column into plain tiles, keeping the windows' order.
+    fn flatten_groups(&mut self, col_idx: usize) {
+        let mut idx = 0;
+        while idx < self.columns[col_idx].tiles.len() {
+            if !self.columns[col_idx].tiles[idx].is_grouped_tile() {
+                idx += 1;
+                continue;
+            }
+
+            let new_tiles = self.columns[col_idx].tiles[idx].ungroup_all();
+            for (offset, tile) in new_tiles.into_iter().enumerate() {
+                self.add_tile_to_column(col_idx, Some(idx + 1 + offset), tile, false);
+            }
+            // The tile at `idx` is now a single window; move on to the next one.
+            idx += 1;
+        }
+        self.columns[col_idx].update_tile_sizes(false);
     }
 
     pub fn center_column(&mut self) {
@@ -3606,7 +4146,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         for col in &self.columns {
             for (tile, pos) in col.tiles() {
-                if tile.window().id() == id {
+                if tile.has_window(id) {
                     let window_pos = view_off + pos + tile.window_loc();
                     let window_size = tile.window_size();
                     let window_rect = Rectangle::new(window_pos, window_size);
@@ -3625,7 +4165,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let col_xs = self.column_xs(self.data.iter().copied());
         for (col, col_x) in zip(&self.columns, col_xs) {
             for (tile, pos) in col.tiles() {
-                if tile.window().id() == id {
+                if tile.has_window(id) {
                     // In the scrolling layout, we try to position popups horizontally within the
                     // window geometry (so they remain visible even if the window scrolls flush with
                     // the left/right edge of the screen), and vertically within the whole parent
@@ -3702,7 +4242,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|col| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col, Some(tile_idx)))
                 })
                 .unwrap()
@@ -3726,7 +4266,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|col| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col, Some(tile_idx)))
                 })
                 .unwrap()
@@ -3750,7 +4290,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|col| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col, Some(tile_idx)))
                 })
                 .unwrap()
@@ -3774,7 +4314,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|col| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col, Some(tile_idx)))
                 })
                 .unwrap()
@@ -3798,7 +4338,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find_map(|col| {
                     col.tiles
                         .iter()
-                        .position(|tile| tile.window().id() == window)
+                        .position(|tile| tile.has_window(window))
                         .map(|tile_idx| (col, Some(tile_idx)))
                 })
                 .unwrap()
@@ -4728,7 +5268,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let tile_idx = col
             .tiles
             .iter()
-            .position(|tile| tile.window().id() == window)
+            .position(|tile| tile.has_window(window))
             .unwrap();
 
         if resize.data.edges.intersects(ResizeEdge::LEFT_RIGHT) {
@@ -5381,11 +5921,6 @@ impl<W: LayoutElement> Column<W> {
         // many changes to the code for too little benefit (it's mostly invisible anyway).
         let enabled = self.display_mode == ColumnDisplay::Tabbed && self.sizing_mode().is_normal();
 
-        let visible_tiles = self
-            .tiles
-            .iter()
-            .filter(|tile| !tile.window().is_minimized())
-            .count();
         // Tabs coming and going slide the others over, like the windows themselves.
         self.tab_indicator.set_count_animation(
             self.clock.clone(),
@@ -5395,7 +5930,6 @@ impl<W: LayoutElement> Column<W> {
             enabled,
             self.tab_indicator_area(),
             axis.rect_out(view_rect),
-            visible_tiles,
             tabs,
             is_active,
             self.scale,
@@ -5607,17 +6141,11 @@ impl<W: LayoutElement> Column<W> {
     }
 
     pub fn contains(&self, window: &W::Id) -> bool {
-        self.tiles
-            .iter()
-            .map(Tile::window)
-            .any(|win| win.id() == window)
+        self.tiles.iter().any(|tile| tile.has_window(window))
     }
 
     pub fn position(&self, window: &W::Id) -> Option<usize> {
-        self.tiles
-            .iter()
-            .map(Tile::window)
-            .position(|win| win.id() == window)
+        self.tiles.iter().position(|tile| tile.has_window(window))
     }
 
     fn activate_idx(&mut self, idx: usize) -> bool {
@@ -5638,6 +6166,8 @@ impl<W: LayoutElement> Column<W> {
 
     fn activate_window(&mut self, window: &W::Id) {
         let idx = self.position(window).unwrap();
+        // Activate the window's tab before showing the tile.
+        let _ = self.tiles[idx].focus_window(window);
         self.activate_idx(idx);
     }
 
@@ -6789,7 +7319,7 @@ impl<W: LayoutElement> Column<W> {
 
     pub fn start_open_animation(&mut self, id: &W::Id) -> bool {
         for tile in &mut self.tiles {
-            if tile.window().id() == id {
+            if tile.has_window(id) {
                 tile.start_open_animation();
 
                 // Animate the appearance of the tab indicator.

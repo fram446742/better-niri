@@ -1,16 +1,19 @@
 use core::f64;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
+use portable_atomic::AtomicU8;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
+use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::{
     HitType, LayoutElement, LayoutElementRenderElement, LayoutElementRenderSnapshot, Options,
     RESIZE_ANIMATION_THRESHOLD, SizeFrac, StickyRestoreInfo,
@@ -48,11 +51,317 @@ pub(super) fn next_minimize_seq() -> u64 {
     MINIMIZE_SEQ_COUNTER.next()
 }
 
+/// A tile's window content: either one window, or a group of them shown as tabs.
+#[derive(Debug)]
+enum WindowInner<W: LayoutElement> {
+    // The `Option` lets `group()` take the window out without cloning it. It is never `None` in
+    // real life.
+    Single(Option<W>),
+    Multiple { windows: Vec<W>, focus_idx: usize },
+}
+
+impl<W: LayoutElement> WindowInner<W> {
+    /// Turns a single window into a group of one. No-op if already grouped.
+    fn group(&mut self) {
+        if let Self::Single(w) = self {
+            *self = Self::Multiple {
+                windows: vec![w.take().expect("should always have a window")],
+                focus_idx: 0,
+            };
+        }
+    }
+
+    /// Focuses a window by id. Returns whether this group contains it.
+    fn focus_window(&mut self, id: &W::Id) -> bool {
+        match self {
+            Self::Single(w) => w.as_ref().unwrap().id() == id,
+            Self::Multiple { windows, focus_idx } => {
+                if let Some(new_focus_idx) = windows.iter().position(|w| w.id() == id) {
+                    *focus_idx = new_focus_idx;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn focused_window(&self) -> &W {
+        match self {
+            Self::Single(w) => w.as_ref().unwrap(),
+            Self::Multiple { windows, focus_idx } => windows
+                .get(*focus_idx)
+                .expect("should have correct focus_idx"),
+        }
+    }
+
+    fn focused_window_mut(&mut self) -> &mut W {
+        match self {
+            Self::Single(w) => w.as_mut().unwrap(),
+            Self::Multiple { windows, focus_idx } => windows
+                .get_mut(*focus_idx)
+                .expect("should have correct focus_idx"),
+        }
+    }
+
+    fn focus_next(&mut self) -> &W {
+        match self {
+            Self::Single(w) => w.as_ref().unwrap(),
+            Self::Multiple { windows, focus_idx } => {
+                *focus_idx = (*focus_idx + 1) % windows.len();
+                windows
+                    .get(*focus_idx)
+                    .expect("should have correct focus_idx")
+            }
+        }
+    }
+
+    fn focus_prev(&mut self) -> &W {
+        match self {
+            Self::Single(w) => w.as_ref().unwrap(),
+            Self::Multiple { windows, focus_idx } => {
+                *focus_idx = focus_idx
+                    .checked_sub(1)
+                    .unwrap_or_else(|| windows.len() - 1);
+
+                windows
+                    .get(*focus_idx)
+                    .expect("should have correct focus_idx")
+            }
+        }
+    }
+
+    /// Removes a window. Returns the number of windows left in this tile.
+    fn remove_window(&mut self, id: &W::Id) -> usize {
+        match self {
+            Self::Single(w) => {
+                if w.as_ref().unwrap().id() == id {
+                    0
+                } else {
+                    1
+                }
+            }
+            Self::Multiple { windows, focus_idx } => {
+                // Don't actually remove the last window: the tile itself will go away, and the
+                // close animation still needs it.
+                if windows.len() == 1 {
+                    return 0;
+                }
+
+                let current_focus_id = windows
+                    .get(*focus_idx)
+                    .expect("should have correct focus_idx")
+                    .id()
+                    .clone();
+
+                if let Some(to_remove_idx) = windows.iter().position(|w| w.id() == id) {
+                    windows.remove(to_remove_idx);
+
+                    *focus_idx = windows
+                        .iter()
+                        .position(|w| *w.id() == current_focus_id)
+                        .unwrap_or(0);
+                }
+
+                windows.len()
+            }
+        }
+    }
+
+    /// Removes a window from the group, returning it.
+    ///
+    /// Returns `None` when this is not a group, or when it is a group of one, which turns back
+    /// into a single window instead (the tile itself stays).
+    fn ungroup_single(&mut self, id: &W::Id) -> Option<W> {
+        match self {
+            Self::Single(_) => None,
+            Self::Multiple { windows, focus_idx } => {
+                if windows.len() == 1 {
+                    let window = windows.pop().expect("should have exactly 1 element");
+                    *self = Self::Single(Some(window));
+                    None
+                } else if let Some(remove_idx) = windows.iter().position(|w| w.id() == id) {
+                    let prev_focus_id = windows[*focus_idx].id().clone();
+                    let ungrouped = windows.remove(remove_idx);
+
+                    // A group that lost a window down to one becomes a plain tile again.
+                    if windows.len() == 1 {
+                        let remaining = windows.pop().expect("should have one window left");
+                        *self = Self::Single(Some(remaining));
+                        return Some(ungrouped);
+                    }
+
+                    *focus_idx = windows
+                        .iter()
+                        .position(|w| w.id() == &prev_focus_id)
+                        .unwrap_or(0);
+
+                    Some(ungrouped)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Ungroups every window but the focused one, turning this back into a single window.
+    fn ungroup_all(
+        &mut self,
+        view_size: Size<f64, Logical>,
+        scale: f64,
+        clock: Clock,
+        options: Rc<Options>,
+    ) -> Vec<Tile<W>> {
+        match self {
+            Self::Single(_) => Vec::new(),
+            Self::Multiple { windows, focus_idx } => {
+                let focused_window = windows.remove(*focus_idx);
+                let new_tiles = windows
+                    .drain(..)
+                    .map(|w| Tile::new(w, view_size, scale, clock.clone(), options.clone()))
+                    .collect();
+
+                *self = Self::Single(Some(focused_window));
+
+                new_tiles
+            }
+        }
+    }
+
+    /// Adds a window to this group, and focuses it.
+    fn add_window(&mut self, window: W) {
+        match self {
+            Self::Single(_) => {
+                error!("attempted to add window to non-grouped tile");
+            }
+            Self::Multiple { windows, focus_idx } => {
+                windows.push(window);
+                *focus_idx = windows.len() - 1;
+            }
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &W> {
+        WindowInnerIter {
+            inner: self,
+            count_idx: 0,
+        }
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut W> {
+        match self {
+            Self::Single(w) => WindowInnerIterMut::Single(Some(w.as_mut().unwrap())),
+            Self::Multiple {
+                windows,
+                focus_idx: _,
+            } => WindowInnerIterMut::Multiple(windows.iter_mut()),
+        }
+    }
+}
+
+enum WindowInnerIterMut<'a, W: LayoutElement> {
+    Single(Option<&'a mut W>),
+    Multiple(std::slice::IterMut<'a, W>),
+}
+
+impl<'a, W: LayoutElement> Iterator for WindowInnerIterMut<'a, W> {
+    type Item = &'a mut W;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Single(w) => w.take(),
+            Self::Multiple(iter) => iter.next(),
+        }
+    }
+}
+
+struct WindowInnerIter<'a, W: LayoutElement> {
+    inner: &'a WindowInner<W>,
+    count_idx: usize,
+}
+
+impl<'a, W: LayoutElement> Iterator for WindowInnerIter<'a, W> {
+    type Item = &'a W;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &self.inner {
+            WindowInner::Single(window) => {
+                if self.count_idx == 0 {
+                    self.count_idx += 1;
+                    Some(window.as_ref().unwrap())
+                } else {
+                    None
+                }
+            }
+            WindowInner::Multiple {
+                windows,
+                focus_idx: _,
+            } => {
+                let r = windows.get(self.count_idx);
+                self.count_idx += 1;
+                r
+            }
+        }
+    }
+}
+
+/// Keeps the focused window at its old size for a few frames after switching tabs.
+///
+/// Without it, the newly shown window briefly draws at its own pending size before its resize
+/// request is applied, which reads as a jerk.
+#[derive(Debug)]
+struct WindowSizeOverride {
+    size_override: Option<Size<i32, Logical>>,
+    rendered_frames: AtomicU8,
+}
+
+impl WindowSizeOverride {
+    const fn new() -> Self {
+        Self {
+            size_override: None,
+            rendered_frames: AtomicU8::new(0),
+        }
+    }
+
+    fn set(&mut self, size_override: Size<i32, Logical>) {
+        self.size_override = Some(size_override);
+        self.rendered_frames.store(0, Ordering::SeqCst);
+    }
+
+    fn get(&self) -> Option<Size<i32, Logical>> {
+        if self.rendered_frames.load(Ordering::SeqCst) < 3 {
+            self.size_override
+        } else {
+            None
+        }
+    }
+
+    fn increment(&self) {
+        if self.rendered_frames.load(Ordering::SeqCst) < 3 {
+            self.rendered_frames.add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Tabs inside a tile are laid out horizontally: a vertical bar next to the window would take
+/// width the column doesn't reserve.
+fn normalize_tab_indicator_config(
+    mut config: niri_config::TabIndicator,
+) -> niri_config::TabIndicator {
+    use niri_config::TabIndicatorPosition;
+
+    config.position = match config.position {
+        TabIndicatorPosition::Left | TabIndicatorPosition::Top => TabIndicatorPosition::Top,
+        TabIndicatorPosition::Right | TabIndicatorPosition::Bottom => TabIndicatorPosition::Bottom,
+    };
+    config
+}
+
 /// Toplevel window with decorations.
 #[derive(Debug)]
 pub struct Tile<W: LayoutElement> {
-    /// The toplevel window itself.
-    window: W,
+    /// The toplevel window, or the group of them shown as tabs.
+    window: WindowInner<W>,
 
     /// Monotonic sequence number assigned when this tile's window was minimized, if it is.
     ///
@@ -154,6 +463,12 @@ pub struct Tile<W: LayoutElement> {
     /// Scale of the output the tile is on (and rounds its sizes to).
     scale: f64,
 
+    /// Tab indicator shown when this tile is a group.
+    tab_indicator: TabIndicator,
+
+    /// Temporary size override after switching tabs, see [`WindowSizeOverride`].
+    window_size_override: WindowSizeOverride,
+
     /// Clock for driving animations.
     pub(super) clock: Clock,
 
@@ -170,6 +485,7 @@ niri_render_elements! {
         Resize = ResizeRenderElement,
         Border = BorderRenderElement,
         Shadow = ShadowRenderElement,
+        TabIndicator = TabIndicatorRenderElement,
         ClippedSurface = ClippedSurfaceRenderElement<R>,
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
@@ -270,7 +586,7 @@ impl<W: LayoutElement> Tile<W> {
         let fullscreen_backdrop_color = options.layout.fullscreen_backdrop_color;
 
         Self {
-            window,
+            window: WindowInner::Single(Some(window)),
             minimized_at: None,
             border: FocusRing::new(border_config.into()),
             focus_ring: FocusRing::new(focus_ring_config),
@@ -298,6 +614,10 @@ impl<W: LayoutElement> Tile<W> {
             rounded_corner_damage: Default::default(),
             view_size,
             scale,
+            tab_indicator: TabIndicator::new(normalize_tab_indicator_config(
+                options.layout.tab_indicator,
+            )),
+            window_size_override: WindowSizeOverride::new(),
             clock,
             options,
         }
@@ -326,7 +646,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let round_max1 = |logical| round_logical_in_physical_max1(self.scale, logical);
 
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
 
         let mut border_config = self
             .options
@@ -339,12 +659,19 @@ impl<W: LayoutElement> Tile<W> {
 
         self.update_focus_ring_and_shadow_config();
 
-        self.window.update_config(self.options.blur);
+        self.window
+            .focused_window_mut()
+            .update_config(self.options.blur);
+
+        self.tab_indicator
+            .update_config(normalize_tab_indicator_config(
+                self.options.layout.tab_indicator,
+            ));
     }
 
     fn update_focus_ring_and_shadow_config(&mut self) {
         let round_max1 = |logical| round_logical_in_physical_max1(self.scale, logical);
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let mut focus_ring = self.options.layout.focus_ring.clone();
         let mut shadow = self.options.layout.shadow;
         if self.in_overview {
@@ -366,9 +693,9 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn update_window(&mut self) {
         let prev_sizing_mode = self.sizing_mode;
-        self.sizing_mode = self.window.sizing_mode();
+        self.sizing_mode = self.window.focused_window().sizing_mode();
 
-        if let Some(animate_from) = self.window.take_animation_snapshot() {
+        if let Some(animate_from) = self.window.focused_window_mut().take_animation_snapshot() {
             let params = if let Some(resize) = self.resize_animation.take() {
                 // Compute like in animated_window_size(), but using the snapshot geometry (since
                 // the current one is already overwritten).
@@ -448,12 +775,13 @@ impl<W: LayoutElement> Tile<W> {
             };
             let (size_from, tile_size_from, fullscreen_from, expanded_from, offscreen) = params;
 
-            let change = self.window.size().to_f64().to_point() - size_from.to_point();
+            let change =
+                self.window.focused_window().size().to_f64().to_point() - size_from.to_point();
             let change = f64::max(change.x.abs(), change.y.abs());
             let tile_change = self.tile_size().to_f64().to_point() - tile_size_from.to_point();
             let tile_change = f64::max(tile_change.x.abs(), tile_change.y.abs());
             let change = f64::max(change, tile_change);
-            if change > RESIZE_ANIMATION_THRESHOLD {
+            if self.window_size_override.get().is_none() && change > RESIZE_ANIMATION_THRESHOLD {
                 let anim = Animation::new(
                     self.clock.clone(),
                     0.,
@@ -489,7 +817,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let round_max1 = |logical| round_logical_in_physical_max1(self.scale, logical);
 
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let mut border_config = self
             .options
             .layout
@@ -504,6 +832,7 @@ impl<W: LayoutElement> Tile<W> {
         let window_size = self.window_size();
         let radius = self
             .window
+            .focused_window()
             .geometry_corner_radius()
             .fit_to(window_size.w as f32, window_size.h as f32);
         self.rounded_corner_damage.set_corner_radius(radius);
@@ -547,12 +876,14 @@ impl<W: LayoutElement> Tile<W> {
         {
             self.focus_ring_anim = None;
         }
+
+        self.tab_indicator.advance_animations();
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
         self.are_transitions_ongoing()
             || self.focus_ring_anim.is_some()
-            || self.window.rules().baba_is_float == Some(true)
+            || self.window.focused_window().rules().baba_is_float == Some(true)
     }
 
     /// Shows or hides the focus ring, growing it in or shrinking it back if `animate`.
@@ -611,6 +942,7 @@ impl<W: LayoutElement> Tile<W> {
             || self.resize_animation.is_some()
             || self.move_x_animation.is_some()
             || self.move_y_animation.is_some()
+            || self.tab_indicator.are_animations_ongoing()
             || self
                 .alpha_animation
                 .as_ref()
@@ -644,13 +976,13 @@ impl<W: LayoutElement> Tile<W> {
         };
         self.focus_ring.set_animation_time(time);
         self.border.set_animation_time(time);
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let animated_tile_size = self.animated_tile_size();
         let expanded_progress = self.expanded_progress();
 
         let draw_border_with_background = rules
             .draw_border_with_background
-            .unwrap_or_else(|| !self.window.has_ssd());
+            .unwrap_or_else(|| !self.window.focused_window().has_ssd());
         let border_width = self.visual_border_width().unwrap_or(0.);
 
         // Do the inverse of tile_size() in order to handle the unfullscreen animation for windows
@@ -674,6 +1006,7 @@ impl<W: LayoutElement> Tile<W> {
         // when that changes between animated commits.
         let radius = self
             .window
+            .focused_window()
             .geometry_corner_radius()
             .expanded_by(border_width as f32)
             .scaled_by(1. - expanded_progress as f32);
@@ -681,7 +1014,7 @@ impl<W: LayoutElement> Tile<W> {
             border_window_size,
             is_active,
             !draw_border_with_background,
-            self.window.is_urgent(),
+            self.window.focused_window().is_urgent(),
             Rectangle::new(
                 view_rect.loc - Point::from((border_width, border_width)),
                 view_rect.size,
@@ -695,6 +1028,7 @@ impl<W: LayoutElement> Tile<W> {
             radius
         } else {
             self.window
+                .focused_window()
                 .geometry_corner_radius()
                 .scaled_by(1. - expanded_progress as f32)
         };
@@ -735,7 +1069,7 @@ impl<W: LayoutElement> Tile<W> {
             animated_tile_size,
             ring_is_active,
             !draw_focus_ring_with_background,
-            self.window.is_urgent(),
+            self.window.focused_window().is_urgent(),
             view_rect,
             radius,
             self.scale,
@@ -743,6 +1077,64 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         self.fullscreen_backdrop.resize(animated_tile_size);
+
+        self.update_tab_indicator(is_active, view_rect);
+    }
+
+    /// Hands the tab indicator this tile's windows and geometry.
+    fn update_tab_indicator(&mut self, is_active: bool, view_rect: Rectangle<f64, Logical>) {
+        let enabled =
+            self.is_grouped_tile() && self.focused_window().sizing_mode() == SizingMode::Normal;
+        if !enabled {
+            self.tab_indicator.update_render_elements(
+                false,
+                Rectangle::default(),
+                view_rect,
+                std::iter::empty(),
+                is_active,
+                self.scale,
+            );
+            return;
+        }
+
+        let tile_size = self.animated_tile_size();
+        let area = self
+            .tab_indicator
+            .tile_tab_area(tile_size, self.tab_count(), self.scale);
+        let focus_idx = match &self.window {
+            WindowInner::Single(_) => 0,
+            WindowInner::Multiple { focus_idx, .. } => *focus_idx,
+        };
+
+        let tabs: Vec<TabInfo> = self
+            .window
+            .iter()
+            .enumerate()
+            .map(|(idx, window)| {
+                TabInfo::from_window(
+                    window,
+                    self.focus_ring.config(),
+                    self.border.config(),
+                    Point::default(),
+                    tile_size,
+                    idx == focus_idx,
+                    window.is_urgent(),
+                    &self.tab_indicator.config(),
+                )
+            })
+            .collect();
+
+        let mut area_view_rect = view_rect;
+        area_view_rect.loc -= area.loc;
+
+        self.tab_indicator.update_render_elements(
+            true,
+            Rectangle::new(area.loc, tile_size),
+            area_view_rect,
+            tabs.into_iter(),
+            is_active,
+            self.scale,
+        );
     }
 
     pub fn scale(&self) -> f64 {
@@ -895,11 +1287,213 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn window(&self) -> &W {
-        &self.window
+        self.window.focused_window()
     }
 
     pub fn window_mut(&mut self) -> &mut W {
-        &mut self.window
+        self.window.focused_window_mut()
+    }
+
+    /// The window whose tab is active, or the only window.
+    pub fn focused_window(&self) -> &W {
+        self.window.focused_window()
+    }
+
+    pub fn focused_window_mut(&mut self) -> &mut W {
+        self.window.focused_window_mut()
+    }
+
+    /// Every window in this tile, in tab order.
+    pub fn windows(&self) -> impl Iterator<Item = &W> {
+        self.window.iter()
+    }
+
+    pub fn windows_mut(&mut self) -> impl Iterator<Item = &mut W> {
+        self.window.iter_mut()
+    }
+
+    pub const fn is_grouped_tile(&self) -> bool {
+        matches!(self.window, WindowInner::Multiple { .. })
+    }
+
+    pub fn has_window(&self, id: &W::Id) -> bool {
+        self.window.iter().any(|w| w.id() == id)
+    }
+
+    pub fn window_mut_by_id(&mut self, id: &W::Id) -> Option<&mut W> {
+        self.window.iter_mut().find(|w| w.id() == id)
+    }
+
+    /// Focuses a window in this tile. Returns whether the tile contains it.
+    ///
+    /// Switching tabs keeps the window at the tile's size and holds the old size for a few frames
+    /// so that the switch doesn't visibly jump.
+    pub fn focus_window(&mut self, id: &W::Id) -> bool {
+        if self.window.focused_window().id() == id {
+            return true;
+        }
+
+        let current_size = self.window.focused_window().size();
+        let current_mode = self.window.focused_window().sizing_mode();
+
+        if self.window.focus_window(id) {
+            self.window_size_override.set(current_size);
+
+            let new_window = self.window.focused_window_mut();
+            new_window.request_size(current_size, current_mode, false, None);
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Focuses the next tab, or does nothing when this tile is not a group.
+    pub fn focus_next(&mut self) -> &W {
+        let current_size = self.window.focused_window().size();
+        let current_mode = self.window.focused_window().sizing_mode();
+        self.window_size_override.set(current_size);
+        self.window.focus_next();
+
+        let new_window = self.window.focused_window_mut();
+        new_window.request_size(current_size, current_mode, false, None);
+
+        new_window
+    }
+
+    /// Focuses the previous tab, or does nothing when this tile is not a group.
+    pub fn focus_prev(&mut self) -> &W {
+        let current_size = self.window.focused_window().size();
+        let current_mode = self.window.focused_window().sizing_mode();
+        self.window_size_override.set(current_size);
+        self.window.focus_prev();
+
+        let new_window = self.window.focused_window_mut();
+        new_window.request_size(current_size, current_mode, false, None);
+
+        new_window
+    }
+
+    /// Turns this tile into a group of one, or leaves it alone if it already is one.
+    pub fn group(&mut self) {
+        let will_group = matches!(&self.window, WindowInner::Single(_));
+        self.window.group();
+
+        if will_group {
+            // The window moves down by the tab indicator's height as it appears.
+            self.animate_move_from(Point::new(0., 0.) - self.tab_indicator_content_offset());
+        }
+    }
+
+    pub fn start_tab_indicator_open_animation(&mut self) {
+        self.tab_indicator.start_open_animation(
+            self.clock.clone(),
+            self.options.animations.window_movement.0,
+        );
+    }
+
+    /// Adds a window to this group and focuses its tab.
+    pub fn add_window(&mut self, window: W) {
+        self.window.add_window(window);
+    }
+
+    /// Removes a window from the layout. Returns the number of windows left in this tile.
+    pub fn remove_window(&mut self, id: &W::Id) -> usize {
+        let current_size = self.window.focused_window().size();
+        let current_mode = self.window.focused_window().sizing_mode();
+        self.window_size_override.set(current_size);
+
+        let out = self.window.remove_window(id);
+
+        self.window
+            .focused_window_mut()
+            .request_size(current_size, current_mode, false, None);
+
+        out
+    }
+
+    /// Takes this tile's window out, for moves.
+    pub fn take_window(self) -> W {
+        match self.window {
+            WindowInner::Single(w) => w.expect("should have a single window"),
+            WindowInner::Multiple {
+                mut windows,
+                focus_idx,
+            } => windows.remove(focus_idx),
+        }
+    }
+
+    /// Removes a window from this group and returns it.
+    ///
+    /// A group of one turns back into a single window and returns `None`: the tile itself goes on
+    /// holding that window.
+    pub fn ungroup_single(&mut self, id: &W::Id) -> Option<W> {
+        let current_size = self.window.focused_window().size();
+        let current_mode = self.window.focused_window().sizing_mode();
+        let extra_size = self.tab_indicator_extra_size();
+
+        let out = self.window.ungroup_single(id);
+
+        if matches!(&self.window, WindowInner::Single(_)) && extra_size.h > 0. {
+            // The remaining window moves back up as the tabs disappear.
+            self.animate_move_from(self.tab_indicator_content_offset());
+        }
+
+        self.window
+            .focused_window_mut()
+            .request_size(current_size, current_mode, false, None);
+
+        out
+    }
+
+    /// Ungroups every window but the active one, returning them as new tiles.
+    pub fn ungroup_all(&mut self) -> Vec<Self> {
+        let extra_size = self.tab_indicator_extra_size();
+
+        if extra_size.h > 0. {
+            self.animate_move_from(self.tab_indicator_content_offset());
+        }
+
+        self.window.ungroup_all(
+            self.view_size,
+            self.scale,
+            self.clock.clone(),
+            self.options.clone(),
+        )
+    }
+
+    /// Extra size this tile takes because its tab indicator is shown.
+    pub fn tab_indicator_extra_size(&self) -> Size<f64, Logical> {
+        if self.focused_window().sizing_mode() != SizingMode::Normal {
+            return Size::new(0., 0.);
+        }
+
+        match &self.window {
+            WindowInner::Single(_) => Size::default(),
+            WindowInner::Multiple { windows, .. } => self
+                .tab_indicator
+                .extra_size_in_tile(windows.len(), self.scale),
+        }
+    }
+
+    fn tab_count(&self) -> usize {
+        match &self.window {
+            WindowInner::Single(_) => 1,
+            WindowInner::Multiple { windows, .. } => windows.len(),
+        }
+    }
+
+    fn tab_indicator_content_offset(&self) -> Point<f64, Logical> {
+        if self.focused_window().sizing_mode() != SizingMode::Normal {
+            return Point::new(0., 0.);
+        }
+
+        match &self.window {
+            WindowInner::Single(_) => Point::default(),
+            WindowInner::Multiple { .. } => self
+                .tab_indicator
+                .content_offset_in_tile(self.tab_count(), self.scale),
+        }
     }
 
     pub fn sizing_mode(&self) -> SizingMode {
@@ -985,6 +1579,9 @@ impl<W: LayoutElement> Tile<W> {
             .to_physical_precise_round(self.scale)
             .to_logical(self.scale);
 
+        // The window sits below/above the tab band, but the tile's other decorations don't.
+        loc += self.tab_indicator_content_offset();
+
         loc
     }
 
@@ -1007,6 +1604,16 @@ impl<W: LayoutElement> Tile<W> {
         size
     }
 
+    /// Size of the tile including the band its tab indicator takes.
+    pub fn tile_bounding_box(&self) -> Size<f64, Logical> {
+        self.tile_size() + self.tab_indicator_extra_size()
+    }
+
+    /// Like [`Tile::tile_bounding_box`], with ongoing animations applied.
+    pub fn animated_bounding_box(&self) -> Size<f64, Logical> {
+        self.animated_tile_size() + self.tab_indicator_extra_size()
+    }
+
     pub fn tile_expected_or_current_size(&self) -> Size<f64, Logical> {
         let mut size = self.window_expected_or_current_size();
 
@@ -1027,7 +1634,11 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn window_size(&self) -> Size<f64, Logical> {
-        let mut size = self.window.size().to_f64();
+        let mut size = self
+            .window_size_override
+            .get()
+            .unwrap_or_else(|| self.window.focused_window().size())
+            .to_f64();
         size = size
             .to_physical_precise_round(self.scale)
             .to_logical(self.scale);
@@ -1035,8 +1646,10 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn window_expected_or_current_size(&self) -> Size<f64, Logical> {
-        let size = self.window.expected_size();
-        let mut size = size.unwrap_or_else(|| self.window.size()).to_f64();
+        let size = self.window.focused_window().expected_size();
+        let mut size = size
+            .unwrap_or_else(|| self.window.focused_window().size())
+            .to_f64();
         size = size
             .to_physical_precise_round(self.scale)
             .to_logical(self.scale);
@@ -1064,6 +1677,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn outline_corner_radius(&self) -> CornerRadius {
         let border_width = self.visual_border_width().unwrap_or(0.);
         self.window
+            .focused_window()
             .geometry_corner_radius()
             .expanded_by(border_width as f32)
     }
@@ -1088,7 +1702,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn buf_loc(&self) -> Point<f64, Logical> {
         let mut loc = Point::from((0., 0.));
         loc += self.window_loc();
-        loc += self.window.buf_loc().to_f64();
+        loc += self.window.focused_window().buf_loc().to_f64();
         loc
     }
 
@@ -1107,7 +1721,7 @@ impl<W: LayoutElement> Tile<W> {
 
     fn is_in_input_region(&self, mut point: Point<f64, Logical>) -> bool {
         point -= self.window_loc().to_f64();
-        self.window.is_in_input_region(point)
+        self.window.focused_window().is_in_input_region(point)
     }
 
     fn is_in_activation_region(&self, point: Point<f64, Logical>) -> bool {
@@ -1115,17 +1729,35 @@ impl<W: LayoutElement> Tile<W> {
         activation_region.contains(point)
     }
 
-    pub fn hit(&self, point: Point<f64, Logical>) -> Option<HitType> {
+    pub fn hit(&self, point: Point<f64, Logical>) -> Option<(Option<&W>, HitType)> {
         let offset = self.bob_offset();
         let point = point - offset;
 
         if self.is_in_input_region(point) {
             let win_pos = self.buf_loc() + offset;
-            Some(HitType::Input { win_pos })
+            Some((Some(self.focused_window()), HitType::Input { win_pos }))
+        } else if let WindowInner::Multiple { windows, .. } = &self.window
+            && let Some(hit_idx) = self.tab_indicator.hit(
+                self.tab_indicator
+                    .tile_tab_area(self.tile_size(), windows.len(), self.scale),
+                windows.len(),
+                self.scale,
+                point,
+            )
+        {
+            Some((
+                windows.get(hit_idx),
+                HitType::Activate {
+                    is_tab_indicator: true,
+                },
+            ))
         } else if self.is_in_activation_region(point) {
-            Some(HitType::Activate {
-                is_tab_indicator: false,
-            })
+            Some((
+                Some(self.focused_window()),
+                HitType::Activate {
+                    is_tab_indicator: false,
+                },
+            ))
         } else {
             None
         }
@@ -1144,10 +1776,12 @@ impl<W: LayoutElement> Tile<W> {
             size.h = f64::max(1., size.h - width * 2.);
         }
 
+        size -= self.tab_indicator_extra_size();
+
         // The size request has to be i32 unfortunately, due to Wayland. We floor here instead of
         // round to avoid situations where proportionally-sized columns don't fit on the screen
         // exactly.
-        self.window.request_size(
+        self.window.focused_window_mut().request_size(
             size.to_i32_floor(),
             SizingMode::Normal,
             animate,
@@ -1156,35 +1790,35 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn tile_width_for_window_width(&self, size: f64) -> f64 {
-        if self.border.is_off() {
+        (if self.border.is_off() {
             size
         } else {
             size + self.border.width() * 2.
-        }
+        }) + self.tab_indicator_extra_size().w
     }
 
     pub fn tile_height_for_window_height(&self, size: f64) -> f64 {
-        if self.border.is_off() {
+        (if self.border.is_off() {
             size
         } else {
             size + self.border.width() * 2.
-        }
+        }) + self.tab_indicator_extra_size().h
     }
 
     pub fn window_width_for_tile_width(&self, size: f64) -> f64 {
-        if self.border.is_off() {
+        (if self.border.is_off() {
             size
         } else {
             size - self.border.width() * 2.
-        }
+        }) - self.tab_indicator_extra_size().w
     }
 
     pub fn window_height_for_tile_height(&self, size: f64) -> f64 {
-        if self.border.is_off() {
+        (if self.border.is_off() {
             size
         } else {
             size - self.border.width() * 2.
-        }
+        }) - self.tab_indicator_extra_size().h
     }
 
     pub fn request_maximized(
@@ -1194,26 +1828,34 @@ impl<W: LayoutElement> Tile<W> {
         transaction: Option<Transaction>,
     ) {
         let size = size.to_i32_round();
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let size = rules.apply_max_size(size);
         let size = rules.apply_min_size(size);
 
-        self.window
-            .request_size(size, SizingMode::Maximized, animate, transaction);
+        self.window.focused_window_mut().request_size(
+            size,
+            SizingMode::Maximized,
+            animate,
+            transaction,
+        );
     }
 
     pub fn request_fullscreen(&mut self, animate: bool, transaction: Option<Transaction>) {
         let size = self.view_size.to_i32_round();
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let size = rules.apply_max_size(size);
         let size = rules.apply_min_size(size);
 
-        self.window
-            .request_size(size, SizingMode::Fullscreen, animate, transaction);
+        self.window.focused_window_mut().request_size(
+            size,
+            SizingMode::Fullscreen,
+            animate,
+            transaction,
+        );
     }
 
     pub fn min_size_nonfullscreen(&self) -> Size<f64, Logical> {
-        let mut size = self.window.min_size().to_f64();
+        let mut size = self.window.focused_window().min_size().to_f64();
 
         // Can't go through effective_border_width() because we might be fullscreen.
         if !self.border.is_off() {
@@ -1230,7 +1872,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn max_size_nonfullscreen(&self) -> Size<f64, Logical> {
-        let mut size = self.window.max_size().to_f64();
+        let mut size = self.window.focused_window().max_size().to_f64();
 
         // Can't go through effective_border_width() because we might be fullscreen.
         if !self.border.is_off() {
@@ -1248,7 +1890,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn bob_offset(&self) -> Point<f64, Logical> {
-        if self.window.rules().baba_is_float != Some(true) {
+        if self.window.focused_window().rules().baba_is_float != Some(true) {
             return Point::from((0., 0.));
         }
 
@@ -1280,10 +1922,13 @@ impl<W: LayoutElement> Tile<W> {
         let texture_from = resize.snapshot.texture(ctx.r(), scale)?;
 
         let mut window_elements = Vec::new();
-        self.window
-            .render_normal(ctx.r(), Point::from((0., 0.)), scale, 1., &mut |elem| {
-                window_elements.push(elem)
-            });
+        self.window.focused_window().render_normal(
+            ctx.r(),
+            Point::from((0., 0.)),
+            scale,
+            1.,
+            &mut |elem| window_elements.push(elem),
+        );
 
         let (elem_current, _sync_point, data) = resize
             .offscreen
@@ -1292,7 +1937,7 @@ impl<W: LayoutElement> Tile<W> {
             .ok()?;
 
         // Clip blocked-out resizes unconditionally because they use solid color render elements.
-        let rules = self.window.rules();
+        let rules = self.window.focused_window().rules();
         let clip_to_geometry = if ctx.target.should_block_out(resize.snapshot.block_out_from)
             && ctx.target.should_block_out(rules.block_out_from)
         {
@@ -1340,10 +1985,20 @@ impl<W: LayoutElement> Tile<W> {
         let fullscreen_progress = self.fullscreen_progress();
         let expanded_progress = self.expanded_progress();
 
-        let win_alpha = if self.window.is_ignoring_opacity_window_rule() {
+        let win_alpha = if self
+            .window
+            .focused_window()
+            .is_ignoring_opacity_window_rule()
+        {
             1.
         } else {
-            let alpha = self.window.rules().opacity.unwrap_or(1.).clamp(0., 1.);
+            let alpha = self
+                .window
+                .focused_window()
+                .rules()
+                .opacity
+                .unwrap_or(1.)
+                .clamp(0., 1.);
 
             // Interpolate towards alpha = 1. at fullscreen.
             let p = fullscreen_progress as f32;
@@ -1369,18 +2024,21 @@ impl<W: LayoutElement> Tile<W> {
         let area = Rectangle::new(window_render_loc, animated_window_size);
         xray_pos = xray_pos.offset(window_loc);
 
-        let rules = self.window.rules();
+        self.window_size_override.increment();
+
+        let rules = self.window.focused_window().rules();
 
         // Clip to geometry including during the fullscreen animation to help with buggy clients
         // that submit a full-sized buffer before acking the fullscreen state (Firefox).
         let clip_to_geometry = fullscreen_progress < 1. && rules.clip_to_geometry == Some(true);
         let radius = self
             .window
+            .focused_window()
             .geometry_corner_radius()
             .scaled_by(1. - expanded_progress as f32);
 
         // Popups go on top, whether it's resize or not.
-        self.window.render_popups(
+        self.window.focused_window().render_popups(
             ctx.r(),
             window_render_loc,
             scale,
@@ -1390,7 +2048,7 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         // Pushed before the window so that the framebuffer blur samples the window itself.
-        self.window.render_block_out_blur(
+        self.window.focused_window().render_block_out_blur(
             ctx.r(),
             area,
             self.scale,
@@ -1419,7 +2077,7 @@ impl<W: LayoutElement> Tile<W> {
 
             // This is not a problem for split popups as the code will look for them by
             // original id when it doesn't find them on the offscreen.
-            self.window.set_offscreen_data(Some(data));
+            self.window.focused_window().set_offscreen_data(Some(data));
             push(elem.into());
             pushed_resize = true;
         }
@@ -1439,12 +2097,18 @@ impl<W: LayoutElement> Tile<W> {
         if !pushed_resize {
             #[cfg(feature = "effects")]
             {
-                if let Some(resolved) = self.window.effective_shader().cloned().filter(|_| {
-                    crate::render_helpers::target_renders_shaders(
-                        ctx.target,
-                        self.options.shaders_in_capture,
-                    )
-                }) {
+                if let Some(resolved) = self
+                    .window
+                    .focused_window()
+                    .effective_shader()
+                    .cloned()
+                    .filter(|_| {
+                        crate::render_helpers::target_renders_shaders(
+                            ctx.target,
+                            self.options.shaders_in_capture,
+                        )
+                    })
+                {
                     let have_program =
                         Shaders::has_program(ctx.renderer, ProgramType::Scoped(resolved.key, 0));
                     if have_program {
@@ -1548,10 +2212,20 @@ impl<W: LayoutElement> Tile<W> {
                 push(damage.into());
             }
 
-            self.window
-                .render_normal(ctx.r(), window_render_loc, scale, win_alpha, &mut |elem| {
-                    push(clip(elem))
-                });
+            self.window.focused_window().render_normal(
+                ctx.r(),
+                window_render_loc,
+                scale,
+                win_alpha,
+                &mut |elem| push(clip(elem)),
+            );
+        }
+
+        // Tabs draw above the window content: the bars and titles sit in the band the tile
+        // reserves for them, which the window never covers.
+        if self.focused_window().sizing_mode() == SizingMode::Normal {
+            self.tab_indicator
+                .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }
 
         if fullscreen_progress > 0. {
@@ -1563,6 +2237,7 @@ impl<W: LayoutElement> Tile<W> {
                 let border_width = self.visual_border_width().unwrap_or(0.);
                 let radius = self
                     .window
+                    .focused_window()
                     .geometry_corner_radius()
                     .expanded_by(border_width as f32)
                     .scaled_by(1. - expanded_progress as f32);
@@ -1618,7 +2293,7 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         let surface_anim_scale = animated_window_size / window_size;
-        self.window.render_background_effect(
+        self.window.focused_window().render_background_effect(
             ctx.r(),
             area,
             self.scale,
@@ -1673,7 +2348,10 @@ impl<W: LayoutElement> Tile<W> {
         PrimaryGpuTextureRenderElement: RenderElement<R>,
         TileRenderElement<R>: RenderElement<R>,
     {
-        if ctx.target.should_hide(self.window.rules().block_out_from) {
+        if ctx
+            .target
+            .should_hide(self.window.focused_window().rules().block_out_from)
+        {
             return;
         }
 
@@ -1727,7 +2405,7 @@ impl<W: LayoutElement> Tile<W> {
             match open.render(
                 ctx.renderer,
                 &elements,
-                self.animated_tile_size(),
+                self.animated_bounding_box(),
                 location,
                 scale,
                 tile_alpha,
@@ -1926,8 +2604,8 @@ impl<W: LayoutElement> Tile<W> {
             contents_with_blocked_out_bg: contents_with_blocked_out_bg
                 .map(|contents| vec![contents]),
             blocked_out_contents: vec![blocked_out_contents],
-            block_out_from: self.window.rules().block_out_from,
-            size: self.animated_tile_size(),
+            block_out_from: self.window.focused_window().rules().block_out_from,
+            size: self.animated_bounding_box(),
             texture: Default::default(),
             texture_with_blocked_out_bg: Default::default(),
             blocked_out_texture: Default::default(),
@@ -1977,7 +2655,7 @@ impl<W: LayoutElement> Tile<W> {
     pub fn verify_invariants(&self) {
         use approx::assert_abs_diff_eq;
 
-        assert_eq!(self.sizing_mode, self.window.sizing_mode());
+        assert_eq!(self.sizing_mode, self.window.focused_window().sizing_mode());
 
         let scale = self.scale;
         let size = self.tile_size();

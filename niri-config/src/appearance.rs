@@ -498,6 +498,8 @@ pub struct TabIndicator {
     pub off: bool,
     pub hide_when_single_tab: bool,
     pub place_within_column: bool,
+    pub hide_titles: bool,
+    pub title_font_size: u32,
     pub gap: f64,
     pub width: f64,
     pub length: TabIndicatorLength,
@@ -518,6 +520,8 @@ impl Default for TabIndicator {
             off: false,
             hide_when_single_tab: false,
             place_within_column: false,
+            hide_titles: false,
+            title_font_size: 12,
             gap: 5.,
             width: 4.,
             length: TabIndicatorLength {
@@ -547,13 +551,14 @@ impl MergeWith<TabIndicatorPart> for TabIndicator {
             (self, part),
             hide_when_single_tab,
             place_within_column,
+            hide_titles,
             gap,
             width,
             gaps_between_tabs,
             corner_radius,
         );
 
-        merge_clone!((self, part), length, position);
+        merge_clone!((self, part), length, position, title_font_size);
 
         merge_color_gradient_opt!(
             (self, part),
@@ -574,6 +579,10 @@ pub struct TabIndicatorPart {
     pub hide_when_single_tab: Option<Flag>,
     #[knuffel(child)]
     pub place_within_column: Option<Flag>,
+    #[knuffel(child)]
+    pub hide_titles: Option<Flag>,
+    #[knuffel(child, unwrap(argument))]
+    pub title_font_size: Option<u32>,
     #[knuffel(child, unwrap(argument))]
     pub gap: Option<FloatOrInt<-65535, 65535>>,
     #[knuffel(child, unwrap(argument))]

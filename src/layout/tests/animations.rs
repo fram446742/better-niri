@@ -1311,3 +1311,239 @@ fn move_window_to_new_workspace_below_without_focus() {
     3 on ws2 at x:   0 y:1584
     ");
 }
+
+// Ported from Naxdy/niri `src/layout/tests/animations.rs`. The reference asserts exact pixel
+// snapshots of its tab-indicator geometry; these keep the same op sequences and behavior but
+// assert the model and the sign/ordering of the movement, since our indicator reserves a title
+// band above the window and normalizes the position to top/bottom.
+
+/// Whether any tile or column is in the middle of a movement animation.
+fn tiles_are_moving(ws: &Workspace<TestWindow>) -> bool {
+    ws.scrolling()
+        .columns()
+        .any(|column| column.render_offset() != Point::default())
+        || ws
+            .tiles()
+            .any(|tile| tile.render_offset() != Point::default())
+}
+
+fn grouped_two_columns() -> Layout<TestWindow> {
+    check_ops_with_options(
+        make_options(),
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::FocusColumnLeft,
+            Op::SetForcedSize {
+                id: 1,
+                size: Some(Size::new(100, 100)),
+            },
+            Op::SetForcedSize {
+                id: 2,
+                size: Some(Size::new(100, 100)),
+            },
+            Op::Communicate(1),
+            Op::Communicate(2),
+            Op::ToggleGroup,
+            Op::CompleteAnimations,
+            Op::FocusColumnRight,
+        ],
+    )
+}
+
+/// Ported from `appear_group_indicator`.
+#[test]
+fn appear_group_indicator() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusColumnLeft,
+        Op::CompleteAnimations,
+        Op::ToggleGroup,
+    ];
+
+    let mut layout = check_ops_with_options(make_options(), ops);
+
+    // The window starts above its resting place as the tab band grows in.
+    let offset = layout
+        .active_workspace()
+        .unwrap()
+        .tiles()
+        .next()
+        .unwrap()
+        .render_offset();
+    assert!(
+        offset.y < 0.,
+        "expected the window to start above its final spot, got {offset:?}"
+    );
+
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 1000 }]);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .tiles()
+            .next()
+            .unwrap()
+            .render_offset(),
+        Point::from((0., 0.))
+    );
+}
+
+/// Ported from `move_window_into_and_out_of_group_down`.
+#[test]
+fn move_window_into_and_out_of_group_down() {
+    let mut layout = grouped_two_columns();
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .columns()
+            .count(),
+        2
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Left,
+        )],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 1);
+    assert!(
+        ws.tiles()
+            .any(|tile| tile.is_grouped_tile() && tile.windows().count() == 2)
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Down,
+        )],
+    );
+    let ws = layout.active_workspace().unwrap();
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 2);
+    let ids: Vec<_> = column
+        .tiles()
+        .map(|(tile, _)| *tile.window().id())
+        .collect();
+    assert_eq!(ids, vec![1, 2], "the ejected window goes below the group");
+    // A group that lost a tab down to one window becomes a plain tile.
+    assert!(ws.tiles().all(|tile| !tile.is_grouped_tile()));
+    assert_eq!(ws.scrolling().columns().count(), 1);
+    assert_eq!(ws.windows().count(), 2);
+    assert!(tiles_are_moving(ws));
+}
+
+/// Ported from `move_window_into_and_out_of_group_up`.
+#[test]
+fn move_window_into_and_out_of_group_up() {
+    let mut layout = grouped_two_columns();
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Left,
+        )],
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Up,
+        )],
+    );
+    let ws = layout.active_workspace().unwrap();
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 2);
+    let ids: Vec<_> = column
+        .tiles()
+        .map(|(tile, _)| *tile.window().id())
+        .collect();
+    assert_eq!(ids, vec![2, 1], "the expelled window goes above the group");
+    assert!(ws.tiles().all(|tile| !tile.is_grouped_tile()));
+    assert!(tiles_are_moving(ws));
+}
+
+/// Ported from `move_window_into_and_out_of_group_right`.
+#[test]
+fn move_window_into_and_out_of_group_right() {
+    let mut layout = grouped_two_columns();
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Left,
+        )],
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Right,
+        )],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 2);
+    let ids: Vec<Vec<_>> = ws
+        .scrolling()
+        .columns()
+        .map(|column| {
+            column
+                .tiles()
+                .map(|(tile, _)| *tile.window().id())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec![vec![1], vec![2]],
+        "the tab becomes a right column"
+    );
+    assert!(tiles_are_moving(ws));
+}
+
+/// Ported from `move_window_into_and_out_of_group_left`.
+#[test]
+fn move_window_into_and_out_of_group_left() {
+    let mut layout = grouped_two_columns();
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Left,
+        )],
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowIntoOrOutOfGroup(
+            niri_config::WindowMoveDirection::Left,
+        )],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 2);
+    let ids: Vec<Vec<_>> = ws
+        .scrolling()
+        .columns()
+        .map(|column| {
+            column
+                .tiles()
+                .map(|(tile, _)| *tile.window().id())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec![vec![2], vec![1]],
+        "the expelled window becomes a column to the left of the group"
+    );
+    assert!(tiles_are_moving(ws));
+}

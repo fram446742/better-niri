@@ -160,6 +160,11 @@ pub trait LayoutElement {
     /// Unique ID of this element.
     fn id(&self) -> &Self::Id;
 
+    /// Title shown on the window's tab when it is in a group, if it has one.
+    fn title(&self) -> Option<String> {
+        None
+    }
+
     /// Updates the config for the element.
     fn update_config(&mut self, blur_config: niri_config::Blur) {
         let _ = blur_config;
@@ -783,8 +788,12 @@ impl HitType {
         point: Point<f64, Logical>,
     ) -> Option<(&W, Self)> {
         let pos_within_tile = point - tile_pos;
-        tile.hit(pos_within_tile)
-            .map(|hit| (tile.window(), hit.offset_win_pos(tile_pos)))
+        tile.hit(pos_within_tile).map(|(window, hit)| {
+            (
+                window.unwrap_or_else(|| tile.window()),
+                hit.offset_win_pos(tile_pos),
+            )
+        })
     }
 
     pub fn to_activate(self) -> Self {
@@ -1511,6 +1520,12 @@ impl<W: LayoutElement> Layout<W> {
 
                     for (idx, ws) in mon.workspaces.iter_mut().enumerate() {
                         if ws.has_window(window) {
+                            // Closing one tab of a group leaves the group and its cell in place.
+                            if ws.is_window_grouped(window) {
+                                ws.remove_window(window, transaction);
+                                return None;
+                            }
+
                             let preserve_move_animations =
                                 ws.grid_window_close_preserves_move_animations(window);
                             let window_visual_snapshots =
@@ -1558,6 +1573,12 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for (idx, ws) in workspaces.iter_mut().enumerate() {
                     if ws.has_window(window) {
+                        // Closing one tab of a group leaves the group in place.
+                        if ws.is_window_grouped(window) {
+                            ws.remove_window(window, transaction);
+                            return None;
+                        }
+
                         let preserve_move_animations =
                             ws.grid_window_close_preserves_move_animations(window);
                         let window_visual_snapshots =
@@ -3813,6 +3834,54 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
         workspace.expel_from_column();
+    }
+
+    /// Toggles grouping of the window, or of the active tile's window.
+    pub fn toggle_group(&mut self, window: Option<&W::Id>) -> bool {
+        if self.grid_move_guard() {
+            return false;
+        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return false;
+        };
+        workspace.toggle_group(window)
+    }
+
+    /// Moves the window into the group in `direction`, or out of its group.
+    pub fn move_window_into_or_out_of_group(
+        &mut self,
+        window: Option<&W::Id>,
+        direction: niri_config::WindowMoveDirection,
+    ) {
+        if self.grid_move_guard() {
+            return;
+        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.move_window_into_or_out_of_group(window, direction);
+    }
+
+    /// Focuses the next tab of the active grouped tile.
+    pub fn focus_next_tab(&mut self) -> bool {
+        if self.grid_move_guard() {
+            return false;
+        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return false;
+        };
+        workspace.focus_next_tab()
+    }
+
+    /// Focuses the previous tab of the active grouped tile.
+    pub fn focus_prev_tab(&mut self) -> bool {
+        if self.grid_move_guard() {
+            return false;
+        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return false;
+        };
+        workspace.focus_prev_tab()
     }
 
     pub fn swap_window_in_direction(&mut self, direction: ScrollDirection, focus: bool) {
@@ -8219,13 +8288,16 @@ impl<W: LayoutElement> Layout<W> {
             .interactive_move
             .as_ref()
             .and_then(|x| x.moving())
-            .map(|move_| (self.monitor_for_output(&move_.output), move_.tile.window()))
-            .into_iter();
+            .into_iter()
+            .flat_map(|move_| {
+                let mon = self.monitor_for_output(&move_.output);
+                move_.tile.windows().map(move |win| (mon, win))
+            });
 
         let sticky = self.monitors().flat_map(|mon| {
             mon.sticky
                 .tiles()
-                .map(move |tile| (Some(mon), tile.window()))
+                .flat_map(move |tile| tile.windows().map(move |win| (Some(mon), win)))
         });
 
         let rest = self

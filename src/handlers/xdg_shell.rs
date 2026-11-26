@@ -991,6 +991,16 @@ impl XdgShellHandler for State {
 
     fn title_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
+
+        // Tab titles follow the window title, so repaint the output the window is on.
+        if let Some((_, Some(output))) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        {
+            let output = output.clone();
+            self.niri.queue_redraw(&output);
+        }
     }
 
     fn parent_changed(&mut self, toplevel: ToplevelSurface) {

@@ -2409,6 +2409,32 @@ impl State {
                 // FIXME: granular
                 self.niri.queue_redraw_all();
             }
+            Action::ToggleGroup => {
+                self.niri.layout.toggle_group(None);
+                self.maybe_warp_cursor_to_focus();
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::MoveWindowIntoOrOutOfGroup(direction) => {
+                self.niri
+                    .layout
+                    .move_window_into_or_out_of_group(None, direction);
+                self.maybe_warp_cursor_to_focus();
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::FocusNextTab => {
+                self.niri.layout.focus_next_tab();
+                self.maybe_warp_cursor_to_focus();
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::FocusPreviousTab => {
+                self.niri.layout.focus_prev_tab();
+                self.maybe_warp_cursor_to_focus();
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
             Action::SwapWindowRight(focus) => {
                 self.niri
                     .layout

@@ -1205,12 +1205,10 @@ impl<W: LayoutElement> GridOverview<W> {
                 Point::from((-target.area.loc.x, -target.area.loc.y)),
                 view_size,
             );
-            let count = target.tabs.len();
             indicator.update_render_elements(
                 true,
                 target.area,
                 view_rect,
-                count,
                 target.tabs.into_iter(),
                 is_active,
                 scale,
@@ -1263,7 +1261,6 @@ impl<W: LayoutElement> GridOverview<W> {
                 true,
                 *area,
                 view_rect,
-                tabs.len(),
                 tabs.into_iter(),
                 is_active,
                 scale,

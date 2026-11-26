@@ -446,6 +446,15 @@ fn arbitrary_column_display() -> impl Strategy<Value = ColumnDisplay> {
     prop_oneof![Just(ColumnDisplay::Normal), Just(ColumnDisplay::Tabbed)]
 }
 
+fn arbitrary_window_move_direction() -> impl Strategy<Value = niri_config::WindowMoveDirection> {
+    prop_oneof![
+        Just(niri_config::WindowMoveDirection::Up),
+        Just(niri_config::WindowMoveDirection::Down),
+        Just(niri_config::WindowMoveDirection::Left),
+        Just(niri_config::WindowMoveDirection::Right),
+    ]
+}
+
 #[derive(Debug, Clone, Arbitrary)]
 enum Op {
     AddOutput(#[proptest(strategy = "1..=5usize")] usize),
@@ -578,6 +587,13 @@ enum Op {
     },
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
+    ToggleGroup,
+    MoveWindowIntoOrOutOfGroup(
+        #[proptest(strategy = "arbitrary_window_move_direction()")]
+        niri_config::WindowMoveDirection,
+    ),
+    FocusNextTab,
+    FocusPrevTab,
     SwapWindowInDirection {
         #[proptest(strategy = "arbitrary_scroll_direction()")]
         direction: ScrollDirection,
@@ -1339,6 +1355,18 @@ impl Op {
                 layout.swap_window_in_direction(direction, focus)
             }
             Op::ToggleColumnTabbedDisplay => layout.toggle_column_tabbed_display(),
+            Op::ToggleGroup => {
+                layout.toggle_group(None);
+            }
+            Op::MoveWindowIntoOrOutOfGroup(direction) => {
+                layout.move_window_into_or_out_of_group(None, direction);
+            }
+            Op::FocusNextTab => {
+                layout.focus_next_tab();
+            }
+            Op::FocusPrevTab => {
+                layout.focus_prev_tab();
+            }
             Op::SetColumnDisplay(display) => layout.set_column_display(display),
             Op::CenterColumn => layout.center_column(),
             Op::CenterWindow { id } => {
@@ -14339,6 +14367,217 @@ fn vertical_grid_is_the_transpose_of_the_horizontal_grid() {
             v.target_size
         );
     }
+}
+
+/// A group of two windows: group window 1's tile, then move window 2's tile into it.
+fn grouped_two_window_layout() -> Layout<TestWindow> {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ]);
+
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .toggle_group(Some(&1))
+    );
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .move_window_into_or_out_of_group(Some(&2), niri_config::WindowMoveDirection::Left);
+
+    layout
+}
+
+#[test]
+fn group_and_ungroup_tile() {
+    let mut layout = grouped_two_window_layout();
+
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 1);
+    let grouped: Vec<_> = ws.tiles().filter(|tile| tile.is_grouped_tile()).collect();
+    assert_eq!(grouped.len(), 1, "exactly one tile should be grouped");
+    assert_eq!(grouped[0].windows().count(), 2);
+    assert_eq!(ws.windows().count(), 2);
+    assert_eq!(ws.active_window().unwrap().id(), &2);
+
+    // Toggling the group off spreads its windows into tiles of the same column.
+    assert!(layout.active_workspace_mut().unwrap().toggle_group(None));
+
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.tiles().all(|tile| !tile.is_grouped_tile()));
+    assert_eq!(ws.scrolling().columns().count(), 1);
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 2);
+    assert_eq!(ws.windows().count(), 2);
+}
+
+#[test]
+fn new_window_joins_active_group() {
+    let mut layout = grouped_two_window_layout();
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddWindow {
+            params: TestWindowParams::new(3),
+        }],
+    );
+
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(
+        ws.scrolling().columns().count(),
+        1,
+        "the new window should join the group, not start a column"
+    );
+    let grouped: Vec<_> = ws.tiles().filter(|tile| tile.is_grouped_tile()).collect();
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0].windows().count(), 3);
+    assert_eq!(ws.windows().count(), 3);
+}
+
+#[test]
+fn focus_next_and_prev_tab() {
+    let mut layout = grouped_two_window_layout();
+
+    // The window moved into the group is the active tab.
+    let first = *layout
+        .active_workspace()
+        .unwrap()
+        .active_window()
+        .unwrap()
+        .id();
+    assert_eq!(first, 2);
+
+    assert!(layout.active_workspace_mut().unwrap().focus_next_tab());
+    let second = *layout
+        .active_workspace()
+        .unwrap()
+        .active_window()
+        .unwrap()
+        .id();
+    assert_ne!(first, second);
+    assert!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .tiles()
+            .any(|tile| tile.is_grouped_tile() && tile.has_window(&second))
+    );
+
+    assert!(layout.active_workspace_mut().unwrap().focus_prev_tab());
+    let back = *layout
+        .active_workspace()
+        .unwrap()
+        .active_window()
+        .unwrap()
+        .id();
+    assert_eq!(back, first);
+}
+
+#[test]
+fn expel_tab_to_new_column() {
+    let mut layout = grouped_two_window_layout();
+
+    layout.active_workspace_mut().unwrap().expel_from_column();
+
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 2);
+    assert_eq!(ws.windows().count(), 2);
+
+    // The one window left behind is no longer a group.
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 1);
+    assert!(!column.tiles().next().unwrap().0.is_grouped_tile());
+}
+
+#[test]
+fn tabbed_column_flattens_groups() {
+    let mut layout = grouped_two_window_layout();
+    assert!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .tiles()
+            .any(|tile| tile.is_grouped_tile())
+    );
+
+    // Switching the column to tabs must leave only one tab system behind.
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .set_column_display(ColumnDisplay::Tabbed);
+
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.tiles().all(|tile| !tile.is_grouped_tile()));
+    assert_eq!(ws.scrolling().columns().count(), 1);
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 2);
+    assert_eq!(ws.windows().count(), 2);
+}
+
+#[test]
+fn move_window_into_and_out_of_group() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::CompleteAnimations,
+    ]);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .columns()
+            .count(),
+        3
+    );
+
+    assert!(
+        layout
+            .active_workspace_mut()
+            .unwrap()
+            .toggle_group(Some(&1))
+    );
+
+    // Move window 2 left, into window 1's group.
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .move_window_into_or_out_of_group(Some(&2), niri_config::WindowMoveDirection::Left);
+
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().columns().count(), 2);
+    let group = ws.tiles().find(|tile| tile.is_grouped_tile()).unwrap();
+    assert!(group.has_window(&1));
+    assert!(group.has_window(&2));
+    assert_eq!(group.windows().count(), 2);
+
+    // Move it back out, above the group. The group drops back to a single window.
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .move_window_into_or_out_of_group(Some(&2), niri_config::WindowMoveDirection::Up);
+
+    let ws = layout.active_workspace().unwrap();
+    let column = ws.scrolling().columns().next().unwrap();
+    assert_eq!(column.tiles().count(), 2);
+    assert!(ws.tiles().all(|tile| !tile.is_grouped_tile()));
+    assert_eq!(ws.windows().count(), 3);
 }
 
 #[test]

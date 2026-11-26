@@ -2363,6 +2363,8 @@ Config {
             off: false,
             hide_when_single_tab: false,
             place_within_column: false,
+            hide_titles: false,
+            title_font_size: 12,
             gap: 5.0,
             width: 10.0,
             length: TabIndicatorLength {

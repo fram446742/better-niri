@@ -19,6 +19,15 @@ use crate::utils::{MergeWith, expect_only_children};
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
 
+/// Direction of a window move between groups and columns.
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMoveDirection {
+    Up,
+    Left,
+    Right,
+    Down,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bind {
     pub key: Key,
@@ -395,6 +404,14 @@ pub enum Action {
     ConsumeOrExpelWindowRightById(u64),
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
+    /// Toggle grouping of the focused window.
+    ToggleGroup,
+    /// Move the focused window into the group in this direction, or out of its group.
+    MoveWindowIntoOrOutOfGroup(#[knuffel(argument)] WindowMoveDirection),
+    /// Focus the next tab of the focused group.
+    FocusNextTab,
+    /// Focus the previous tab of the focused group.
+    FocusPreviousTab,
     SwapWindowLeft(#[knuffel(property(name = "focus"), default = true)] bool),
     SwapWindowRight(#[knuffel(property(name = "focus"), default = true)] bool),
     ToggleColumnTabbedDisplay,
@@ -1568,6 +1585,54 @@ impl FromStr for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_group_actions() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Mod+G { toggle-group; }
+                Mod+H { move-window-into-or-out-of-group "up"; }
+                Mod+J { focus-next-tab; }
+                Mod+K { focus-previous-tab; }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.binds.0[0].action,
+            BoundAction::Press(vec![Action::ToggleGroup]),
+        );
+        assert_eq!(
+            config.binds.0[1].action,
+            BoundAction::Press(vec![Action::MoveWindowIntoOrOutOfGroup(
+                WindowMoveDirection::Up
+            )]),
+        );
+        assert_eq!(
+            config.binds.0[2].action,
+            BoundAction::Press(vec![Action::FocusNextTab]),
+        );
+        assert_eq!(
+            config.binds.0[3].action,
+            BoundAction::Press(vec![Action::FocusPreviousTab]),
+        );
+
+        // Default config does not bind any group action.
+        let default = crate::Config::default();
+        for bind in &default.binds.0 {
+            for action in bind.press_actions() {
+                assert!(!matches!(
+                    action,
+                    Action::ToggleGroup
+                        | Action::MoveWindowIntoOrOutOfGroup(_)
+                        | Action::FocusNextTab
+                        | Action::FocusPreviousTab
+                ));
+            }
+        }
+    }
 
     #[test]
     fn parse_multiple_actions_in_order() {

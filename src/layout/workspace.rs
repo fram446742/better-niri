@@ -1839,27 +1839,61 @@ impl<W: LayoutElement> Workspace<W> {
                 config.gaps_between_tabs = config.gaps_between_tabs.max(2.);
 
                 for (item, _) in &go.layout.entries {
-                    let GridItem::Tab {
-                        col_idx, window_id, ..
-                    } = item
-                    else {
-                        continue;
+                    // Column tabs (a tabbed column) and group tabs (a grouped tile in a normal
+                    // column) both get an indicator over their cell.
+                    let (col_idx, window_id, group) = match item {
+                        GridItem::Tab {
+                            col_idx, window_id, ..
+                        } => (*col_idx, window_id, false),
+                        GridItem::Column { col_idx, window_id } => (*col_idx, window_id, true),
+                        GridItem::Floating { .. } => continue,
                     };
-                    let Some(col) = self.scrolling.columns().nth(*col_idx) else {
+                    let Some(col) = self.scrolling.columns().nth(col_idx) else {
                         continue;
                     };
                     let Some((area, _)) = self.grid_tile_visual_rect(go, window_id) else {
                         continue;
                     };
 
-                    let tabs = col
-                        .tiles()
-                        .map(|(tile, _)| {
-                            let is_this_tab = tile.window().id() == window_id;
-                            let is_urgent = tile.window().is_urgent();
-                            TabInfo::from_tile(tile, area.loc, is_this_tab, is_urgent, &config)
-                        })
-                        .collect();
+                    let tabs: Vec<TabInfo> = if group {
+                        // Only a grouped tile draws tabs here; a plain tile has none.
+                        let Some((tile, _)) = col
+                            .tiles()
+                            .find(|(tile, _)| tile.is_grouped_tile() && tile.has_window(window_id))
+                        else {
+                            continue;
+                        };
+                        let focus_ring = tile.focus_ring().config();
+                        let border = tile.border().config();
+                        let size = tile.animated_tile_size();
+                        tile.windows()
+                            .map(|window| {
+                                TabInfo::from_window(
+                                    window,
+                                    focus_ring,
+                                    border,
+                                    area.loc,
+                                    size,
+                                    window.id() == window_id,
+                                    window.is_urgent(),
+                                    &config,
+                                )
+                            })
+                            .collect()
+                    } else {
+                        // A tab item means the column is tabbed; groups were flattened then.
+                        let GridItem::Tab { .. } = item else {
+                            continue;
+                        };
+                        col.tiles()
+                            .map(|(tile, _)| {
+                                let is_this_tab = tile.window().id() == window_id;
+                                let is_urgent = tile.window().is_urgent();
+                                TabInfo::from_tile(tile, area.loc, is_this_tab, is_urgent, &config)
+                            })
+                            .collect()
+                    };
+
                     targets.push(GridTabTarget {
                         window: window_id.clone(),
                         area,
@@ -2037,11 +2071,11 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> + '_ {
-        self.tiles().map(Tile::window)
+        self.tiles().flat_map(Tile::windows)
     }
 
     pub fn windows_mut(&mut self) -> impl Iterator<Item = &mut W> + '_ {
-        self.tiles_mut().map(Tile::window_mut)
+        self.tiles_mut().flat_map(Tile::windows_mut)
     }
 
     pub fn tiles(&self) -> impl Iterator<Item = &Tile<W>> + '_ {
@@ -2290,6 +2324,19 @@ impl<W: LayoutElement> Workspace<W> {
     ) {
         self.enter_output_for_window(tile.window());
         tile.restore_to_floating = is_floating;
+
+        // New tiled windows join the active group as tabs instead of starting a new tile. This
+        // matches how the reference builds a group: group a window, then open more in it.
+        if !is_floating
+            && !self.floating_is_active.get()
+            && matches!(target, WorkspaceAddWindowTarget::Auto)
+            && self.scrolling.active_tile_is_grouped()
+        {
+            let window = tile.take_window();
+            self.scrolling.add_window_to_active_group(window);
+            return;
+        }
+
         // A tile comes in below the floating windows, until it is focused here.
         tile.above_floating = false;
         // A new floating window shows on top of every tiled window.
@@ -2466,6 +2513,80 @@ impl<W: LayoutElement> Workspace<W> {
                 self.activate_floating_space();
             }
         }
+    }
+
+    /// Whether the window is one tab among several in a group.
+    pub fn is_window_grouped(&self, id: &W::Id) -> bool {
+        self.tiles()
+            .any(|tile| tile.is_grouped_tile() && tile.has_window(id) && tile.windows().count() > 1)
+    }
+
+    /// Removes a single window, keeping its tile when the tile is a group.
+    ///
+    /// Returns the removed tile only when the window was the tile's last one.
+    pub fn remove_window(
+        &mut self,
+        id: &W::Id,
+        transaction: Transaction,
+    ) -> Option<RemovedTile<W>> {
+        let from_floating = self.floating.has_window(id);
+        let is_active = self.active_window().is_some_and(|window| window.id() == id);
+
+        let (has_left, next_id) = {
+            let tile = if from_floating {
+                self.floating.tiles_mut().find(|tile| tile.has_window(id))
+            } else {
+                self.scrolling.tiles_mut().find(|tile| tile.has_window(id))
+            };
+            let tile = tile?;
+
+            if let Some(output) = &self.output
+                && let Some(window) = tile.windows().find(|window| window.id() == id)
+            {
+                window.output_leave(output);
+            }
+
+            if tile.remove_window(id) != 0 {
+                (false, Some(tile.focused_window().id().clone()))
+            } else {
+                (true, None)
+            }
+        };
+
+        if !has_left {
+            // Other tabs remain; keep focus inside the group.
+            if is_active
+                && let Some(next) = next_id
+                && !self.floating.activate_window(&next)
+            {
+                self.scrolling.activate_window(&next);
+            }
+            return None;
+        }
+
+        let mut removed = if from_floating {
+            self.floating.remove_tile(id)
+        } else {
+            self.scrolling.remove_tile(id, transaction)
+        };
+
+        // A minimized window that is moved somewhere gets restored on the way. (Closing it
+        // discards the tile anyway.)
+        if removed.tile.window().is_minimized() {
+            removed.tile.window_mut().set_minimized(false);
+            removed.tile.window_mut().set_suspended(false);
+            removed.tile.minimized_at = None;
+            // It may be fading out with the grid closing; restored, it shows right away.
+            removed.tile.ensure_alpha_animates_to_1();
+        }
+
+        if let Some(output) = &self.output {
+            removed.tile.window().output_leave(output);
+        }
+
+        self.update_focus_floating_tiling_after_removing(from_floating);
+
+        Some(removed)
     }
 
     pub fn remove_tile(&mut self, id: &W::Id, transaction: Transaction) -> RemovedTile<W> {
@@ -2926,6 +3047,49 @@ impl<W: LayoutElement> Workspace<W> {
             return;
         }
         self.scrolling.consume_into_column();
+    }
+
+    /// Toggles grouping of the window, or of the active tile's window.
+    pub fn toggle_group(&mut self, window: Option<&W::Id>) -> bool {
+        let floating = window.map_or(self.floating_is_active.get(), |id| {
+            self.floating.has_window(id)
+        });
+        if floating {
+            return false;
+        }
+        self.scrolling.toggle_group(window)
+    }
+
+    /// Moves the window into the group in `direction`, or out of its group.
+    pub fn move_window_into_or_out_of_group(
+        &mut self,
+        window: Option<&W::Id>,
+        direction: niri_config::WindowMoveDirection,
+    ) {
+        let floating = window.map_or(self.floating_is_active.get(), |id| {
+            self.floating.has_window(id)
+        });
+        if floating {
+            return;
+        }
+        self.scrolling
+            .move_window_into_or_out_of_group(window, direction);
+    }
+
+    /// Focuses the next tab of the active grouped tile.
+    pub fn focus_next_tab(&mut self) -> bool {
+        if self.floating_is_active.get() {
+            return false;
+        }
+        self.scrolling.focus_next_tab()
+    }
+
+    /// Focuses the previous tab of the active grouped tile.
+    pub fn focus_prev_tab(&mut self) -> bool {
+        if self.floating_is_active.get() {
+            return false;
+        }
+        self.scrolling.focus_prev_tab()
     }
 
     pub fn expel_from_column(&mut self) {

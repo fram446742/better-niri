@@ -1,24 +1,45 @@
+use std::cell::RefCell;
+use std::cmp::min;
 use std::iter::zip;
 use std::mem;
 
+use anyhow::ensure;
 use niri_config::{CornerRadius, Gradient, GradientRelativeTo, TabIndicatorPosition};
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use pango::FontDescription;
+use pango::glib::property::PropertySet;
+use pangocairo::cairo::{self, ImageSurface};
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::element::Kind;
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 
 use super::LayoutElement;
 use super::tile::Tile;
 use crate::animation::{Animation, Clock};
 use crate::niri_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::{
     floor_logical_in_physical_max1, round_logical_in_physical, round_logical_in_physical_max1,
+    to_physical_precise_round,
 };
+
+/// Smallest horizontal distance a tab title keeps from the tab's edges.
+const MIN_DIST_TO_EDGES: f64 = 20.;
+
+/// Distance between a tab title and the tab bar.
+const GAP_TO_BAR: f64 = 2.;
 
 #[derive(Debug)]
 pub struct TabIndicator {
     shader_locs: Vec<Point<f64, Logical>>,
     shaders: Vec<BorderRenderElement>,
     open_anim: Option<Animation>,
+    /// The tabs as of the last update, for drawing titles.
+    tabs: Vec<TabInfo>,
+    /// A rendered title texture per tab, rebuilt when its title or geometry changes.
+    title_textures: Vec<TitleTexture>,
     config: niri_config::TabIndicator,
     /// Opacity of the whole indicator.
     alpha: f32,
@@ -34,18 +55,35 @@ pub struct TabIndicator {
     closing: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TabInfo {
     /// Gradient for the tab indicator.
     pub gradient: Gradient,
     /// Tab geometry in the same coordinate system as the area.
     pub geometry: Rectangle<f64, Logical>,
+    /// Title of the window the tab stands for.
+    pub title: String,
 }
 
 niri_render_elements! {
     TabIndicatorRenderElement => {
         Gradient = BorderRenderElement,
+        Title = PrimaryGpuTextureRenderElement,
     }
+}
+
+/// A tab title rendered into a texture, cached between frames.
+#[derive(Debug, Default)]
+struct TitleTexture {
+    title: String,
+    scale: f64,
+    max_size: Size<f64, Logical>,
+    texture: RefCell<
+        Option<crate::render_helpers::texture::TextureBuffer<crate::backend::tty::TtyOffscreen>>,
+    >,
+    /// The size the text wants when given unlimited space.
+    wanted_size: RefCell<Option<Size<i32, Physical>>>,
+    font_size: u32,
 }
 
 impl TabIndicator {
@@ -54,6 +92,8 @@ impl TabIndicator {
             shader_locs: Vec::new(),
             shaders: Vec::new(),
             open_anim: None,
+            tabs: Vec::new(),
+            title_textures: Vec::new(),
             config,
             alpha: 1.,
             bounds: None,
@@ -227,14 +267,15 @@ impl TabIndicator {
         area: Rectangle<f64, Logical>,
         // View rect relative to the tabs area.
         area_view_rect: Rectangle<f64, Logical>,
-        // Tab count, should match the tabs iterator length.
-        tab_count: usize,
         tabs: impl Iterator<Item = TabInfo>,
         is_active: bool,
         scale: f64,
     ) {
+        self.tabs = tabs.collect();
         self.bounds = None;
         if !enabled || self.config.off {
+            self.tabs.clear();
+            self.title_textures.clear();
             self.shader_locs.clear();
             self.shaders.clear();
             self.shown_rects.clear();
@@ -242,8 +283,9 @@ impl TabIndicator {
             return;
         }
 
-        let count = tab_count;
+        let count = self.tabs.len();
         if self.config.hide_when_single_tab && count == 1 {
+            self.title_textures.clear();
             self.shader_locs.clear();
             self.shaders.clear();
             self.shown_rects.clear();
@@ -257,13 +299,26 @@ impl TabIndicator {
         let position = self.config.position;
         let radius = self.config.corner_radius as f32;
         let shared_rounded_corners = self.config.gaps_between_tabs == 0.;
-        let mut tabs_left = tab_count;
+        let mut tabs_left = count;
 
         let rects = self.animated_tab_rects(area, count, scale);
         self.bounds = rects.iter().copied().reduce(|a, b| a.merge(b));
+
+        // Keep one title texture per tab, re-rendering only the ones whose text or space changed.
+        self.title_textures
+            .resize_with(count, TitleTexture::default);
+        for ((tex, tab), rect) in zip(zip(&mut self.title_textures, &self.tabs), rects.iter()) {
+            tex.update_config(
+                Some(tab.title.clone()),
+                Some(scale),
+                Some(Size::new((rect.size.w - MIN_DIST_TO_EDGES).max(0.), 16384.)),
+                Some(self.config.title_font_size),
+            );
+        }
+
         for ((shader, loc), (tab, rect)) in zip(
             zip(&mut self.shaders, &mut self.shader_locs),
-            zip(tabs, rects),
+            zip(&self.tabs, rects),
         ) {
             *loc = rect.loc;
 
@@ -280,8 +335,8 @@ impl TabIndicator {
                 color_to *= 0.5;
             }
 
-            let radius = if shared_rounded_corners && tab_count > 1 {
-                if tabs_left == tab_count {
+            let radius = if shared_rounded_corners && count > 1 {
+                if tabs_left == count {
                     // First tab.
                     match position {
                         TabIndicatorPosition::Left | TabIndicatorPosition::Right => CornerRadius {
@@ -427,9 +482,51 @@ impl TabIndicator {
             return None;
         }
 
+        let font_height = self.font_height();
+
         self.tab_rects(area, count, scale)
+            .map(|mut rect| {
+                // The title above (or below) the bar is part of the tab.
+                if font_height > 0. {
+                    match self.config.position {
+                        TabIndicatorPosition::Top => {
+                            rect.size.h += font_height + GAP_TO_BAR;
+                        }
+                        TabIndicatorPosition::Bottom => {
+                            rect.loc.y -= font_height + GAP_TO_BAR;
+                            rect.size.h += font_height + GAP_TO_BAR;
+                        }
+                        TabIndicatorPosition::Left | TabIndicatorPosition::Right => (),
+                    }
+                }
+                rect
+            })
             .enumerate()
             .find_map(|(idx, rect)| rect.contains(point).then_some(idx))
+    }
+
+    /// Height taken by the tab titles, zero when they are off or not shown for this position.
+    fn font_height(&self) -> f64 {
+        if self.config.hide_titles
+            || matches!(
+                self.config.position,
+                TabIndicatorPosition::Left | TabIndicatorPosition::Right
+            )
+        {
+            return 0.;
+        }
+
+        // Before the first textures are rendered, estimate with the configured font size, since
+        // the tile resize animation starts right away.
+        self.title_textures
+            .iter()
+            .fold(self.config.title_font_size as f64, |acc, tex| {
+                if let Some(texture) = tex.texture.borrow().as_ref() {
+                    texture.logical_size().h.max(acc)
+                } else {
+                    acc
+                }
+            })
     }
 
     pub fn render(
@@ -443,13 +540,42 @@ impl TabIndicator {
             return;
         }
 
+        let font_height = self.font_height();
+
+        if font_height > 0. {
+            for (tex, loc) in zip(&self.title_textures, &self.shader_locs) {
+                let Ok(texture) = tex.get(renderer) else {
+                    // A missing title is not worth failing the frame over.
+                    continue;
+                };
+                let title_pos = Point::new(
+                    (tex.max_size.w + MIN_DIST_TO_EDGES) / 2. - texture.logical_size().w / 2.,
+                    match self.config.position {
+                        TabIndicatorPosition::Top => self.config.width + GAP_TO_BAR,
+                        _ => -texture.logical_size().h - GAP_TO_BAR,
+                    },
+                );
+                push(
+                    PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
+                        texture,
+                        pos + *loc + title_pos,
+                        1.,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ))
+                    .into(),
+                );
+            }
+        }
+
         for (shader, loc) in zip(&self.shaders, &self.shader_locs) {
             let elem = shader.clone().with_location(pos + *loc);
             push(TabIndicatorRenderElement::from(elem));
         }
     }
 
-    /// Extra size occupied by the tab indicator.
+    /// Extra size occupied by the tab indicator when it is placed within a column.
     pub fn extra_size(&self, tab_count: usize, scale: f64) -> Size<f64, Logical> {
         if self.config.off
             || !self.config.place_within_column
@@ -462,8 +588,6 @@ impl TabIndicator {
         let width = round(self.config.width);
         let gap = round(self.config.gap);
 
-        // No, I am *not* falling into the rabbit hole of "what if the tab indicator is wide enough
-        // that it peeks from the other side of the window".
         let size = f64::max(0., width + gap);
 
         match self.config.position {
@@ -482,6 +606,68 @@ impl TabIndicator {
         }
     }
 
+    /// Extra size the tab indicator takes inside a tile: the bar plus the title band.
+    ///
+    /// Unlike [`TabIndicator::extra_size`], this never depends on `place_within_column`: a grouped
+    /// tile always makes room for its tabs.
+    pub fn extra_size_in_tile(&self, tab_count: usize, scale: f64) -> Size<f64, Logical> {
+        if self.config.off || (self.config.hide_when_single_tab && tab_count == 1) {
+            return Size::from((0., 0.));
+        }
+
+        let round = |logical: f64| round_logical_in_physical(scale, logical);
+        let width = round(self.config.width);
+        let gap = round(self.config.gap);
+        let title = if self.font_height() > 0. {
+            round(self.font_height() + GAP_TO_BAR)
+        } else {
+            0.
+        };
+
+        // No, I am *not* falling into the rabbit hole of "what if the tab indicator is wide enough
+        // that it peeks from the other side of the window".
+        let size = f64::max(0., width + gap + title);
+
+        match self.config.position {
+            TabIndicatorPosition::Left | TabIndicatorPosition::Right => Size::from((size, 0.)),
+            TabIndicatorPosition::Top | TabIndicatorPosition::Bottom => Size::from((0., size)),
+        }
+    }
+
+    /// Offset of a grouped tile's window due to the space its tab indicator takes.
+    pub fn content_offset_in_tile(&self, tab_count: usize, scale: f64) -> Point<f64, Logical> {
+        match self.config.position {
+            TabIndicatorPosition::Top => self.extra_size_in_tile(tab_count, scale).to_point(),
+            TabIndicatorPosition::Bottom
+            | TabIndicatorPosition::Left
+            | TabIndicatorPosition::Right => Point::from((0., 0.)),
+        }
+    }
+
+    /// Area to lay the tabs out in for a grouped tile, given the tile's own size.
+    ///
+    /// The tab bars sit just outside this area, so this drops it into the band the tile reserves
+    /// for the indicator.
+    pub fn tile_tab_area(
+        &self,
+        tile_size: Size<f64, Logical>,
+        tab_count: usize,
+        scale: f64,
+    ) -> Rectangle<f64, Logical> {
+        let extra = self.extra_size_in_tile(tab_count, scale);
+        let round = |logical: f64| round_logical_in_physical(scale, logical);
+        let width = round(self.config.width);
+        let gap = round(self.config.gap);
+
+        let loc = match self.config.position {
+            TabIndicatorPosition::Top => Point::new(0., width + gap),
+            TabIndicatorPosition::Bottom => Point::new(0., extra.h - width - gap),
+            TabIndicatorPosition::Left => Point::new(width + gap, 0.),
+            TabIndicatorPosition::Right => Point::new(extra.w - width - gap, 0.),
+        };
+        Rectangle::new(loc, tile_size)
+    }
+
     pub fn config(&self) -> niri_config::TabIndicator {
         self.config
     }
@@ -495,7 +681,31 @@ impl TabInfo {
         is_urgent: bool,
         config: &niri_config::TabIndicator,
     ) -> Self {
-        let rules = tile.window().rules();
+        Self::from_window(
+            tile.window(),
+            tile.focus_ring().config(),
+            tile.border().config(),
+            position,
+            tile.animated_tile_size(),
+            is_active,
+            is_urgent,
+            config,
+        )
+    }
+
+    /// Builds tab info for one window of a group, in the given tab area coordinate system.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_window<W: LayoutElement>(
+        window: &W,
+        focus_ring_config: &niri_config::FocusRing,
+        border_config: &niri_config::FocusRing,
+        position: Point<f64, Logical>,
+        tile_size: Size<f64, Logical>,
+        is_active: bool,
+        is_urgent: bool,
+        config: &niri_config::TabIndicator,
+    ) -> Self {
+        let rules = window.rules();
         let rule = rules.tab_indicator;
 
         let gradient_from_rule = || {
@@ -525,8 +735,6 @@ impl TabInfo {
         let gradient_from_border = || {
             // Come up with tab indicator gradient matching the focus ring or the border, whichever
             // one is enabled.
-            let focus_ring_config = tile.focus_ring().config();
-            let border_config = tile.border().config();
             let config = if focus_ring_config.off {
                 border_config
             } else {
@@ -547,10 +755,160 @@ impl TabInfo {
             .or_else(gradient_from_config)
             .unwrap_or_else(gradient_from_border);
 
-        let geometry = Rectangle::new(position, tile.animated_tile_size());
+        let geometry = Rectangle::new(position, tile_size);
 
-        TabInfo { gradient, geometry }
+        TabInfo {
+            gradient,
+            geometry,
+            title: window.title().unwrap_or_default(),
+        }
     }
+}
+
+impl TitleTexture {
+    fn update_config(
+        &mut self,
+        new_title: Option<String>,
+        new_scale: Option<f64>,
+        new_max_size: Option<Size<f64, Logical>>,
+        new_font_size: Option<u32>,
+    ) {
+        if let Some(new_font_size) = new_font_size {
+            if new_font_size != self.font_size {
+                self.texture.set(None);
+                self.wanted_size.set(None);
+            }
+            self.font_size = new_font_size;
+        }
+        if let Some(new_title) = new_title {
+            if new_title != self.title {
+                self.texture.set(None);
+                self.wanted_size.set(None);
+            }
+            self.title = new_title;
+        }
+
+        if let Some(new_scale) = new_scale {
+            if new_scale != self.scale {
+                self.texture.set(None);
+                self.wanted_size.set(None);
+            }
+            self.scale = new_scale;
+        }
+
+        if let Some(new_max_size) = new_max_size {
+            if new_max_size != self.max_size {
+                // Only re-render when the current texture no longer fits or could grow into the
+                // new space; otherwise the existing one is still correct.
+                let should_dirty = if let (Some(texture), Some(wanted_size)) = (
+                    self.texture.borrow().as_ref(),
+                    self.wanted_size.borrow().as_ref(),
+                ) {
+                    let wanted_size = wanted_size.to_f64().to_logical(self.scale);
+                    let tex_size = texture.logical_size();
+                    (wanted_size.w >= self.max_size.w && new_max_size.w > self.max_size.w)
+                        || (wanted_size.h >= self.max_size.h && new_max_size.h > self.max_size.h)
+                        || (tex_size.w > new_max_size.w)
+                        || (tex_size.h > new_max_size.h)
+                } else {
+                    true
+                };
+
+                if should_dirty {
+                    self.texture.set(None);
+                    self.wanted_size.set(None);
+                }
+            }
+            self.max_size = new_max_size;
+        }
+    }
+
+    fn get<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+    ) -> anyhow::Result<
+        crate::render_helpers::texture::TextureBuffer<crate::backend::tty::TtyOffscreen>,
+    > {
+        let mut tex = self.texture.borrow_mut();
+
+        if self.title.is_empty() {
+            return Err(anyhow::anyhow!(
+                "cannot render title texture if title is empty"
+            ));
+        }
+
+        match &*tex {
+            Some(texture) => Ok(texture.clone()),
+            None => {
+                let (new_tex, wanted_size) = render_title_texture(
+                    renderer,
+                    &self.title,
+                    self.scale,
+                    self.max_size,
+                    self.font_size,
+                )?;
+                *tex = Some(new_tex.clone());
+                self.wanted_size.set(Some(wanted_size));
+                Ok(new_tex)
+            }
+        }
+    }
+}
+
+fn render_title_texture<R: NiriRenderer>(
+    renderer: &mut R,
+    title: &str,
+    scale: f64,
+    max_size: Size<f64, Logical>,
+    font_size: u32,
+) -> anyhow::Result<(
+    crate::render_helpers::texture::TextureBuffer<crate::backend::tty::TtyOffscreen>,
+    Size<i32, Physical>,
+)> {
+    let _span = tracy_client::span!("tab_indicator::render_title_texture");
+
+    let mut font = FontDescription::from_string(&format!("sans {font_size}px"));
+    font.set_absolute_size(to_physical_precise_round(scale, font.size()));
+
+    let surface = ImageSurface::create(cairo::Format::ARgb32, 0, 0)?;
+    let cr = cairo::Context::new(&surface)?;
+    let layout = pangocairo::functions::create_layout(&cr);
+    layout.context().set_round_glyph_positions(false);
+
+    layout.set_single_paragraph_mode(true);
+    layout.set_font_description(Some(&font));
+    layout.set_text(title);
+
+    let (width, height) = layout.pixel_size();
+    let wanted_size = Size::new(width, height);
+
+    // Guard against overly long window titles.
+    let max_size = max_size.to_physical_precise_round(scale);
+    let width = min(width, max_size.w);
+    let height = min(height, max_size.h);
+
+    ensure!(width > 0 && height > 0);
+
+    let surface = ImageSurface::create(cairo::Format::ARgb32, width, height)?;
+    let cr = cairo::Context::new(&surface)?;
+    cr.set_source_rgb(1., 1., 1.);
+    pangocairo::functions::show_layout(&cr, &layout);
+
+    drop(cr);
+
+    let data = surface.take_data().unwrap();
+    let buffer = TextureBuffer::from_memory(
+        renderer,
+        &data,
+        Fourcc::Argb8888,
+        (width, height),
+        false,
+        scale,
+        Transform::Normal,
+        Vec::new(),
+    )?;
+
+    Ok((buffer.map_texture(R::wrap_texture), wanted_size))
 }
 
 #[cfg(test)]
@@ -565,12 +923,13 @@ mod tests {
         (0..count).map(|_| TabInfo {
             gradient: Gradient::from(Color::new_unpremul(1., 1., 1., 1.)),
             geometry: Rectangle::from_size(Size::from((100., 100.))),
+            title: String::new(),
         })
     }
 
     fn update(indicator: &mut TabIndicator, count: usize) {
         let area = Rectangle::from_size(Size::from((100., 400.)));
-        indicator.update_render_elements(true, area, area, count, tabs(count), true, 1.);
+        indicator.update_render_elements(true, area, area, tabs(count), true, 1.);
     }
 
     #[test]
@@ -611,5 +970,56 @@ mod tests {
         update(&mut indicator, 2);
         assert!(!indicator.are_animations_ongoing());
         assert_eq!(indicator.shown_rects.len(), 2);
+    }
+
+    #[test]
+    fn group_tabs_reserve_a_title_band_above_the_window() {
+        let config = niri_config::TabIndicator {
+            position: TabIndicatorPosition::Top,
+            ..Default::default()
+        };
+        let indicator = TabIndicator::new(config);
+
+        let tile_size = Size::from((200., 100.));
+        let extra = indicator.extra_size_in_tile(2, 1.);
+
+        // Bar width, gap on both sides of it, and the font band (configured 12px + bar gap).
+        assert_eq!(extra, Size::from((0., 4. + 5. + 12. + 2.)));
+        assert_eq!(
+            indicator.content_offset_in_tile(2, 1.),
+            Point::from((0., extra.h)),
+            "the window starts below the bar and its title"
+        );
+
+        // The bar itself sits at the very top of the tile.
+        let area = indicator.tile_tab_area(tile_size, 2, 1.);
+        assert_eq!(area.loc, Point::from((0., 4. + 5.)));
+        assert_eq!(area.loc.y - 5. - 4., 0.);
+
+        // Clicking the bar or the title selects the tab; the gap below it does not.
+        // The bar length is half the tile (100 px) and is centered, so tabs span x 50..150.
+        assert_eq!(indicator.hit(area, 2, 1., Point::from((60., 2.))), Some(0));
+        assert_eq!(
+            indicator.hit(area, 2, 1., Point::from((140., 10.))),
+            Some(1)
+        );
+        assert_eq!(indicator.hit(area, 2, 1., Point::from((60., 22.))), None);
+    }
+
+    #[test]
+    fn single_tab_group_can_hide_its_indicator() {
+        let config = niri_config::TabIndicator {
+            position: TabIndicatorPosition::Top,
+            hide_when_single_tab: true,
+            ..Default::default()
+        };
+        let indicator = TabIndicator::new(config);
+
+        assert_eq!(
+            indicator.extra_size_in_tile(1, 1.),
+            Size::from((0., 0.)),
+            "a group of one with hide-when-single-tab takes no room"
+        );
+        assert!(indicator.extra_size_in_tile(2, 1.).h > 0.);
     }
 }
