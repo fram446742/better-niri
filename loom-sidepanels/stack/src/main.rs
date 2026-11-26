@@ -1,11 +1,11 @@
 use anyhow::Result;
+use clap::{Parser, Subcommand};
+use fslock::LockFile;
 use loom_sidepanels_stack::commands::Target;
 use loom_sidepanels_stack::config::{Side, load_config};
 use loom_sidepanels_stack::niri::connect;
 use loom_sidepanels_stack::state::{get_default_cache_dir, load_state};
 use loom_sidepanels_stack::{AppState, Ctx, Direction, commands, config};
-use clap::{Parser, Subcommand};
-use fslock::LockFile;
 
 #[derive(Parser)]
 #[command(name = "loom-sidepanels-stack")]

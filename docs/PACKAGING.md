@@ -105,7 +105,8 @@ installing a subset never rebuilds niri or another Rust crate.
 
 | Package | Binaries | Contents | depends / optdepends |
 | --- | --- | --- | --- |
-| `loom-niri` | `niri`, `niri-session` | compositor, session/desktop files, `niri.portal`, `niri-portals.conf`, systemd units, completions, config, docs | niri's GL/Wayland/PipeWire/Vulkan libraries; optional portals, terminal/launcher, GPU drivers |
+| `loom-niri` | `loom-niri`, `loom-niri-session` | coexisting compositor, own XDG paths, session/desktop files, `loom-niri.portal`, systemd units, completions, config, docs | niri's GL/Wayland/PipeWire/Vulkan libraries; optional portals, terminal/launcher, GPU drivers |
+| `loom-niri-replace` | `niri`, `niri-session` | compositor under the niri names; conflicts with niri/niri-git | same as `loom-niri` |
 | `loom-portal` | `loom-portal`, `loom-portal-picker` | `loom.portal`, systemd user unit, D-Bus activation file, example `portals.conf` | `dbus`, `systemd`; optional `xdg-desktop-portal{,-gtk}` |
 | `loom-companion` | `loom-companion`, `loomctl` | automation/parking daemon, control CLI and optional systemd user unit | `gcc-libs`, `glibc`; optional `systemd`, `libpulse`, `libnotify` |
 | `loom-monitor` | `loom-monitor` | output profile save/apply/rollback | `gcc-libs`, `glibc` |
@@ -114,14 +115,15 @@ installing a subset never rebuilds niri or another Rust crate.
 | `loom-wallpaper` | `loom-wallpaper` | per-workspace wallpaper scenes | `gcc-libs`, `glibc`, `wayland`; optional `swaybg`, `swww` |
 | `loom-settings` | `loom-settings`, `loom-settingsctl` | GTK4 settings UI, CLI and desktop entry | `gtk4`/`libadwaita`, `gcc-libs`, `glibc` |
 | `loom-audio` | `loom-audio` | rule-based PipeWire routing and default sink | `libpipewire`, `gcc-libs`, `glibc`; optional `pipewire`, `wireplumber`, `libpulse`, `pulseaudio` |
-| `loom-sidepanels` | `loom-sidepanels` | layer-shell panels with exclusive zones | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
+| `loom-sidepanels` | `loom-sidepanels` | layer-shell panels, floating stacks and optional minimap | `cairo`, `glib2`, `wayland`, `gcc-libs`, `glibc`; optional `playerctl`, `libpulse`, `wireplumber`, `libnotify` |
+| `loom-tui` | `loom-tui` | terminal dashboard over `loom-state` | `gcc-libs`, `glibc` |
 | `loom-noctalia-plugins` | — | Noctalia plugin source (Luau bar widgets) installed under `/usr/share/loom/noctalia-plugins` | optional `noctalia`, `loom-companion`, `loom-monitor`, `loom-session`, `loom-shot`, `loom-audio`, `loom-wallpaper`, `loom-sidepanels` |
 | `loom-desktop` | `loom` | meta package and unified tool selector, post-install notes | depends on every package above |
 
 `loom-monitor`, `loom-session` and `loom-sidepanels` need no niri package
 beyond the IPC socket; `loom-companion`, `loom-shot`, `loom-settings` and
-`loom-audio` are equally independent. Only `loom-niri` provides/conflicts
-with `niri`, `niri-git`, `niri-elite` and `niri-elite-git`.
+`loom-audio` are equally independent. Only `loom-niri-replace` conflicts with
+`niri`/`niri-git`; `loom-niri` coexists with them.
 
 ### Install examples
 
@@ -148,9 +150,9 @@ makepkg -si --pkg loom-portal loom-settings
 `makepkg -si --pkg` still builds all splits, but only the named packages are
 installed; install sibling packages from the same build too when they have
 local dependencies. `loom-desktop` depends on every split, so install the
-whole set (plain `makepkg -si`) rather than the meta package alone. When
-`loom-niri` replaces `niri`/`niri-git`, remove the other package first or let
-your helper resolve the conflict. Companion packages have no such conflict.
+whole set (plain `makepkg -si`) rather than the meta package alone. Install
+`loom-niri-replace` instead of `loom-niri` when replacing niri; the companion
+packages have no such conflict.
 
 Each package owns its own `/usr/share/doc/<package>/` README, license and
 component files. `loom-portal` owns `loom.portal`, its systemd/D-Bus files
@@ -304,21 +306,21 @@ that the combination was hardware-tested in this tree.
 
 ## AUR
 
-Two split recipes live under `packaging/aur/`. Both produce the same package
-names: `loom-niri`, `loom-portal`, `loom-companion`, `loom-monitor`,
-`loom-session`, `loom-shot`, `loom-wallpaper`, `loom-settings`,
-`loom-audio`, `loom-sidepanels`, `loom-noctalia-plugins` and the
-`loom-desktop` meta package.
+The VCS recipe lives in `packaging/aur/loom-niri-git/` and is published at
+`ssh://aur@aur.archlinux.org/loom-niri-git.git`. It produces:
 
-| Package base | Source | Version |
-| --- | --- | --- |
-| `loom-niri` | pinned commit `9ca9e425` | fixed `26.4.0+loom.1-r1` |
-| `loom-niri-git` | `main` | `pkgver()` from git |
+- `loom-niri-git` — coexisting compositor, binary `loom-niri`, own XDG paths;
+- `loom-niri-replace-git` — compositor installed as `niri`, conflicts with
+  `niri`/`niri-git`;
+- `loom-portal-git`, `loom-companion-git`, `loom-monitor-git`,
+  `loom-session-git`, `loom-shot-git`, `loom-wallpaper-git`,
+  `loom-settings-git`, `loom-audio-git`, `loom-sidepanels-git`,
+  `loom-tui-git`, `loom-noctalia-plugins-git`;
+- `loom-desktop-git`, the meta package for the coexisting compositor.
 
-Only one package base can be published: AUR rejects a second repository that
-would overwrite the same split package names. `loom-niri` is the published
-base; `loom-niri-git` stays in the tree for local builds and would need
-`-git`-suffixed package names before it could be uploaded alongside it.
+The stable and `-bin` sets can be added later with the same names without the
+suffix. A package named just `loom` cannot be published; that AUR name is
+already taken.
 
 Build locally before publishing:
 
@@ -327,114 +329,28 @@ cd packaging/aur/loom-niri-git
 makepkg -s
 ```
 
-`prepare()` fetches the root lockfile and every companion workspace lockfile
-into `$srcdir/cargo-home`; `build()` uses `--frozen`, so a missing dependency
-fails instead of silently updating a lockfile. `LIBCLANG_PATH=/usr/lib` is set
-for bindgen. The source commit is exported as `NIRI_BUILD_COMMIT` so
-`niri --version` identifies the packaged revision. All split packages share that
-one build.
+`prepare()` fetches the root lockfile and every tool workspace lockfile into
+`$srcdir/cargo-home`; `build()` uses `--frozen`. `LIBCLANG_PATH=/usr/lib` is set
+for bindgen. All split packages share the one build.
 
-Each recipe directory also carries the local recipe files that are not in the
-source checkout: `loom-settings.desktop`, `loom-desktop.README.md` and
-`loom-desktop.install`. Keep them next to `PKGBUILD` when publishing.
-`loom-noctalia-plugins` installs the same directory shipped in the repository;
-add `/usr/share/loom/noctalia-plugins` as a Noctalia plugin source.
+The recipe directory carries files that are not in the source checkout:
+`loom-settings.desktop`, `loom-desktop-git.README.md` and
+`loom-desktop-git.install`. `loom-noctalia-plugins-git` installs the plugin
+source under `/usr/share/loom/noctalia-plugins`.
 
-Regenerate `.SRCINFO` after changing any recipe:
-
-```sh
-packaging/scripts/update-srcinfo.sh
-```
-
-Publishing is a manual release step: copy `PKGBUILD`, `.SRCINFO` and the three
-local recipe files into the AUR repository and push from there. Never force-push
-an AUR history. The current `loom-niri` base is published at
-`ssh://aur@aur.archlinux.org/loom-niri.git`.
+Regenerate metadata with `packaging/scripts/update-srcinfo.sh`, then copy
+`PKGBUILD`, `.SRCINFO` and the three local files into the AUR checkout. Never
+force-push an AUR history. Retire the old `niri-better` base after the Loom
+packages are live.
 
 ## Verification
 
 ```sh
-packaging/scripts/verify.sh                 # syntax, profiles, staging, metadata, .SRCINFO, cargo checks
-packaging/scripts/verify.sh --skip-cargo    # fast structural check
-bash -n packaging/scripts/*.sh packaging/arch/PKGBUILD \
-  packaging/aur/loom-niri/PKGBUILD packaging/aur/loom-niri-git/PKGBUILD
+packaging/scripts/verify.sh
+packaging/scripts/update-srcinfo.sh
 ```
 
-The verifier lints with `shellcheck` when it is installed (otherwise `bash -n`
-only), validates profiles against `cargo metadata`, asserts that every recipe
-declares the same 11 split packages, and runs each `package_<name>()` against a
-fake build tree to compare its staged files with an exact manifest. It then
-checks binary ownership (each Cargo binary and `niri-session` is claimed by
-exactly one package, with no duplicates or orphans), expands every recipe with
-`makepkg --printsrcinfo` to validate `depends`/`optdepends` names and
-cross-recipe agreement, and verifies `loom-desktop` depends on every split.
-`.SRCINFO` files must be current (regenerate with `update-srcinfo.sh`). Finally
-it runs `cargo check` for all three profiles; `--skip-cargo` is useful in a
-minimal environment.
-
-## Generated from the manifests
-
-The tables below are generated with
-`packaging/scripts/manifest-report.sh`; update this section after a manifest or
-dependency change.
-
-### Manifest pins
-
-| Item | Value |
-| --- | --- |
-| niri package version | `26.4.0-elite` (Arch `pkgver` uses `.elite` because Arch versions cannot contain `-`) |
-| Rust MSRV | `1.95` |
-| loom-smithay revision | `c76148907cf6dae4441aa7224ac518bc120e356a` |
-| Default Cargo features | `agent`, `dbus`, `systemd`, `xdp-gnome-screencast`, `kde`, `cursor`, `effects`, `navigation`, `vulkan` |
-
-### Components and binaries
-
-| Component | Manifest | Binaries | Package |
-| --- | --- | --- | --- |
-| `niri` | `Cargo.toml` | niri | `loom-niri` |
-| `portal` | `loom-portal/Cargo.toml` | loom-portal, loom-portal-picker | `loom-portal` |
-| `companion` | `loom-companion/Cargo.toml` | loom-companion, loomctl | `loom-companion` |
-| `monitor` | `loom-monitor/Cargo.toml` | loom-monitor | `loom-monitor` |
-| `session` | `loom-session/Cargo.toml` | loom-session | `loom-session` |
-| `shot` | `loom-shot/Cargo.toml` | loom-shot | `loom-shot` |
-| `wallpaper` | `loom-wallpaper/Cargo.toml` | loom-wallpaper | `loom-wallpaper` |
-| `settings` | `loom-settings/Cargo.toml` | loom-settings, loom-settingsctl | `loom-settings` |
-| `audio` | `loom-audio/Cargo.toml` | loom-audio | `loom-audio` |
-| `sidepanels` | `loom-sidepanels/Cargo.toml` | loom-sidepanels | `loom-sidepanels` |
-
-`niri-session` is a shell script shipped by `loom-niri`; it is not a Cargo
-target. `loom-desktop` ships no binaries.
-
-### niri Cargo features
-
-| Feature | In default | Purpose |
-| --- | --- | --- |
-| `agent` | yes | Automation seat over IPC. |
-| `cursor` | yes | SVG/scalable cursors and shake-to-enlarge. |
-| `dbus` | yes | freedesktop/GNOME D-Bus interfaces and accessibility. |
-| `dinit` | no | dinit session environment integration. |
-| `effects` | yes | Post-processing shaders, region/window passes and decoration light. |
-| `kde` | yes | KDE blur, output order and colour picker interop. |
-| `navigation` | yes | Screen magnifier and navigation module. |
-| `pipewire` | no | Internal dependency feature, enabled through `xdp-gnome-screencast`. |
-| `profile-with-tracy*` | no | Development-only Tracy profiling; never enable in a distro package. |
-| `systemd` | yes | Global environment and transient scopes; implies `dbus`. |
-| `vulkan` | yes | loom-smithay Vulkan renderer compiled in; runtime opt-in. |
-| `xdp-gnome-screencast` | yes | PipeWire screencasting support; implies `dbus` and `pipewire`. |
-
-## Known packaging blockers
-
-- There are no man pages in the tree, so the packages install none.
-  `loom-niri` picks up `resources/man/*.1` automatically when they appear.
-- `loom-settings` has a desktop entry installed by its package
-  (`/usr/share/applications/loom-settings.desktop`); it opens the GTK4 UI.
-- `loom-companion` ships an optional user unit
-  (`/usr/lib/systemd/user/loom-companion.service`); enable it after niri has
-  imported `NIRI_SOCKET` (`systemctl --user enable --now loom-companion`).
-  `loom-wallpaper watch`, `loom-audio watch` and `loom-sidepanels` stay
-  process-per-output/GUI apps and have no upstream units; the meta package
-  documentation shows `spawn-at-startup` lines and leaves enablement to the
-  user. `loom-niri` and `loom-portal` install their units as before.
-- Debian/Fedora/Nix packaging of the companion workspaces is not provided.
-- The packages are not published: AUR publishing, repository signing and
-  hardware validation remain release tasks.
+The verifier checks shell syntax, the stable and VCS package sets and their
+`package_<name>()` functions, the `-git` suffix rule, referenced source and
+install artifacts, generated completions and the `.SRCINFO` package list. It
+does not run a full makepkg build; CI and release builds do that.

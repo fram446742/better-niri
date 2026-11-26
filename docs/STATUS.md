@@ -14,7 +14,7 @@ This is now the main integration line. It keeps niri upstream history as its
 base and merges niri-elite as the feature base, then reconciles with current
 upstream.
 
-### loom-smithay `main` @ `c7614890`
+### loom-smithay `main` @ `9ebf63b6`
 
 The branch starts from the merged `66b0670` + losnoco lineage (`2e8e9edb`) and
 is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
@@ -133,11 +133,11 @@ cursor-plane path in `docs/UNIMPLEMENTED.md`. See
 
 ## What is published
 
-- `fram446742/loom-smithay` branch `main` (`c7614890`).
+- `fram446742/loom-smithay` branch `main` (`9ebf63b6`).
 - `fram446742/loom-smithay` branch `integration/hdr-color` (`344be37b`, the
   previous losnoco-base experiment; kept for comparison).
-- `fram446742/loom-niri` `main` remains the safe baseline; the elite branch is
-  pushed separately, never force-updated.
+- `fram446742/loom-niri` branch `main` is the integration line. The old
+  upstream-safe baseline is kept locally as `upstream`.
 
 ## Architecture decision (2026-11-23)
 

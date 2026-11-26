@@ -2518,13 +2518,15 @@ mod tests {
         assert_eq!(panel.output(0), Some("ok"));
     }
 
-
     #[test]
     fn minimap_row_uses_its_height_and_click_regions() {
         let mut spec = ModuleSpec::of(ModuleKind::Minimap, 1);
         spec.height = Some(80);
         let mut panel = Panel::new(PanelConfig {
-            rows: vec![Row { module: Some(spec), ..Row::label("Map") }],
+            rows: vec![Row {
+                module: Some(spec),
+                ..Row::label("Map")
+            }],
             ..PanelConfig::default()
         });
         panel.minimaps[0] = Some(MinimapOutput {
