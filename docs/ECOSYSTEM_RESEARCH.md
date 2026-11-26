@@ -108,3 +108,128 @@ Noctalia plugin source is our integration layer.
 | noctalia-dev/noctalia | integrated (plugin target) |
 | official-plugins, community-plugins | reference |
 | better-noctalia-plugins | integrated (in-repo plugin source) |
+
+## Rejected and deferred ideas, in detail
+
+A one-line status is not enough to know whether a decision should be revisited.
+Each entry below explains what the project does, why it is not integrated, what
+would make us reconsider, and what we use instead.
+
+### niri-sidebar (Vigintillionn)
+
+A single floating window stack at the screen edge. `niri-sidepanels` is its
+direct successor with two independent panels, per-panel widths, peek behaviour
+and managed struts, and we ported that successor in full as
+`better-sidepanels-stack`. Keeping both would duplicate the same window-stack
+state and fight over the same windows.
+
+*Reconsider if* niri-sidepanels stops being maintained and a sidebar-specific
+feature has no equivalent there. *Use instead:* better-sidepanels-stack.
+
+### miri (MintyDoggo)
+
+Alternative layouts such as master/stack. They replace the scrolling tape's
+placement model. Integrating them would either fork the layout engine or add a
+second placement mode with different IPC/config semantics, and neither niri's
+actions nor our grid/carousel assume a master area.
+
+*Reconsider if* upstream niri adopts pluggable layouts. *Use instead:* the
+existing scrolling layout plus named workspaces; no second engine.
+
+### nfsm and oniri
+
+`nfsm` applies external rules to fullscreen windows; `oniri` maximises a window
+when it is alone. Both are policies expressible with niri window rules and
+companion rules (`window-rule`, `open-maximized`, workspace/window rule steps).
+Shipping daemons for them would create a second configuration source.
+
+*Reconsider if* the rule language cannot express a concrete case; it would then
+be added as a companion rule action, not a separate daemon.
+
+### wl-freeze (Zerodya)
+
+Suspends processes with SIGSTOP/SIGCONT. It is a process-management tool, not a
+desktop-state feature. Running it from companion would require freeze policy,
+scope selection and crash recovery that belong to a dedicated tool; the user can
+run `wl-freeze` next to the session. *Reconsider if* we add a general process
+policy module; even then it should be an explicit opt-in adapter, not core.
+
+### system76-scheduler-niri (Kirottu)
+
+Tunes process priorities from the focused application through System76
+Scheduler. That is host policy, depends on a system daemon and affects every
+process, not only Better Desktop windows. Integrating it would make companion
+depend on a distro-specific service and could surprise users.
+
+*Reconsider if* a generic priority-policy interface exists in the session;
+until then it stays an external integration.
+
+### Editor and activity tools
+
+`niriSKL.nvim`, `vim-niri-nav` and `arbtt-capture-wl` target Neovim navigation
+and activity logging. They do not own compositor state, and activity capture is
+privacy-sensitive. A screen-time tracker is useful, and we implemented one in
+companion, but editor navigation belongs to the editor plugins.
+
+*Reconsider if* we add a documented activity API; the Neovim side would remain
+an external plugin.
+
+### niri-screenshot-tools
+
+Sends captures to external annotators or servers. better-shot already owns the
+capture, annotation and export pipeline; adding another router would split the
+history and annotation model. The `--command`/hook escape hatch covers custom
+targets. *Reconsider if* a service protocol needs first-class support; it would
+be a better-shot output backend.
+
+### utsushot
+
+Captures at higher resolution by relaunching the target application on a
+temporary high-resolution virtual output. This requires controlling the client's
+lifecycle and mapping, which a screenshot tool must not do silently; it also
+restarts the user's application. The compositor can create virtual outputs, and
+a user can do this deliberately, but making it a transparent capture mode risks
+data loss and unexpected window movement.
+
+*Reconsider if* niri offers a per-window offscreen render API with a safe
+opt-in. *Use instead:* normal capture at native resolution.
+
+### hyprlax
+
+Multi-layer parallax wallpapers driven by compositor scroll/pointer motion.
+Our native wallpaper backend only receives workspace focus, and niri IPC exposes
+no scroll offset; faking parallax from focus changes would look wrong and would
+add per-frame compositing cost. Noctalia or an external renderer can own this
+effect.
+
+*Reconsider if* a stable motion signal is exposed to layer-shell clients.
+*Use instead:* static scenes, cross-fades and native video.
+
+### Shells and bars
+
+DankMaterialShell, Exo, iNiR, Glimpse, delta-shell, dux-shell, gpui-shell,
+desktop-shell, IgnisNiriShell, ignis, ironbar, ashell, bar-rs, vibepanel,
+Waybar, i3bar-river, i3status-rust.
+
+Noctalia is the chosen shell. Shipping or maintaining another shell would
+duplicate launcher, lock, notification, wallpaper and bar code with a different
+plugin API, and the user could not run two shells at once. Our integration
+surface is the Noctalia plugin source plus a small independent sidepanel app for
+users who do not run Noctalia. DMS remains unverified because its canonical URL
+was not confirmed; IgnisNiriShell is abandoned and would only be historical
+reference. *Reconsider if* Noctalia's API cannot express a required interaction;
+the fix then belongs in a plugin, not a second shell.
+
+### Bindings and bar modules
+
+`niri-gtk`, `qml-niri`, Eww/waybar taskbar modules and window-button modules are
+UI bindings for other shells. We use JSON IPC in our own tools and Noctalia's
+API in the plugins; adding language bindings would create parallel maintenance
+without a consumer. *Reconsider if* an external tool asks for a stable binding.
+
+### DMS, kode54/niri
+
+DMS was mentioned as an alternative shell but its canonical URL could not be
+confirmed during the audit, so it is not a source. `kode54/niri` did not resolve
+to a repository during the audit; the colour work attributed to that author is
+in the losnoco/niri-smithay lineage, which we already use.
