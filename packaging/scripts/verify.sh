@@ -154,6 +154,7 @@ known_official_packages=(
     wayland
     wireplumber
     wl-clipboard
+    wl-mirror
     pipewire
     xdg-desktop-portal
     xdg-desktop-portal-gnome
