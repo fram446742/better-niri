@@ -171,8 +171,8 @@ use crate::input::{
     mods_with_vertical_wheel_binds,
 };
 use crate::ipc::server::IpcServer;
-use crate::layer::MappedLayer;
 use crate::layer::mapped::LayerSurfaceRenderElement;
+use crate::layer::{ClosingLayer, MappedLayer};
 use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::{
@@ -901,6 +901,8 @@ pub struct OutputState {
     /// Solid color buffer for the backdrop that we use instead of clearing to avoid damage
     /// tracking issues and make screenshots easier.
     pub backdrop_buffer: SolidColorBuffer,
+    /// Layer surfaces that were unmapped on this output and are fading out.
+    pub closing_layers: Vec<ClosingLayer>,
     pub xray: Xray,
     pub lock_render_state: LockRenderState,
     pub lock_surface: Option<LockSurface>,
@@ -5406,6 +5408,7 @@ impl Niri {
             vblank_throttle: VBlankThrottle::new(self.event_loop.clone(), name.connector.clone()),
             frame_callback_sequence: 0,
             backdrop_buffer: SolidColorBuffer::new(size, backdrop_color),
+            closing_layers: Vec::new(),
             xray: Xray::new(),
             lock_render_state,
             lock_surface: None,
@@ -7562,12 +7565,18 @@ impl Niri {
         let screen_cast_picker_closed = false;
         self.window_mru_ui.advance_animations();
 
+        for mapped in self.mapped_layer_surfaces.values_mut() {
+            mapped.advance_animations();
+        }
+
         for state in self.output_state.values_mut() {
             if let Some(transition) = &mut state.screen_transition
                 && transition.is_done()
             {
                 state.screen_transition = None;
             }
+
+            state.closing_layers.retain(ClosingLayer::is_ongoing);
         }
         screen_cast_picker_closed
     }
@@ -7717,6 +7726,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let mut elements = Vec::new();
         self.render(ctx, output, include_pointer, &mut |elem| {
@@ -7773,6 +7783,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         if !self.screen_cast_picker.is_host_output(host_output) {
             return;
@@ -7955,6 +7966,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::render");
 
@@ -8084,6 +8096,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         // See `IN_RENDER_INNER` / `update_panel_sources`: panel content prepasses must run before
         // this, never nested inside it.
@@ -8659,6 +8672,11 @@ impl Niri {
                 });
             }};
         }
+        macro_rules! push_closing_layers {
+            ($layer:expr, $backdrop:expr, $push:expr) => {{ self.render_closing_layers(output, $layer, $backdrop, ctx.target, $push) }};
+            ($layer:expr, $backdrop:expr) => {{ push_closing_layers!($layer, $backdrop, &mut |elem| push(elem.into())) }};
+            ($layer:expr) => {{ push_closing_layers!($layer, false, &mut |elem| push(elem.into())) }};
+        }
 
         // Whether this output's own live workspace strip must stay off because it is drawn (or
         // will be, once settled) as a panel in the cover-flow stack below instead. See
@@ -8668,6 +8686,7 @@ impl Niri {
         // The overlay layer elements go next.
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
+        push_closing_layers!(Layer::Overlay);
 
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
@@ -8684,6 +8703,7 @@ impl Niri {
             // shouldn't change the visuals. This seems to match the visual intent people have when
             // using a transparent fullscreen backdrop.
             push_normal_from_layer!(Layer::Background);
+            push_closing_layers!(Layer::Background);
 
             // We don't expect more than one workspace when render_above_top_layer().
             if let Some((ws, _geo)) = mon.workspaces_with_render_geo().next() {
@@ -8692,6 +8712,7 @@ impl Niri {
         } else {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
+            push_closing_layers!(Layer::Top);
 
             self.layout
                 .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
@@ -8714,6 +8735,10 @@ impl Niri {
             // drawn as a panel in the cover-flow stack below. Overlay/top popups above and
             // the backdrop/cursor elsewhere are unaffected.
             if !host_strip_suppressed {
+                // Pushed between the mapped layer elements and the workspace backgrounds below, so
+                // a fading bottom/background layer keeps its z-order relative to both.
+                let mut closing_pushed = false;
+
                 for (ws, geo) in mon.workspaces_with_render_geo() {
                     let ns = Some(ws.id().get() as usize);
                     let xray_pos = XrayPos::new(geo.loc, zoom);
@@ -8736,6 +8761,14 @@ impl Niri {
                     let xray_pos = XrayPos::new(geo.loc, zoom);
                     push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
                     push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+
+                    // Fading bottom/background layers are drawn in output space, without the
+                    // overview zoom; they only fade for a fraction of a second. Push once.
+                    if !closing_pushed {
+                        push_closing_layers!(Layer::Bottom);
+                        push_closing_layers!(Layer::Background);
+                        closing_pushed = true;
+                    }
 
                     process!(geo)(ws.render_background());
                 }
@@ -8881,6 +8914,7 @@ impl Niri {
         // Then the backdrop.
         push_popups_from_layer!(Layer::Background, true);
         push_normal_from_layer!(Layer::Background, true);
+        push_closing_layers!(Layer::Background, true);
 
         push(backdrop);
     }
@@ -8894,6 +8928,7 @@ impl Niri {
     fn bake_xray_elements_impl<R: NiriRenderer>(&self, mut ctx: RenderCtx<R>, output: &Output)
     where
         OutputRenderElements<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::bake_xray_elements");
 
@@ -8973,6 +9008,7 @@ impl Niri {
         crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement:
             RenderElement<R>,
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::update_panel_sources");
         debug_assert!(
@@ -9232,6 +9268,30 @@ impl Niri {
         })
     }
 
+    /// Renders fading-out layer surfaces that used to be on `layer` in this pass.
+    fn render_closing_layers<R: NiriRenderer>(
+        &self,
+        output: &Output,
+        layer: Layer,
+        for_backdrop: bool,
+        target: RenderTarget,
+        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
+    ) {
+        let Some(state) = self.output_state.get(output) else {
+            return;
+        };
+
+        for closing in &state.closing_layers {
+            if closing.layer() != layer || closing.for_backdrop() != for_backdrop {
+                continue;
+            }
+
+            if let Some(elem) = closing.render_element(target) {
+                push(elem.into());
+            }
+        }
+    }
+
     fn render_layer_normal<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -9241,7 +9301,9 @@ impl Niri {
         xray_pos: XrayPos,
         for_backdrop: bool,
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
-    ) {
+    ) where
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
+    {
         for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
             let loc = geo.loc.to_f64();
             let xray_pos = xray_pos.offset(loc);
@@ -9258,7 +9320,9 @@ impl Niri {
         xray_pos: XrayPos,
         for_backdrop: bool,
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
-    ) {
+    ) where
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
+    {
         for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
             let loc = geo.loc.to_f64();
             let xray_pos = xray_pos.offset(loc);
@@ -9429,7 +9493,9 @@ impl Niri {
             state.unfinished_animations_remain |= magnifier_anim_ongoing;
             state.unfinished_animations_remain |= magnifier_center_anim_ongoing;
 
-            // Also check layer surfaces.
+            // Also check layer surfaces. The closing list is pruned as animations finish, so any
+            // entry left here is still animating.
+            state.unfinished_animations_remain |= !state.closing_layers.is_empty();
             if !state.unfinished_animations_remain {
                 state.unfinished_animations_remain |= layer_map_for_output(output)
                     .layers()
@@ -10529,6 +10595,7 @@ impl Niri {
         WindowCastRenderElements<R>: RenderElement<R>,
         WindowCaptureRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         self.render_for_screencopy_with_damage(renderer, output);
         self.render_for_image_copy_capture(renderer, output, target_presentation_time);
@@ -10586,6 +10653,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let _span = tracy_client::span!("Niri::render_for_screencopy_with_damage");
@@ -10675,6 +10743,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let _span = tracy_client::span!("Niri::render_for_screencopy");
@@ -10789,6 +10858,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
         R: CaptureRenderer,
     {
         let Some(mode) = output.current_mode() else {
@@ -11326,6 +11396,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::capture_pick_color_region");
 
@@ -11377,6 +11448,7 @@ impl Niri {
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         self.global_space.outputs().cloned().filter_map(|output| {
             let size = output.current_mode().unwrap().size;
@@ -11463,6 +11535,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         self.screenshot_with_reply(renderer, output, write_to_disk, include_pointer, path, None)
     }
@@ -11485,6 +11558,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         self.screenshot_with_replies(
             renderer,
@@ -11516,6 +11590,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot");
 
@@ -11742,6 +11817,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot_area");
 
@@ -11988,6 +12064,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::screenshot_all_outputs");
@@ -12668,6 +12745,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
     {
         let _span = tracy_client::span!("Niri::do_screen_transition_vulkan");
 

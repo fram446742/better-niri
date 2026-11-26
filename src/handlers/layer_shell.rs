@@ -1,6 +1,8 @@
 use smithay::desktop::{LayerSurface, PopupKind, WindowSurfaceType, layer_map_for_output};
+use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::{HookId, add_pre_commit_hook, get_parent, with_states};
 use smithay::wayland::shell::wlr_layer::{
     self, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceCachedState, LayerSurfaceData,
@@ -8,7 +10,7 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shell::xdg::PopupSurface;
 
-use crate::layer::{MappedLayer, ResolvedLayerRules};
+use crate::layer::{ClosingLayer, Fade, MappedLayer, ResolvedLayerRules};
 use crate::niri::State;
 use crate::utils::{is_mapped, output_size, send_scale_transform};
 
@@ -48,7 +50,7 @@ impl WlrLayerShellHandler for State {
         let wl_surface = surface.wl_surface();
         self.niri.unmapped_layer_surfaces.remove(wl_surface);
 
-        let output = if let Some((output, mut map, layer)) =
+        let (output, removed) = if let Some((output, mut map, layer)) =
             self.niri.layout.outputs().find_map(|o| {
                 let map = layer_map_for_output(o);
                 let layer = map
@@ -57,12 +59,20 @@ impl WlrLayerShellHandler for State {
                     .cloned();
                 layer.map(|layer| (o.clone(), map, layer))
             }) {
+            let location = map.layer_geometry(&layer).map(|geo| geo.loc.to_f64());
             map.unmap_layer(&layer);
-            self.niri.mapped_layer_surfaces.remove(&layer);
-            Some(output)
+            let removed = match (self.niri.mapped_layer_surfaces.remove(&layer), location) {
+                (Some(mapped), Some(location)) => Some((mapped, location)),
+                _ => None,
+            };
+            (Some(output), removed)
         } else {
-            None
+            (None, None)
         };
+
+        if let (Some(output), Some((layer, location))) = (output.as_ref(), removed) {
+            self.start_layer_close_animation(layer, location, output);
+        }
         if let Some(output) = output {
             self.niri.output_resized(&output);
         }
@@ -111,6 +121,8 @@ impl State {
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
             .unwrap();
 
+        let mut removed_layer = None;
+
         if is_mapped(surface) {
             let was_unmapped = self.niri.unmapped_layer_surfaces.remove(surface);
 
@@ -125,7 +137,7 @@ impl State {
                 let scale = output.current_scale().fractional_scale();
 
                 let hook = add_mapped_layer_pre_commit_hook(layer);
-                let mapped = MappedLayer::new(
+                let mut mapped = MappedLayer::new(
                     layer.clone(),
                     hook,
                     rules,
@@ -134,6 +146,8 @@ impl State {
                     self.niri.clock.clone(),
                     &config,
                 );
+
+                mapped.start_fade_in_animation();
 
                 let prev = self
                     .niri
@@ -190,7 +204,10 @@ impl State {
             }
         } else {
             // The surface is unmapped.
-            if self.niri.mapped_layer_surfaces.remove(layer).is_some() {
+            let location = map.layer_geometry(layer).map(|geo| geo.loc.to_f64());
+            if let Some(mapped) = self.niri.mapped_layer_surfaces.remove(layer) {
+                removed_layer = location.map(|location| (mapped, location));
+
                 // A mapped surface got unmapped via a null commit. Now it needs to do a new
                 // initial commit again.
                 self.niri.unmapped_layer_surfaces.insert(surface.clone());
@@ -222,11 +239,64 @@ impl State {
 
         drop(map);
 
+        if let Some((layer, location)) = removed_layer {
+            self.start_layer_close_animation(layer, location, &output);
+        }
+
         // This will call queue_redraw() inside.
         self.niri.output_resized(&output);
         self.niri.queue_carousel_host_redraw_for_sibling(&output);
 
         true
+    }
+}
+
+impl State {
+    /// Bakes an unmapped layer into an offscreen snapshot and starts its fade-out.
+    ///
+    /// The layer is dropped without an animation when close animations are disabled or when the
+    /// surface no longer has anything to draw (some clients commit an empty surface right before
+    /// destroying it).
+    fn start_layer_close_animation(
+        &mut self,
+        layer: MappedLayer,
+        location: Point<f64, Logical>,
+        output: &Output,
+    ) {
+        let anim_config = self.niri.config.borrow().animations.layer_close.0;
+        let Some(fade) = Fade::new(self.niri.clock.clone(), 1., 0., anim_config) else {
+            return;
+        };
+
+        // Bake on the same renderer kind the layer was drawn with: the GLES primary renderer, or
+        // the backend-agnostic TTY renderer on a Vulkan-only session.
+        let mut element = self
+            .backend
+            .with_primary_renderer(|renderer| layer.render_snapshot(renderer, location))
+            .flatten();
+        if element.is_none() {
+            element = self
+                .backend
+                .with_primary_tty_renderer(|renderer| layer.render_snapshot(renderer, location))
+                .flatten();
+        }
+        let Some(element) = element else {
+            return;
+        };
+
+        let closing = ClosingLayer::new(
+            element,
+            layer.surface().layer(),
+            layer.place_within_backdrop(),
+            layer.rules().block_out_from,
+            fade,
+        );
+
+        let Some(state) = self.niri.output_state.get_mut(output) else {
+            return;
+        };
+        state.closing_layers.push(closing);
+        self.niri.queue_redraw(output);
     }
 }
 

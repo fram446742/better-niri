@@ -19,6 +19,7 @@ use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Scale, Size};
 use crate::dbus::mutter_screen_cast::{
     self, CursorMode, NodeIdSink, ScreenCastToNiri, StreamTargetId,
 };
+use crate::layer::mapped::LayerSurfaceRenderElement;
 use crate::layout::LayoutElementRenderElement;
 use crate::layout::tile::TileRenderElement;
 use crate::niri::{CastTarget, Niri, OutputRenderElements, PointerRenderElements, State};
@@ -527,6 +528,7 @@ impl Niri {
         crate::ui::screenshot_ui::ScreenshotUiRenderElement: RenderElement<R>,
         crate::ui::mru::WindowMruUiRenderElement<R>: RenderElement<R>,
         crate::ui::screencast_picker::ScreenCastPickerRenderElement<R>: RenderElement<R>,
+        LayerSurfaceRenderElement<R>: RenderElement<R>,
         PointerRenderElements<R>: RenderElement<R>,
         CastRenderElement<R>: RenderElement<R>,
     {

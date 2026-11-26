@@ -6,18 +6,19 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 use smithay::wayland::compositor::{HookId, remove_pre_commit_hook};
 use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
-use super::ResolvedLayerRules;
+use super::{Fade, ResolvedLayerRules};
 use crate::animation::Clock;
 use crate::layout::shadow::Shadow;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::blend::BlendSurfaceRenderElement;
+use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{RenderCtx, background_effect};
+use crate::render_helpers::{RenderCtx, RenderIntent, RenderTarget, background_effect};
 use crate::utils::{baba_is_float_offset, round_logical_in_physical};
 
 #[derive(Debug)]
@@ -53,6 +54,20 @@ pub struct MappedLayer {
 
     /// Clock for driving animations.
     clock: Clock,
+
+    /// Fade-in animation while the layer is appearing.
+    alpha_animation: Option<LayerFadeIn>,
+
+    /// The `animations.layer-open` config, refreshed on config reload.
+    open_anim_config: niri_config::Animation,
+}
+
+#[derive(Debug)]
+struct LayerFadeIn {
+    fade: Fade,
+
+    /// Offscreen buffer holding the fully composited layer for the duration of the fade.
+    buffer: OffscreenBuffer,
 }
 
 niri_render_elements! {
@@ -61,6 +76,7 @@ niri_render_elements! {
         SolidColor = SolidColorRenderElement,
         Shadow = ShadowRenderElement,
         BackgroundEffect = BackgroundEffectElement,
+        Offscreen = OffscreenRenderElement,
     }
 }
 
@@ -90,6 +106,8 @@ impl MappedLayer {
             shadow: Shadow::new(shadow_config),
             blur_config: config.blur,
             clock,
+            alpha_animation: None,
+            open_anim_config: config.animations.layer_open.0,
         }
     }
 
@@ -101,6 +119,23 @@ impl MappedLayer {
         self.shadow.update_config(shadow_config);
 
         self.blur_config = config.blur;
+        self.open_anim_config = config.animations.layer_open.0;
+    }
+
+    pub fn advance_animations(&mut self) {
+        if let Some(alpha) = &self.alpha_animation
+            && !alpha.fade.is_ongoing()
+        {
+            self.alpha_animation = None;
+        }
+    }
+
+    pub fn start_fade_in_animation(&mut self) {
+        self.alpha_animation =
+            Fade::new(self.clock.clone(), 0., 1., self.open_anim_config).map(|fade| LayerFadeIn {
+                fade,
+                buffer: OffscreenBuffer::default(),
+            });
     }
 
     pub fn update_shaders(&mut self) {
@@ -127,7 +162,7 @@ impl MappedLayer {
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.rules.baba_is_float
+        self.rules.baba_is_float || self.alpha_animation.is_some()
     }
 
     pub fn surface(&self) -> &LayerSurface {
@@ -185,6 +220,46 @@ impl MappedLayer {
     }
 
     pub fn render_normal<R: NiriRenderer>(
+        &self,
+        mut ctx: RenderCtx<R>,
+        ns: Option<usize>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
+    ) where
+        LayerSurfaceRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+    {
+        let Some(alpha) = &self.alpha_animation else {
+            self.render_normal_inner(ctx, ns, location, xray_pos, push);
+            return;
+        };
+
+        // Fade the fully composited layer: the shadow and the background effect don't take an
+        // alpha of their own, so fading their elements individually would pop at the end.
+        let mut elements = Vec::new();
+        self.render_normal_inner(ctx.r(), ns, location, xray_pos, &mut |elem| {
+            elements.push(elem)
+        });
+        if elements.is_empty() {
+            return;
+        }
+
+        match alpha
+            .buffer
+            .render(ctx.renderer, Scale::from(self.scale), &elements)
+        {
+            Ok((elem, _sync, _data)) => push(elem.with_alpha(alpha.fade.alpha()).into()),
+            Err(err) => {
+                warn!("error rendering layer to offscreen for fade-in animation: {err:?}");
+                // Don't drop the layer from the frame just because the fade couldn't bake.
+                for elem in elements {
+                    push(elem);
+                }
+            }
+        }
+    }
+
+    fn render_normal_inner<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         ns: Option<usize>,
@@ -257,6 +332,47 @@ impl MappedLayer {
             xray_pos,
             &mut |elem| push(elem.into()),
         );
+    }
+
+    /// Bakes the whole layer (surface, shadow, background effect, popups) for a close animation.
+    ///
+    /// Called right before the layer is unmapped; returns `None` when the surface has nothing to
+    /// draw anymore, in which case it is simply dropped without an animation.
+    pub fn render_snapshot<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        location: Point<f64, Logical>,
+    ) -> Option<OffscreenRenderElement>
+    where
+        LayerSurfaceRenderElement<R>: smithay::backend::renderer::element::RenderElement<R>,
+    {
+        let mut elements = Vec::new();
+        let mut ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::Output,
+            intent: RenderIntent::Normal,
+            xray: None,
+            shader_time: 0.,
+        };
+        self.render_normal_inner(ctx.r(), None, location, XrayPos::default(), &mut |elem| {
+            elements.push(elem)
+        });
+        self.render_popups(ctx.r(), None, location, XrayPos::default(), &mut |elem| {
+            elements.push(elem)
+        });
+
+        if elements.is_empty() {
+            return None;
+        }
+
+        let buffer = OffscreenBuffer::default();
+        match buffer.render(ctx.renderer, Scale::from(self.scale), &elements) {
+            Ok((elem, _sync, _data)) => Some(elem),
+            Err(err) => {
+                warn!("error baking layer snapshot for close animation: {err:?}");
+                None
+            }
+        }
     }
 
     pub fn render_popups<R: NiriRenderer>(

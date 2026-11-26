@@ -14,6 +14,8 @@ pub struct Animations {
     pub off: bool,
     pub slowdown: f64,
     pub workspace_switch: WorkspaceSwitchAnim,
+    pub layer_open: LayerOpenAnim,
+    pub layer_close: LayerCloseAnim,
     pub window_open: WindowOpenAnim,
     pub window_close: WindowCloseAnim,
     pub horizontal_view_movement: HorizontalViewMovementAnim,
@@ -38,6 +40,8 @@ impl Default for Animations {
             off: false,
             slowdown: 1.,
             workspace_switch: Default::default(),
+            layer_open: Default::default(),
+            layer_close: Default::default(),
             horizontal_view_movement: Default::default(),
             window_movement: Default::default(),
             window_open: Default::default(),
@@ -68,6 +72,10 @@ pub struct AnimationsPart {
     pub slowdown: Option<FloatOrInt<0, { i32::MAX }>>,
     #[knuffel(child)]
     pub workspace_switch: Option<WorkspaceSwitchAnim>,
+    #[knuffel(child)]
+    pub layer_open: Option<LayerOpenAnim>,
+    #[knuffel(child)]
+    pub layer_close: Option<LayerCloseAnim>,
     #[knuffel(child)]
     pub window_open: Option<WindowOpenAnim>,
     #[knuffel(child)]
@@ -116,6 +124,8 @@ impl MergeWith<AnimationsPart> for Animations {
         merge_clone!(
             (self, part),
             workspace_switch,
+            layer_open,
+            layer_close,
             window_open,
             window_close,
             horizontal_view_movement,
@@ -168,6 +178,39 @@ pub struct SpringParams {
     pub damping_ratio: f64,
     pub stiffness: u32,
     pub epsilon: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerOpenAnim(pub Animation);
+
+impl Default for LayerOpenAnim {
+    fn default() -> Self {
+        // Layer surfaces are usually long-lived panels, so opening/closing animations are opt-in:
+        // fading every panel on startup would look wrong for a bar. Explicitly configured
+        // animations still parse normally.
+        Self(Animation {
+            off: true,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 0,
+                curve: Curve::Linear,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerCloseAnim(pub Animation);
+
+impl Default for LayerCloseAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: true,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 0,
+                curve: Curve::Linear,
+            }),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -509,6 +552,36 @@ impl Default for MagnifierAnim {
                 epsilon: 0.0001,
             }),
         })
+    }
+}
+
+impl<S> knuffel::Decode<S> for LayerOpenAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for LayerCloseAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
     }
 }
 

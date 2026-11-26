@@ -962,6 +962,51 @@ mod tests {
     }
 
     #[test]
+    fn layer_open_close_animations_parse() {
+        // Disabled by default so panels don't fade on startup.
+        let config = Config::parse_mem("").unwrap();
+        assert!(config.animations.layer_open.0.off);
+        assert!(config.animations.layer_close.0.off);
+
+        let config = Config::parse_mem(
+            r#"
+            animations {
+                layer-open {
+                    duration-ms 200
+                    curve "linear"
+                }
+                layer-close {
+                    spring damping-ratio=1.0 stiffness=500 epsilon=0.001
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.animations.layer_open.0,
+            Animation {
+                off: false,
+                kind: animations::Kind::Easing(animations::EasingParams {
+                    duration_ms: 200,
+                    curve: animations::Curve::Linear,
+                }),
+            }
+        );
+        assert_eq!(
+            config.animations.layer_close.0,
+            Animation {
+                off: false,
+                kind: animations::Kind::Spring(animations::SpringParams {
+                    damping_ratio: 1.0,
+                    stiffness: 500,
+                    epsilon: 0.001,
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn screen_cast_picker_animation_parses() {
         let config = Config::parse_mem(
             r#"
@@ -2480,6 +2525,28 @@ Config {
                         damping_ratio: 1.0,
                         stiffness: 1000,
                         epsilon: 0.0001,
+                    },
+                ),
+            },
+        ),
+        layer_open: LayerOpenAnim(
+            Animation {
+                off: true,
+                kind: Easing(
+                    EasingParams {
+                        duration_ms: 0,
+                        curve: Linear,
+                    },
+                ),
+            },
+        ),
+        layer_close: LayerCloseAnim(
+            Animation {
+                off: true,
+                kind: Easing(
+                    EasingParams {
+                        duration_ms: 0,
+                        curve: Linear,
                     },
                 ),
             },
