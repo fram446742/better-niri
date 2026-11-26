@@ -36,10 +36,10 @@ notices are preserved in `ATTRIBUTION.md`.
   the relationship and can run it through `wl-mirror`; a compositor-native
   mirror would need an output-composition feature. See `docs/HDR.md` and the
   better-monitor README.
-- **HDR wallpaper output.** The compositor advertises 10-bit `wl_shm` and
-  `wp_color_manager_v1`. A true HDR background still needs the wallpaper client
-  to submit 10-bit PQ/BT.2020 pixels with an image description; the native
-  backend intentionally stays SDR and tone-maps HDR video. Details in
+- **HDR wallpaper output.** HDR video now takes the 10-bit PQ/BT.2020 path with
+  a `wp_color_manager_v1` description when the output is HDR-active; static
+  images remain SDR, and a missing protocol or 10-bit buffer falls back to SDR
+  tone-mapping. The live handshake and scanout still need a hardware run; see
   `docs/HDR.md`.
 - **Live Noctalia checks.** The plugin source is syntax- and manifest-checked;
   exercising the widgets needs a running Noctalia session and remains a manual
