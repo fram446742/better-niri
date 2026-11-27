@@ -1730,6 +1730,14 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, location: Point<f64, Logical>) {
+        // A programmatic warp is not shake input. Reset the sample so the jump does not
+        // become shake energy on the next physical pointer event.
+        #[cfg(feature = "cursor")]
+        {
+            self.niri.pointer_last_position = Some(location);
+            self.niri.pointer_last_time = Some(std::time::Instant::now());
+        }
+
         let mut under = match self.niri.pointer_visibility {
             PointerVisibility::Disabled => PointContents::default(),
             _ => self.niri.contents_under(location),
@@ -6929,12 +6937,19 @@ impl Niri {
 
         let effective_threshold = threshold.max(1.0);
         let growing = self.pointer_shake_energy > effective_threshold;
+        let already_enlarged = self
+            .pointer_enlarged_until
+            .map(|t| now < t)
+            .unwrap_or(false);
+        // Once enlarged, any continued movement keeps it enlarged. A short pause must not
+        // start the shrink animation; resuming during the shrink must grow it back.
+        let still_large = self
+            .pointer_scale_animation
+            .as_ref()
+            .map(|a| a.value() > 1.0)
+            .unwrap_or(false);
+        let keep_large = distance > 0.0 && (already_enlarged || still_large);
         if growing {
-            let already_enlarged = self
-                .pointer_enlarged_until
-                .map(|t| now < t)
-                .unwrap_or(false);
-
             if grow && already_enlarged {
                 // Grow the cursor further while continuing to shake.
                 // Cap at 30x to stay within the PipeWire cursor bitmap (1024×1024).
@@ -6943,15 +6958,21 @@ impl Niri {
                 // Reset to base zoom factor on initial trigger.
                 self.pointer_grow_zoom = zoom_factor;
             }
+        } else if keep_large {
+            // Resuming movement during the shrink must not leave the cursor at an
+            // intermediate scale.
+            self.pointer_grow_zoom = self.pointer_grow_zoom.max(zoom_factor);
+        }
 
+        if growing || keep_large {
             self.pointer_enlarged_until =
                 Some(now + std::time::Duration::from_millis(hold_duration_ms as u64));
         }
 
-        self.update_pointer_scale_animation(growing);
+        self.update_pointer_scale_animation();
     }
 
-    pub fn update_pointer_scale_animation(&mut self, growing: bool) {
+    pub fn update_pointer_scale_animation(&mut self) {
         let (zoom_factor, is_off) =
             if let Some(shake_conf) = self.config.borrow().cursor.shake_to_enlarge.as_ref() {
                 (shake_conf.zoom_factor, shake_conf.off)
@@ -6974,16 +6995,13 @@ impl Niri {
             .map(|a| a.value())
             .unwrap_or(1.0);
 
+        // Keep the enlargement target while the hold is active, not just on the frame that
+        // observed movement: otherwise the next render tick cancels a resume mid-shrink.
         let target_scale = if enlarged {
-            if growing {
-                self.pointer_grow_zoom.max(zoom_factor)
-            } else {
-                current_scale
-            }
+            self.pointer_grow_zoom.max(zoom_factor)
         } else {
             1.0
         };
-
         if (self.pointer_scale_animation.is_none()
             || (self.pointer_scale_animation.as_ref().unwrap().to() - target_scale).abs() > 0.01)
             && (target_scale != 1.0 || current_scale != 1.0)
@@ -9720,7 +9738,7 @@ impl Niri {
             || (self.power_off_skip_isolated && self.is_output_isolated(output));
         if output_active {
             // Check if shake-to-enlarge hold duration expired and update animation.
-            self.update_pointer_scale_animation(false);
+            self.update_pointer_scale_animation();
             #[cfg(feature = "navigation")]
             self.update_magnifier_animation();
             let pointer_anim_ongoing = self
