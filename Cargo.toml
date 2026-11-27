@@ -50,12 +50,12 @@ tracy-client = { version = "0.19.0", default-features = false }
 #         build
 [workspace.dependencies.smithay]
 git = "https://github.com/fram446742/loom-smithay.git"
-rev = "9ebf63b69ea0f069ee00cdf6c835b0b512e75de8"
+rev = "8437fbb7c678a16114363fe030859bf57e521e0a"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
 git = "https://github.com/fram446742/loom-smithay.git"
-rev = "9ebf63b69ea0f069ee00cdf6c835b0b512e75de8"
+rev = "8437fbb7c678a16114363fe030859bf57e521e0a"
 # path = "../loom-smithay/smithay-drm-extras"
 
 [package]
