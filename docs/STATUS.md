@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-11-26.
+Last updated: 2026-11-27.
 
 ## Safe baseline (`main`)
 
@@ -14,10 +14,16 @@ This is now the main integration line. It keeps niri upstream history as its
 base and merges niri-elite as the feature base, then reconciles with current
 upstream.
 
-### loom-smithay `main` @ `9ebf63b6`
+### loom-smithay `main` @ `8437fbb7`
 
 The branch starts from the merged `66b0670` + losnoco lineage (`2e8e9edb`) and
-is consumed by `rev = c76148907cf6dae4441aa7224ac518bc120e356a`.
+is consumed by `rev = 8437fbb7c678a16114363fe030859bf57e521e0a`.
+
+- Hybrid NVIDIA/iGPU fix: once an NVIDIA GL renderer exists, GL fence sync is
+  disabled for every renderer and shared-context uploads fall back to
+  `glFinish`; target textures respect the same capability. Verified on the RTX
+  3060 + Radeon 680M laptop with `debug.render-drm-device "/dev/dri/renderD128"`:
+  no `GL_INVALID_VALUE ... sync object` errors.
 
 - First parent: `MEKCCK/smithay` `66b0670` (`elite-color-management`):
   stabilised `wp-color-management-v1`, connector colour state, GLES colour
@@ -133,7 +139,7 @@ cursor-plane path in `docs/UNIMPLEMENTED.md`. See
 
 ## What is published
 
-- `fram446742/loom-smithay` branch `main` (`9ebf63b6`).
+- `fram446742/loom-smithay` branch `main` (`8437fbb7`).
 - `fram446742/loom-smithay` branch `integration/hdr-color` (`344be37b`, the
   previous losnoco-base experiment; kept for comparison).
 - `fram446742/loom-niri` branch `main` is the integration line. The old
